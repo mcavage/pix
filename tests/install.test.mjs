@@ -30,8 +30,8 @@ test("installer cleanup trap does not interpolate attacker-controlled TMPDIR as 
 	assert.doesNotMatch(src, /trap "rm -rf/);
 });
 
-test("installer checks both public binaries for PATH collisions and shadowing", () => {
-	assert.match(src, /for binary in pix pix-host/);
+test("installer checks pix for PATH collisions and shadowing", () => {
+	assert.match(src, /for binary in \$BINARIES/);
 	assert.match(src, /assert_installed_resolution/);
 	assert.match(src, /PIX_FORCE_INSTALL/);
 	assert.match(src, /guard_homebrew_prefix/);
@@ -39,11 +39,10 @@ test("installer checks both public binaries for PATH collisions and shadowing", 
 	assert.match(src, /Nothing was written\./);
 });
 
-// AC-REL-02: the loose pix-<os>-<arch> / pix-host-<os>-<arch> assets shipped
-// the binaries — pix under MIT s2, plus the MPL-2.0 go-plugin/yamux code linked
-// into pix-host under MPL-2.0 s3.1 — with none of the required notices
-// attached, and install.sh consumed exactly those. Both halves are gated: the
-// release must not publish them, and the installer must not want them.
+// AC-REL-02: the loose pix-<os>-<arch> asset shipped the pix binary — MIT
+// s2 — with none of the required notices attached, and install.sh consumed
+// exactly that. Both halves are gated: the release must not publish it, and
+// the installer must not want it.
 
 test("installer fetches the notice-bearing tarball, not the loose binaries", () => {
 	assert.match(src, /tarball="pix_\$\{ver\}_\$\{os\}_\$\{arch\}\.tar\.gz"/);
@@ -86,8 +85,7 @@ function harness({ withNotices = true, corrupt = false } = {}) {
 	const stage = path.join(dir, "stage");
 	fs.mkdirSync(path.join(stage, "licenses"), { recursive: true });
 	fs.writeFileSync(path.join(stage, "pix"), "#!/bin/sh\necho pix stub\n", { mode: 0o755 });
-	fs.writeFileSync(path.join(stage, "pix-host"), "#!/bin/sh\necho pix-host stub\n", { mode: 0o755 });
-	const members = ["pix", "pix-host"];
+	const members = ["pix"];
 	if (withNotices) {
 		for (const n of NOTICES) fs.writeFileSync(path.join(stage, n), `${n} contents\n`);
 		members.push("THIRD_PARTY_NOTICES.md", "NOTICE.md", "LICENSE", "licenses");
@@ -132,11 +130,11 @@ function harness({ withNotices = true, corrupt = false } = {}) {
 	return { dir, res, prefix, docDir: path.join(dataHome, "pix") };
 }
 
-test("e2e: a good tarball installs both binaries AND the notices beside them", () => {
+test("e2e: a good tarball installs the pix binary AND the notices beside it", () => {
 	const { dir, res, prefix, docDir } = harness();
 	try {
 		assert.equal(res.status, 0, res.stdout + res.stderr);
-		for (const b of ["pix", "pix-host"]) {
+		for (const b of ["pix"]) {
 			const p = path.join(prefix, b);
 			assert.ok(fs.existsSync(p), `${b} was not installed`);
 			assert.ok(fs.statSync(p).mode & 0o111, `${b} is not executable`);
@@ -156,7 +154,6 @@ test("e2e: a checksum mismatch installs NOTHING", () => {
 		assert.notEqual(res.status, 0);
 		assert.match(res.stdout + res.stderr, /checksum MISMATCH/);
 		assert.equal(fs.existsSync(path.join(prefix, "pix")), false);
-		assert.equal(fs.existsSync(path.join(prefix, "pix-host")), false);
 		assert.equal(fs.existsSync(docDir), false);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });

@@ -1,18 +1,29 @@
 # Set DOCKER_USER to your Docker Hub namespace before `make publish`.
-# VERSION is a PINNED tag (never `latest`): Docker re-pulls `:latest` on every
-# run even when the image is already loaded, so `make load` would be ignored. A
-# pinned tag gets IfNotPresent semantics — use the loaded local build if present,
-# else pull once. Keep in sync with `version` in package.json and `image:` in
-# pi-kit/spec.yaml.
-DOCKER_USER ?= mcavage
-VERSION     ?= 0.1.71
-# LAUNCHER_VERSION stamps the pix launcher binary. A LOCAL build marks the
-# version "+local" so the launcher knows it is UNRELEASED (no matching git tag
+# VERSION is ONE Pix release version, PINNED (never `latest`): Docker re-pulls
+# `:latest` on every run even when the image is already loaded, so `make load`
+# would be ignored. A pinned tag gets IfNotPresent semantics — use the loaded
+# local build if present, else pull once. Keep in sync with `version` in
+# package.json and the `image:` refs in pi-kit/spec.yaml.
+#
+# pix-agent (the sandbox image, images/agent/Dockerfile) and pix-memory (the
+# memory MCP service, services/memory/Dockerfile) are INDEPENDENT images with
+# their own Dockerfiles, build targets, and immutable digests — see
+# docs/design/pix-v2-architecture.md §3. Both are tagged at the SAME Pix
+# VERSION: the release manifest binds one Pix version to both digests, not two
+# independently numbered images.
+DOCKER_USER  ?= mcavage
+VERSION      ?= 0.1.71
+# LAUNCHER_VERSION stamps the pix binary. A LOCAL build marks the version
+# "+local" so the launcher knows it is UNRELEASED (no matching git tag
 # v$(VERSION) exists) and uses the local checkout kit instead of pinning a bogus
 # tag. A CI RELEASE build overrides this to a clean X.Y.Z (LAUNCHER_VERSION=$(VERSION)).
 LAUNCHER_VERSION ?= $(VERSION)+local
-IMAGE       ?= docker.io/$(DOCKER_USER)/pix:$(VERSION)
-LATEST      ?= docker.io/$(DOCKER_USER)/pix:latest
+AGENT_DOCKERFILE  ?= images/agent/Dockerfile
+AGENT_IMAGE       ?= docker.io/$(DOCKER_USER)/pix-agent:$(VERSION)
+AGENT_LATEST      ?= docker.io/$(DOCKER_USER)/pix-agent:latest
+MEMORY_DOCKERFILE ?= services/memory/Dockerfile
+MEMORY_IMAGE      ?= docker.io/$(DOCKER_USER)/pix-memory:$(VERSION)
+MEMORY_LATEST     ?= docker.io/$(DOCKER_USER)/pix-memory:latest
 KIT         ?= ./pi-kit
 # Dev mode (Mode B): `make run` launches from the repo, so load skills LIVE from the
 # host tree instead of the copies baked into the image — edit a SKILL.md, /reload in
@@ -97,7 +108,7 @@ SERVE_ENV ?=
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher require-launcher gate
+.PHONY: help build build-agent build-memory load publish publish-agent publish-memory validate inspect run run-published run-no-mcp doctor mcp-register mcp-auth pull-models secrets pack install clean launcher require-launcher gate runtime-archive release-manifest
 
 # Bare `make` builds the launcher binaries (the one thing require-launcher
 # demands as a prerequisite for run/serve/doctor), so a dev iterating on the
@@ -130,8 +141,13 @@ help: ## Show this help
 	@echo "not make:  pix help --all  (e.g. pix models add,"
 	@echo "pix agent ls, pix task new)."
 
-build: ## Build the pix image from the DHI base
-	docker build -t $(IMAGE) .
+build: build-agent ## Alias for build-agent (the sandbox image consumers pull; pix-memory is built separately, see build-memory)
+
+build-agent: ## Build the pix-agent sandbox image from images/agent/Dockerfile (DHI Node/Debian base)
+	docker build -f $(AGENT_DOCKERFILE) -t $(AGENT_IMAGE) .
+
+build-memory: ## Build the pix-memory MCP service image from services/memory/Dockerfile (DHI Go builder + minimal DHI runtime)
+	docker build -f $(MEMORY_DOCKERFILE) --build-arg VERSION=$(VERSION) -t $(MEMORY_IMAGE) services/memory
 
 # CRITICAL: sbx caches a materialized image PER TAG. With a fixed tag (:0.0.1),
 # `sbx run` keeps booting the first-cached copy and silently ignores every
@@ -139,29 +155,39 @@ build: ## Build the pix image from the DHI base
 # tag each build uniquely, load that, and `make run` pins --template to it.
 # Old local-*/$(VERSION) templates are pruned so the store doesn't grow.
 # (These comments live ABOVE the recipe so make doesn't echo them to the terminal.)
-load: build ## Build + load the image into sbx under a UNIQUE tag, so `make run` uses this exact build
-	@set -e; TS="local-$$(date +%s)"; T="docker.io/$(DOCKER_USER)/pix:$$TS"; \
-	docker tag $(IMAGE) "$$T"; \
+# load/run only ever concern pix-agent: pix-memory is a plain Docker container
+# (see docs/design/pix-v2-architecture.md §9), never an sbx sandbox template.
+load: build-agent ## Build + load the pix-agent image into sbx under a UNIQUE tag, so `make run` uses this exact build
+	@set -e; TS="local-$$(date +%s)"; T="docker.io/$(DOCKER_USER)/pix-agent:$$TS"; \
+	docker tag $(AGENT_IMAGE) "$$T"; \
 	docker save "$$T" -o out/pix.tar; \
-	for id in $$(sbx template ls 2>/dev/null | awk '$$1=="docker.io/$(DOCKER_USER)/pix" && ($$2=="$(VERSION)" || $$2 ~ /^local-/){print $$3}'); do sbx template rm "$$id" >/dev/null 2>&1 || true; done; \
+	for id in $$(sbx template ls 2>/dev/null | awk '$$1=="docker.io/$(DOCKER_USER)/pix-agent" && ($$2=="$(VERSION)" || $$2 ~ /^local-/){print $$3}'); do sbx template rm "$$id" >/dev/null 2>&1 || true; done; \
 	sbx template load out/pix.tar; \
 	rm -f out/pix.tar; docker rmi "$$T" >/dev/null 2>&1 || true; \
 	echo "$$TS" > out/.local-image-tag; \
-	REF="docker.io/$(DOCKER_USER)/pix:$$TS"; \
+	REF="docker.io/$(DOCKER_USER)/pix-agent:$$TS"; \
 	echo "Loaded image:  $$REF"; \
 	echo ""; \
 	echo "Run this exact build (recreates the sandbox so the new image takes effect):"; \
 	echo "  pix rm $(NAME) && pix run --template $$REF     # from ANY directory (5-worktree friendly)"; \
 	echo "  make run                                       # dev flow from this checkout (live skills + MCP)"
 
-publish: build ## Push the built image to the registry as :$(VERSION) and :latest (run `docker login` first)
-	docker push $(IMAGE)
-	docker tag $(IMAGE) $(LATEST)
-	docker push $(LATEST)
-	@echo "Published $(IMAGE) and $(LATEST)."
-	@echo "  Discoverability tag: $(LATEST) (for manual docker pull / Hub browsing)."
+publish: publish-agent publish-memory ## Push BOTH pix-agent and pix-memory to the registry
+
+publish-agent: build-agent ## Push the pix-agent image to the registry as :$(VERSION) and :latest (run `docker login` first)
+	docker push $(AGENT_IMAGE)
+	docker tag $(AGENT_IMAGE) $(AGENT_LATEST)
+	docker push $(AGENT_LATEST)
+	@echo "Published $(AGENT_IMAGE) and $(AGENT_LATEST)."
+	@echo "  Discoverability tag: $(AGENT_LATEST) (for manual docker pull / Hub browsing)."
 	@echo "  Kit pins :$(VERSION), so consumers + local runs resolve the version (no re-pull)."
 	@echo "  Consumers: sbx run pix --kit \"git+https://github.com/$(DOCKER_USER)/pix.git#dir=pi-kit\""
+
+publish-memory: build-memory ## Push the pix-memory image to the registry as :$(VERSION) and :latest (run `docker login` first)
+	docker push $(MEMORY_IMAGE)
+	docker tag $(MEMORY_IMAGE) $(MEMORY_LATEST)
+	docker push $(MEMORY_LATEST)
+	@echo "Published $(MEMORY_IMAGE) and $(MEMORY_LATEST)."
 
 # The SAME gate CI runs (.github/workflows/test.yml, job `gate`) — build, vet,
 # NON-race go test, node --test, tsc, open-core, and the rename guard once it
@@ -199,7 +225,7 @@ run: require-launcher ## Launch a pix sandbox NAME. If NAME is stopped it's recr
 	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
 	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
 	mkdir -p .pix && echo "$(OLLAMA_BRIDGE_MODEL)" > .pix/ollama-bridge.model; \
-	exec "$(PIX_BIN)" run --dev --name "$(NAME)" $${TAG:+--template docker.io/$(DOCKER_USER)/pix:$$TAG} .
+	exec "$(PIX_BIN)" run --dev --name "$(NAME)" $${TAG:+--template docker.io/$(DOCKER_USER)/pix-agent:$$TAG} .
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
 # consumer path, no local repo needed. Every push to main auto-publishes a NEW
@@ -214,14 +240,10 @@ run-published: ## Run the latest PUBLISHED image via the git kit (always fresh �
 run-no-mcp: ## Launch with NO MCP servers attached (debugging MCP setup failures)
 	@sbx run pix --kit $(KIT) .
 
-launcher: ## Build BOTH host binaries (out/pix launcher + out/pix-host services), version-stamped (local builds stamp $(VERSION)+local so the launcher uses the local kit, not a nonexistent v$(VERSION) tag)
+launcher: ## Build the ONE pix binary (out/pix), version-stamped (local builds stamp $(VERSION)+local so the launcher uses the local kit, not a nonexistent v$(VERSION) tag). There is no pix-host: services/host/cmd/pix is the only build target.
 	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix ./cmd/pix)
-	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .)
-	@echo "Built out/pix + out/pix-host (version $(LAUNCHER_VERSION))."
-	@echo "Install both: ln -sf $(CURDIR)/out/pix ~/.local/bin/pix && ln -sf $(CURDIR)/out/pix-host ~/.local/bin/pix-host"
-
-memory-serve: ## Build + run just the memory service (JSON-RPC :11435) from pix-host
-	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) && exec ./out/pix-host memory
+	@echo "Built out/pix (version $(LAUNCHER_VERSION))."
+	@echo "Install: ln -sf $(CURDIR)/out/pix ~/.local/bin/pix"
 
 mcp-auth: ## (Re)authorize all registered remote OAuth MCP servers. Opens a browser per server.
 	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }
@@ -263,11 +285,6 @@ mcp-register: require-launcher ## Register the local stdio MCP servers you use (
 	@echo "        To attach one to an ALREADY-RUNNING sandbox live (no recreate): pix mcp load <name>"
 	@echo "Note: each server resolves its creds from config/op-refs.env via op run when the gateway spawns it — make sure those refs are filled + valid."
 
-serve: require-launcher ## Start the host services named in SERVICES (config.toml `services`): memory :11435. MCP servers (e.g. google-workspace) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
-	@echo "Host services [$(SERVICES)] — sandboxes reach these on host.docker.internal. Ctrl-C stops all."
-	@(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) || { echo "go build failed (pix-host)"; exit 1; }
-	@exec env $(SERVE_ENV) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pix-host serve $(SERVICES)
-
 pull-models: require-launcher ## Pull the local Ollama models the stack uses (memory watcher + embed, and the bridge/router local model)
 	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture + the local model)"; exit 1; }
 	@echo "Pulling watcher model: $(MEMORY_WATCHER_MODEL)"; ollama pull $(MEMORY_WATCHER_MODEL)
@@ -302,22 +319,41 @@ doctor: require-launcher ## Show models + each optional integration: set up? ser
 	echo "  gateway catalog (atlassian/notion/granola/linear/...): sbx mcp add … then pix config set mcp <name>"; \
 	echo "  slack: externalized (W2/U02a) — not a pix-host subcommand; wired only via a pinned, on-demand pack integration if your pack ships one (see docs/design/slack-setup.md)"; \
 	echo ""; \
-	echo "All of the above is configured in ~/.config/pix/config.toml (pix config set). Start it: make serve (host) + make run (sandbox)."
+	echo "pix-memory (docs/design/pix-v2-architecture.md §9) is reconciled by 'pix setup', not by make. All of the above is configured in ~/.config/pix/config.toml (pix config set). Start it: pix setup (host) + make run (sandbox)."
 
 pack: ## Package the kit as a distributable zip
 	sbx kit pack $(KIT) -o out/pix-kit.zip
 
-install: launcher ## Build + put the Go binaries (out/pix launcher + out/pix-host) on your PATH (~/.local/bin)
+runtime-archive: ## Build the runtime archive (skills/agents/settings/keybindings/themes, canonical runtime/<version>/ layout) WITHOUT touching the live repo layout dev `make run` reads
+	bash scripts/release/build-runtime-archive.sh $(VERSION) out/pix-runtime-$(VERSION).tar.gz
+
+# Binds ONE Pix version to the pix-agent digest, the pix-memory digest, the
+# runtime archive digest, and the kit revision (docs/design/pix-v2-architecture.md
+# §3). Digests are read from `docker inspect` on the just-built local images —
+# this is the LOCAL/dev shape; CI's publish workflow binds the PUBLISHED
+# (pushed, multi-arch) digests instead, which only exist after a real push.
+release-manifest: build-agent build-memory runtime-archive ## Emit out/release-manifest.json binding version + both image digests + runtime digest + kit revision
+	@AGENT_DIGEST=$$(docker image inspect $(AGENT_IMAGE) --format '{{index .RepoDigests 0}}' 2>/dev/null | sed 's/^.*@//'); \
+	if [ -z "$$AGENT_DIGEST" ]; then AGENT_DIGEST="sha256:$$(docker image inspect $(AGENT_IMAGE) --format '{{.Id}}' | sed 's/^sha256://')"; fi; \
+	MEMORY_DIGEST=$$(docker image inspect $(MEMORY_IMAGE) --format '{{index .RepoDigests 0}}' 2>/dev/null | sed 's/^.*@//'); \
+	if [ -z "$$MEMORY_DIGEST" ]; then MEMORY_DIGEST="sha256:$$(docker image inspect $(MEMORY_IMAGE) --format '{{.Id}}' | sed 's/^sha256://')"; fi; \
+	node scripts/release/emit-manifest.mjs \
+		--version $(VERSION) \
+		--agent-digest "$$AGENT_DIGEST" \
+		--memory-digest "$$MEMORY_DIGEST" \
+		--runtime-archive out/pix-runtime-$(VERSION).tar.gz \
+		--write out/release-manifest.json
+
+install: launcher ## Build + put the ONE Go binary (out/pix) on your PATH (~/.local/bin)
 	mkdir -p $(HOME)/.local/bin
 	ln -sf $(CURDIR)/out/pix $(HOME)/.local/bin/pix
-	ln -sf $(CURDIR)/out/pix-host $(HOME)/.local/bin/pix-host
 	@echo "Installed: pix -> $(CURDIR)/out/pix"
-	@echo "Installed: pix-host -> $(CURDIR)/out/pix-host"
 	@# The man page is RETIRED (W1 U01a): `pix help --all` is the one verb map,
 	@# so install drops nothing on the manpath.
 	@echo "Runtime config lives in ~/.config/pix/config.toml — manage it with"
 	@echo "'pix config set <key> <value>' (or 'pix setup' for the guided flow)."
 	@echo "Ensure ~/.local/bin is on your PATH, then: cd <any project> && pix"
 
-clean: ## Remove the built image
-	-docker rmi $(IMAGE)
+clean: ## Remove both built images
+	-docker rmi $(AGENT_IMAGE)
+	-docker rmi $(MEMORY_IMAGE)

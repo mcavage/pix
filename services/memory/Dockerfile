@@ -3,9 +3,9 @@
 # pix-memory — standalone memory MCP service (docs/design/pix-v2-architecture.md
 # §9). Multi-stage: a DHI Go builder produces a static binary, a minimal DHI
 # runtime image serves it. Neither stage shares anything with the pix-agent
-# image (Dockerfile at the repo root): no shipped skills, no Pi, no Node.
+# image (images/agent/Dockerfile): no shipped skills, no Pi, no Node.
 #
-# AC-REL-03 (explicit digest/build-arg path, same convention as the root
+# AC-REL-03 (explicit digest/build-arg path, same convention as the pix-agent
 # Dockerfile): both base images are build ARGs, not hardcoded FROMs, so a
 # release build can pin an immutable digest:
 #   docker build \

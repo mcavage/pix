@@ -5,16 +5,20 @@ displayName: Pix
 description: "Multi-model pi coding agent on a Docker Hardened (DHI) Debian base"
 
 sandbox:
-  # Published image: consumers pull this by name (sbx auto-pulls it). For local
-  # dev, `make load` builds + loads the image under this same name, so sbx uses
-  # your local build instead of pulling. Change the namespace to match your
-  # Docker Hub handle (must match Makefile DOCKER_USER).
+  # Published pix-agent image (docs/design/pix-v2-architecture.md §3/§6):
+  # consumers pull this by name (sbx auto-pulls it). For local dev, `make
+  # load` (or `make build-agent`) builds + loads it under this same name, so
+  # sbx uses your local build instead of pulling. Change the namespace to
+  # match your Docker Hub handle (must match Makefile DOCKER_USER). pix-memory
+  # is a SEPARATE image (services/memory/Dockerfile, docker.io/<user>/pix-memory)
+  # run as a plain Docker container by `pix setup`, never referenced here: the
+  # sandbox reaches it only through the sbx MCP Gateway, never a second kit image.
   #
   # MUST be a pinned tag, never `:latest`: Docker re-pulls `:latest` on every
   # run even when the image is already loaded, defeating `make load`. A pinned
   # tag means "use the loaded build if present, else pull once." Keep in sync
   # with VERSION in the Makefile and `version` in package.json.
-  image: "docker.io/mcavage/pix:0.1.71"
+  image: "docker.io/mcavage/pix-agent:0.1.71"
   entrypoint:
     # --session-dir persists sessions on the host-mounted workspace so they
     # survive sandbox recreation (`pix resume SESSION DIR`); --models sets

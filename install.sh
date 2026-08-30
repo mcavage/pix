@@ -6,7 +6,7 @@
 #
 # This script remains for existing non-Homebrew installations. It fetches the
 # release's notice-bearing tarball (the SAME artifact Homebrew installs),
-# verifies its sha256, and drops pix + pix-host in ~/.local/bin with the
+# verifies its sha256, and drops pix in ~/.local/bin with the
 # licenses and notices alongside them. No repo checkout, no sudo.
 #
 #   curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
@@ -20,7 +20,7 @@
 #   - resolves the latest release (or PIX_VERSION if you set one)
 #   - downloads pix_<ver>_<os>_<arch>.tar.gz and SHA256SUMS
 #   - verifies the tarball's sha256 against SHA256SUMS (aborts on mismatch)
-#   - installs pix + pix-host to ~/.local/bin (chmod +x), and the notices
+#   - installs pix to ~/.local/bin (chmod +x), and the notices
 #     (THIRD_PARTY_NOTICES.md, NOTICE.md, LICENSE, licenses/) to
 #     ~/.local/share/pix. The licenses that must travel with the binaries
 #     (MIT s2, MPL-2.0 s3.1) are part of the artifact, not an optional extra.
@@ -46,11 +46,11 @@ CONFIG_FILE="${CONFIG_DIR}/config.toml"
 DOC_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/pix"
 SOURCE_URL="${GH}/blob/main/install.sh"
 
-BINARIES="pix pix-host"
+BINARIES="pix"
 # Every path the release tarball must contain. Missing any one of them means
 # the artifact is not a complete distribution (pix's own MIT terms, the
 # third-party attributions, and the verbatim MPL-2.0 text for the go-plugin /
-# yamux code linked into pix-host), so we refuse to install it.
+# yamux code linked into pix), so we refuse to install it.
 NOTICES="THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses/MPL-2.0.txt"
 
 log()  { printf '%s\n' "$*"; }
@@ -60,15 +60,14 @@ die()  { err "$*"; exit 1; }
 
 # --- OS/arch detection ------------------------------------------------------
 # Emits "<os> <arch>" using the Go convention (darwin, amd64/arm64). pix's
-# host lifecycle (launchd-managed serve, the pix/pix-host binaries) is
-# macOS-only: there is no linux release asset to fetch any more.
+# host lifecycle is macOS-only: there is no linux release asset to fetch any more.
 detect_platform() {
 	os_raw="$(uname -s)"
 	arch_raw="$(uname -m)"
 
 	case "$os_raw" in
 		Darwin) os="darwin" ;;
-		Linux)  die "pix's host is macOS-only; there is no Linux release of pix/pix-host. Run pix inside a Linux sandbox instead of installing the host binaries there." ;;
+		Linux)  die "pix's host is macOS-only; there is no Linux release of pix. Run pix inside a Linux sandbox instead of installing the host binary there." ;;
 		*) die "unsupported OS '$os_raw' (need Darwin)" ;;
 	esac
 
@@ -224,9 +223,8 @@ do_install() {
 	trap 'rm -rf "$tmp"' EXIT INT TERM
 
 	# Verify-then-install: the release ships ONE tarball per platform (the same
-	# artifact Homebrew installs), so pix, pix-host and the notices are a single
-	# checksummed unit. A mismatched pair (new pix + stale pix-host) is not
-	# even expressible any more. Stage and verify EVERYTHING in the temp dir
+	# artifact Homebrew installs), so pix and the notices are a single
+	# checksummed unit. Stage and verify EVERYTHING in the temp dir
 	# first; only then move anything into place. Any failure before that point
 	# installs nothing (the temp dir is cleaned by the EXIT trap and ${PREFIX} is
 	# left untouched).
@@ -330,7 +328,7 @@ report() {
 }
 
 preflight_collision() {
-	for binary in pix pix-host; do
+	for binary in $BINARIES; do
 		found="$(command -v "$binary" 2>/dev/null || true)"
 		[ -z "$found" ] && continue
 		[ "$found" = "${PREFIX}/${binary}" ] && continue
@@ -345,7 +343,7 @@ preflight_collision() {
 }
 
 assert_installed_resolution() {
-	for binary in pix pix-host; do
+	for binary in $BINARIES; do
 		found="$(command -v "$binary" 2>/dev/null || true)"
 		[ -z "$found" ] && continue
 		if [ "$found" != "${PREFIX}/${binary}" ]; then

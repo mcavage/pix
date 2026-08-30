@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 // fallback that does not assert unresolved DHI rights.
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const dockerfile = fs.readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
+const dockerfile = fs.readFileSync(path.join(repoRoot, "images/agent/Dockerfile"), "utf8");
 const publishWorkflow = fs.readFileSync(
 	path.join(repoRoot, ".github/workflows/publish.yml"),
 	"utf8"

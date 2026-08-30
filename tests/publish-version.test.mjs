@@ -30,11 +30,13 @@ test("later publishes select an unused patch tag without overwriting a release",
 
 // The manpage (pix.1) was retired along with `pix man`/`--man` (`pix help
 // --all` is the one verb map now), so the Homebrew archive stopped bundling
-// it — the tarball carries just the two binaries plus the third-party notices.
-test("Homebrew archives are additive and contain both binaries, no manpage", () => {
+// it — the tarball carries just the pix binary plus the third-party notices.
+// pix-host is gone too: services/host/cmd/pix is the only build target.
+test("Homebrew archives are additive and contain the pix binary, no pix-host, no manpage", () => {
 	assert.match(workflow, /pix_\$\{V\}_darwin_\$\{arch\}\.tar\.gz/);
-	assert.match(workflow, /tar -C "\$stage" -czf .* pix pix-host THIRD_PARTY_NOTICES\.md NOTICE\.md/);
+	assert.match(workflow, /tar -C "\$stage" -czf .* pix THIRD_PARTY_NOTICES\.md NOTICE\.md/);
 	assert.doesNotMatch(workflow, /tar -C "\$stage" -czf .*pix\.1/);
+	assert.doesNotMatch(workflow, /tar -C "\$stage" -czf .*pix-host/);
 	// Only the notice-bearing tarballs are hashed and published now: the loose
 	// pix-<os>-<arch> assets were a notice-less distribution of the same
 	// binaries (see tests/install.test.mjs, AC-REL-02). They still get BUILT as
