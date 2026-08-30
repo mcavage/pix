@@ -39,6 +39,14 @@ func CreateArgv(o CreateOpts) ([]string, error) {
 
 // ExecArgv composes the argv for exec-ing into name. A command is required —
 // unlike create, exec has no implicit default to fall back on.
+//
+// The command is ALWAYS placed after a literal `--` separator
+// (docs/design/pix-v2-architecture.md §6.3: "The command after `--` is
+// inside the sandbox"). Without it, the first in-sandbox flag — `--model`,
+// `--resume` — is ambiguous: sbx may claim it as its own. The separator is
+// unconditional so every attach uses the byte-identical shape, rather than
+// one argv for a bare entrypoint and another for an entrypoint that happens
+// to carry options this session.
 func ExecArgv(o ExecOpts) ([]string, error) {
 	if o.Name == "" {
 		return nil, fmt.Errorf("sandbox: exec requires a name")
@@ -46,7 +54,7 @@ func ExecArgv(o ExecOpts) ([]string, error) {
 	if len(o.Command) == 0 {
 		return nil, fmt.Errorf("sandbox: exec requires a command")
 	}
-	args := []string{"exec", ttyFlag(o.TTY), o.Name}
+	args := []string{"exec", ttyFlag(o.TTY), o.Name, "--"}
 	args = append(args, o.Command...)
 	return args, nil
 }

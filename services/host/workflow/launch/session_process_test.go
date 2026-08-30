@@ -253,13 +253,13 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 	for _, l := range argvLines(t, fixture) {
 		if strings.HasPrefix(l, "exec ") {
 			execLines = append(execLines, l)
-			if l == "exec -it pix-demo pi --model m" {
+			if l == "exec -it pix-demo -- pi --model m" {
 				sawAttachExec = true
 			}
 		}
 	}
 	if !sawAttachExec {
-		t.Errorf("attach argv = %q, want one of them to be %q", execLines, "exec -it pix-demo pi --model m")
+		t.Errorf("attach argv = %q, want one of them to be %q", execLines, "exec -it pix-demo -- pi --model m")
 	}
 
 	release(t, fixture)
@@ -315,8 +315,8 @@ func TestRunSession_AttachUnowned_UsesSafeDefaultArgv(t *testing.T) {
 			execLine = l
 		}
 	}
-	if execLine != "exec -i pix-demo pi --skill /opt/skills" {
-		t.Errorf("unowned attach argv = %q, want %q", execLine, "exec -i pix-demo pi --skill /opt/skills")
+	if execLine != "exec -i pix-demo -- pi --skill /opt/skills" {
+		t.Errorf("unowned attach argv = %q, want %q", execLine, "exec -i pix-demo -- pi --skill /opt/skills")
 	}
 	if SessionRecorded(key) {
 		t.Error("an unowned attach must not create a creation record")

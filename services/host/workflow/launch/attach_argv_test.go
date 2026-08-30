@@ -49,7 +49,7 @@ func TestBuildAttachArgv_TTY(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAttachArgv: %v", err)
 	}
-	argvEqual(t, got, []string{"exec", "-it", "pix-t", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
+	argvEqual(t, got, []string{"exec", "-it", "pix-t", "--", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
 }
 
 // TestBuildAttachArgv_NonTTY: a piped/scripted attach composes `exec -i NAME
@@ -60,7 +60,7 @@ func TestBuildAttachArgv_NonTTY(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAttachArgv: %v", err)
 	}
-	argvEqual(t, got, []string{"exec", "-i", "pix-t", "pi", "--resume"})
+	argvEqual(t, got, []string{"exec", "-i", "pix-t", "--", "pi", "--resume"})
 }
 
 // TestFindPositivelyIdentifiedRunning_TTYAndNonTTY_RealFixture drives the
@@ -98,13 +98,13 @@ exit 1
 	if err != nil {
 		t.Fatalf("BuildAttachArgv (tty): %v", err)
 	}
-	argvEqual(t, ttyArgs, []string{"exec", "-it", "pix-demo", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
+	argvEqual(t, ttyArgs, []string{"exec", "-it", "pix-demo", "--", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
 
 	nonTTYArgs, err := BuildAttachArgv("pix-demo", false, invocation)
 	if err != nil {
 		t.Fatalf("BuildAttachArgv (non-tty): %v", err)
 	}
-	argvEqual(t, nonTTYArgs, []string{"exec", "-i", "pix-demo", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
+	argvEqual(t, nonTTYArgs, []string{"exec", "-i", "pix-demo", "--", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
 }
 
 // TestFindPositivelyIdentifiedRunning_NoStoredInvocation_SafeDefault: an
@@ -140,7 +140,7 @@ exit 1
 	// The personal skill tree is always loaded, so the safe default carries it
 	// too: a re-attach must load the same skill layer the original launch did,
 	// or a resumed session quietly loses the user's own skills.
-	argvEqual(t, execArgs, []string{"exec", "-it", "pix-legacy", "pi",
+	argvEqual(t, execArgs, []string{"exec", "-it", "pix-legacy", "--", "pi",
 		"--skill", PersonalSkillsDir(), "--model", "anthropic/claude-sonnet-5"})
 }
 

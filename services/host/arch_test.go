@@ -107,6 +107,13 @@ var pkgLayer = map[string]int{
 	// non-force removal planning. Pure and dependency-free (see sandbox/doc.go),
 	// same tier as its capability siblings, invisible to them.
 	"sandbox": layerCapability,
+	// session is the v2 session tree (docs/design/pix-v2-architecture.md
+	// §7): tree/node records plus the flock reference holders that decide
+	// whether a sandbox is still claimed. Like sandbox and lease it is pure
+	// mechanism over the filesystem — stdlib only, no sibling imports — so
+	// launch can build the holder census on it without dragging a workflow
+	// dependency down into a capability.
+	"session": layerCapability,
 	// hosttrust is E1.4's launcher-owned host-exec trust mechanism, extracted
 	// from workflow/pack: canonical identity, the fingerprint engine, the one
 	// Record/AcceptanceStore shape keyed by an opaque Subject{Kind,Root} (so a

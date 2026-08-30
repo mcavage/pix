@@ -36,9 +36,9 @@ type RunOpts struct {
 	// D17's `none`), filled in by the command layer once selection ran.
 	Env     string
 	EnvName string
-	Model         string   // --model M: active pi model (passed through to pi)
-	Models        []string // create-time callable model cycle, derived from probed bindings
-	Pack          string   // --pack PATH: active pack for this run (overrides config.Pack)
+	Model   string   // --model M: active pi model (passed through to pi)
+	Models  []string // create-time callable model cycle, derived from probed bindings
+	Pack    string   // --pack PATH: active pack for this run (overrides config.Pack)
 	// Keep is -k/--keep: bind a sticky, identity-bound keep marker to this
 	// session — what the teardown and the orphan sweep refuse on.
 	Keep        bool
@@ -284,4 +284,49 @@ Options:
   - run a local build from your pix checkout:  pix run --dev
   - override the kit entirely:                 pix run --kit <path-or-git-url>
 See ` + "`pix help run`" + ` for the released-vs-local behavior.`
+}
+
+// PixEntrypoint is the in-sandbox program every attach execs: the Pix
+// build of Pi. It is the ONE entrypoint name this package composes, so a
+// create-time attach and a later re-attach can never disagree about what
+// runs inside the sandbox. It is a function returning a fresh slice, not a
+// package var: this package declares no mutable globals, and a shared
+// slice header is exactly the kind of global a caller could append into.
+func PixEntrypoint() []string { return []string{"pi"} }
+
+// EntrypointArgs composes the in-sandbox argv for one session: the Pix
+// entrypoint, then this session's `--model` and `--resume`.
+//
+// Both are PI arguments, not sbx flags (docs/design/pix-v2-architecture.md
+// §6.3), which is the whole reason launch does not use `sbx env run`: that
+// command cannot carry session-specific arguments to the custom agent.
+// Because they are composed here, on every attach, neither one is
+// creation-time state that a second `pix run --model other` would silently
+// ignore.
+func EntrypointArgs(entrypoint []string, model, resume string) []string {
+	argv := append([]string(nil), entrypoint...)
+	if len(argv) == 0 {
+		argv = append(argv, PixEntrypoint()...)
+	}
+	if m := strings.TrimSpace(model); m != "" {
+		argv = append(argv, "--model", m)
+	}
+	if s := strings.TrimSpace(resume); s != "" {
+		argv = append(argv, "--resume", s)
+	}
+	return argv
+}
+
+// BuildEntrypointAttachArgv is the v2 attach argv, used identically for the
+// first attach after `sbx env create` and for every later re-attach:
+//
+//	sbx exec -it <name> -- <entrypoint> [--model M] [--resume S]
+//
+// The `--` separator comes from sandbox.ExecArgv, which always emits it.
+func BuildEntrypointAttachArgv(name string, tty bool, entrypoint []string, model, resume string) ([]string, error) {
+	return sandbox.ExecArgv(sandbox.ExecOpts{
+		Name:    name,
+		TTY:     tty,
+		Command: EntrypointArgs(entrypoint, model, resume),
+	})
 }

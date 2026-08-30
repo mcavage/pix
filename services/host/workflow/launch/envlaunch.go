@@ -457,6 +457,12 @@ type AttachGate struct {
 	Reviewed bool
 	// Tree is the pre-composition tree drift is attributed against.
 	Tree *envinfo.Tree
+	// Proof is the non-drift evidence an AUTOMATIC recreation needs when
+	// the drift set turns out to be recreation-safe: a fresh listing, a
+	// positive zero-holder census, no keep marker, and a direct host mount.
+	// Its zero value authorizes nothing, so a caller that never fills it in
+	// gets v1's behavior — refuse and print the manual sequence.
+	Proof RecreateProof
 }
 
 // AttachDecision is the gate's verdict. Refusal is a complete, already
@@ -465,6 +471,10 @@ type AttachDecision struct {
 	Attach  bool
 	Refusal string
 	Drifts  []envinfo.Drift
+	// Recreate is the decided remove-then-create plan for a
+	// recreation-safe drift whose RecreateProof cleared every gate. It is
+	// nil for an ordinary attach and for every refusal.
+	Recreate *RecreatePlan
 }
 
 // DecideEnvAttach refuses on ANY of §10.2's four conditions, in the order
@@ -473,14 +483,20 @@ type AttachDecision struct {
 // environment still reviewed.
 func DecideEnvAttach(g AttachGate, sandboxName, envName string) AttachDecision {
 	guidance := EnvRecreateGuidance(sandboxName, envName)
-	refuse := func(reason string, drifts []envinfo.Drift) AttachDecision {
+	refuseWithBlockers := func(reason string, drifts []envinfo.Drift, blockers []string) AttachDecision {
 		var b strings.Builder
 		fmt.Fprintf(&b, "%q %s — refusing to attach.\n", sandboxName, reason)
 		for _, d := range drifts {
 			fmt.Fprintf(&b, "     drifted: %s\n", d.Message)
 		}
+		for _, blocker := range blockers {
+			fmt.Fprintf(&b, "     not recreated automatically: %s\n", blocker)
+		}
 		fmt.Fprintf(&b, "     recreate it: %s", guidance)
 		return AttachDecision{Refusal: b.String(), Drifts: drifts}
+	}
+	refuse := func(reason string, drifts []envinfo.Drift) AttachDecision {
+		return refuseWithBlockers(reason, drifts, nil)
 	}
 
 	switch {
@@ -504,6 +520,21 @@ func DecideEnvAttach(g AttachGate, sandboxName, envName string) AttachDecision {
 	}
 	if g.StoredFound {
 		if drifts := envinfo.Attribute(g.Tree, envinfo.Fingerprint(g.Stored), envinfo.Fingerprint(g.Current)); len(drifts) > 0 {
+			// A drift whose every facet is a Pix-owned construction-time
+			// pin (the pinned agent image, the pinned kits) is the ordinary
+			// consequence of upgrading Pix. Refusing it made every image
+			// upgrade a manual `pix rm && pix run` loop, so it is recreated
+			// automatically — but ONLY behind the same proofs teardown
+			// itself demands, and only while the environment is still
+			// reviewed, so an unreviewed kit change can never ride in on
+			// this path. Everything else still refuses with exact guidance.
+			if envinfo.RecreationSafe(drifts) && g.Reviewed {
+				plan, blockers := PlanSafeRecreate(sandboxName, g.RecordedInstanceID, drifts, g.Proof)
+				if plan != nil {
+					return AttachDecision{Recreate: plan, Drifts: drifts}
+				}
+				return refuseWithBlockers("no longer matches its recorded creation fingerprint", drifts, blockers)
+			}
 			return refuse("no longer matches its recorded creation fingerprint", drifts)
 		}
 	}

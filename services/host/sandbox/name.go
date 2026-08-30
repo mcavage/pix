@@ -127,3 +127,26 @@ func compose(base, digest string) string {
 	}
 	return Prefix + trimmed + "-" + digest
 }
+
+// NameFor derives the deterministic sandbox name for one (workspace,
+// environment) pair — the v2 identity rule (PRD: "Sandbox names are
+// deterministic from canonical workspace and environment and remain `pix-*`
+// scoped").
+//
+// Two runs of the same project under two different environments are two
+// different credential and host-execution contexts, so they must be two
+// different sandboxes; keying the name on the workspace alone would make
+// the second `pix run --env other` silently attach to the first one's
+// sandbox. An empty env name reproduces Name(workspace) byte for byte, so
+// the no-environment case keeps its existing identity and no already
+// running sandbox is renamed out from under its records.
+func NameFor(workspace, env string) string {
+	env = strings.TrimSpace(env)
+	if env == "" {
+		return Name(workspace)
+	}
+	canon := canonicalPath(workspace)
+	digest := pathDigest(canon + "\x00" + env)
+	base := sanitizeBase(filepath.Base(canon))
+	return compose(base, digest)
+}
