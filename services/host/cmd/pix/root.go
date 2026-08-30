@@ -89,6 +89,15 @@ func newRootDeps() *cli.Deps {
 // It is the SINGLE exit mapper: 0 success, 1 failure, 2 a wrong invocation, and
 // a SilentError's own code (3, readiness' unverifiable arm).
 func dispatch(argv []string, d *cli.Deps) int {
+	// The two hidden session-control invocation modes (sessionctl.go) are
+	// intercepted BEFORE anything else touches argv: never normalized, never
+	// handed to classifyBareArg, never parsed by kong, so no help/usage/
+	// suggestion code path can ever render or dispatch them as an ordinary
+	// verb. This is what "not listed in help" means structurally rather than
+	// as a kong `hidden:""` tag someone could remove without noticing.
+	if code, handled := runHiddenSessionVerb(argv, &cliDeps{Out: d.Out, Err: d.Err, In: d.In}); handled {
+		return code
+	}
 	// `pix --dev` is the direct shorthand for an implicit dev launch. Preserve
 	// the same TTY boundary as bare `pix`/`pix DIR`; scripts have the explicit
 	// and auditable `pix run --dev` spelling.
