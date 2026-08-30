@@ -1,212 +1,204 @@
 # Native environments delivery handoff
 
-Continue the native-environments delivery from this durable handoff.
+Resume the full native-environments migration from this file. The user approved
+**lean execution**: one implementation pass per remaining wave, focused tests
+while building, one `make gate` at wave boundaries, findings batched, and only
+the mandatory final security/QA/two cross-vendor review rounds. Do not restart
+product planning and do not repeat completed unit reviews.
 
-**Repository:** `/Users/mcavage/dev/pix`
-**Branch:** `design/simplify-pack-rigs`
-**Current main HEAD (before this handoff commit):** `7275e5fe`
+## Repository state
 
-## Lean execution mode (user-approved at this handoff)
+- Repository: `/Users/mcavage/dev/pix`
+- Branch: `design/simplify-pack-rigs`
+- Current HEAD: `67e6bdf6` (`Fix native environment workspace schema`)
+- Waves A-C: complete.
+- Wave D: E2.1-E2.7 merged. E2.8 is blocked by the live private-environment gate.
+- Wave E: complete, including E3.4 removal of shipped agent intents.
+- Wave F: complete, including deletion of scored routing, `routing.json`,
+  `make routing`, `--intent`, `run_intent`, and `model-refresh`.
+- Waves G-H: not started. E5.1 depends on E2.8, so there is no independent Wave
+  G work left to do before the host gate.
 
-The user approved a leaner workflow for the remaining waves. This supersedes
-the prior over-granular per-unit review cadence but **preserves every
-acceptance requirement** (full-migration bar, E2.8's live-conversion gate,
-C9/C10/C11, host-gate proof). `status.json.lean_mode` is now `true`.
+Important integrated commits:
 
-- **One engineer pass per remaining wave**, not one subagent round-trip per
-  unit with a full review after each.
-- **No per-unit reviews.** Only the mandatory gates below still get a review.
-- **Focused tests during development**; `make gate` only after each wave's
-  merges land, plus once at the very end.
-- **Findings batched**, not triaged one at a time.
-- **Cheap static checks** preferred over a full gate run mid-wave.
-- **No broken-Ollama `qa-lead` retries** — if the `qa-lead` preset can't
-  start (as it repeatedly couldn't in Wave C), substitute a QA executor
-  directly instead of retrying the broken preset.
-- **Mandatory, never skipped:** final security review, final QA, and exactly
-  **2** cross-vendor reviews before this delivery closes.
+- `ee3baf6b` E2.5 native-environment launch cutover
+- `7b81b74b` E3.4 shipped-agent roster cleanup
+- `c0c53ad8` E2.6 recreate diagnostics + E2.7 environment host-service union
+- `ebb50219` Wave F scored-router deletion
+- `54152f2b` Wave F anti-em-dash gate fix
+- `67e6bdf6` first real-sbx schema correction (`workspace` /
+  `additionalWorkspaces`)
 
-Two units already in flight predate this approval and are being finished
-under the **old** discipline (one more concise final review each) rather
-than restarted; every wave after them runs lean from the start.
+All integrated gates passed. The most recent full `make gate` passed all 11
+segments at `67e6bdf6` in 36.566s.
 
-## Current state
+## User-owned unstaged files
 
-Story 0 / Wave A, Story 1 foundations / Wave B, and Story 1 verbs / Wave C
-remain complete and unchanged (see prior handoff history in `status.json`
-for that evidence; not repeated here).
+Preserve these exactly and never stage or commit them:
 
-**Wave D (launch cutover):** E2.1-E2.4 are merged and done. **E2.5 is
-`review_pending`**, in worktree `/tmp/pix-native-e2-5`, branch
-`unit/native-e2-5`: initial head `a3ac29e1` came back **BLOCK**, fixes
-landed in `7b2ff399`. Key fixes: env root vs primary workspace semantics;
-`Ensure`'d HMAC on both create and load/attach paths; the legacy `sbx run`
-fallback deleted entirely (no dual path left); create and attach now derive
-the *same* fingerprints; MCP/kits/mounts preserved end-to-end; a promote
-intent receipt; a bounded, single-shot `sbx` JSON listing (no unbounded
-polling loop). The unit agent claims a full green gate, but **that claim is
-not yet independently reverified at the top level** — do that after merge,
-not instead of it. E2.5 needs exactly **one** concise final review, then
-merge. E2.6-E2.8 remain pending.
+- deleted `.claude/settings.local.json`
+- deleted `CODE_OF_CONDUCT.md`
+- deleted `CONTRIBUTING.md`
+- modified `Dockerfile`
+- modified `LICENSE`
+- deleted `NOTICE.md`
+- deleted `SECURITY.md`
+- deleted `THIRD_PARTY_NOTICES.md`
 
-**Wave E (literal roster):** E3.1-E3.3 are merged and done. **E3.4 is
-`review_pending`**, in worktree `/tmp/pix-native-e3-4`, branch
-`unit/native-e3-4`: initial head `03d4ddba` came back with concerns, fixes
-landed in `94a9c908`. Every shipped intent/fallback/model was removed;
-parsers no longer retain intent; docs were corrected. E3.4 needs exactly
-**one** concise final review, then merge — it is the last unit of Wave E.
+After Wave F changed the committed Dockerfile base, the verified user-diff hash
+became:
 
-**Explicit non-claim, carried forward, not resolved by either fix commit
-above:** neither E2.5 nor anything merged so far proves **host live
-behavior of the native MCP name/render** — that proof is owned by the host
-gate ahead of E2.8 (see below), not by E2.5's unit-level fixes.
-
-Waves F, G, H remain pending, unopened, in that order.
-
-## Immediate next steps (in order)
-
-1. **Review E2.5** (worktree `/tmp/pix-native-e2-5`, fix head `7b2ff399`):
-   one concise final pass. If clean, merge `unit/native-e2-5` into
-   `design/simplify-pack-rigs` (stash the user's 8-file cleanup first — see
-   below — then pop and reverify after).
-2. **Review E3.4** (worktree `/tmp/pix-native-e3-4`, fix head `94a9c908`):
-   one concise final pass. If clean, merge `unit/native-e3-4` the same way.
-   This closes Wave E.
-3. **Wave D E2.6/E2.7**: run as **one parallel/batched lean pass** (both are
-   small, independent of each other per `units.json`'s file-conflict data).
-   Focused tests only during development; do not run a full gate per unit.
-4. **HOST GATE** (see requirements below) — must pass before E2.8 opens.
-   E2.8 (delete every selectable pack launch path) **cannot land** until the
-   private work environment has a recorded, live, host-proven conversion
-   (architect correction C11, still open — a verbal claim never satisfies
-   this).
-5. **Wave F**, one engineer pass, strict order **E4.1 → E4.3 → E4.2 →
-   E4.4** (note: not numeric order — E4.3 is a prerequisite for E4.2 per the
-   architecture's dependency graph; do not reorder).
-6. **Wave G**, one engineer pass, order **E5.1 → E5.4** — and re-derive
-   E5.1's pack-trust test enumeration from the live tree first (architect
-   correction C9, still open; the list in `units.json` is a stale snapshot,
-   not an authoritative input). E5.1 may overlap Wave F's tail per the
-   architecture's cross-wave parallelism, but lean mode may choose to
-   serialize F then G instead if that's simpler to execute correctly — both
-   are acceptable under this approval.
-7. **Wave H**, one engineer pass, order **E6.1 → E6.4**. **E6.1 must not
-   resurrect any of the user's deleted legal/community files** (see the
-   user-cleanup section below) — it lands the rest of the doc cut
-   (README, reference, getting-started, AGENTS.md, onboarding/healthcheck
-   skills) without touching `.claude/settings.local.json`,
-   `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `NOTICE.md`, `SECURITY.md`, or
-   `THIRD_PARTY_NOTICES.md`.
-8. **Host Gate 2**: a final concurrent home/work UAT pass, after Wave H, as
-   the last host-backed proof before closeout.
-9. Mandatory final security review, final QA, and 2 cross-vendor reviews —
-   run once, at the very end, per the lean-mode approval above. Do not skip
-   these; they are the one place lean mode does not cut scope.
-
-## Host gate requirements (before E2.8)
-
-The host gate needs, and an agent cannot fake any of these:
-
-- **`sbx` >= 0.39** on the host.
-- **Home environment create/attach/teardown**, proven live.
-- **Private work environment conversion + a live run**, proving PRD
-  acceptance criteria **A8** and **R6**.
-- **Removal name/argv proof** — the exact `sbx env rm` invocation and target
-  name actually used, not a description of what it should be.
-
-**Host Gate 2** (after Wave H, before closeout) is a final **concurrent**
-home + work environment UAT pass, run together, not sequentially.
-
-## User-owned unstaged cleanup — preserve exactly, never stage
-
-The working tree carries **8** unstaged, user-owned changes. This is the
-user's own cleanup, entirely outside this delivery's scope, and must remain
-unstaged and uncommitted by any work here, now or in any remaining wave:
-
-- deleted: `.claude/settings.local.json`
-- deleted: `CODE_OF_CONDUCT.md`
-- deleted: `CONTRIBUTING.md`
-- deleted: `NOTICE.md`
-- deleted: `SECURITY.md`
-- deleted: `THIRD_PARTY_NOTICES.md`
-- modified: `LICENSE`
-- modified: `Dockerfile`
-
-Every gate run (past and future) treats this as fixed, external state:
-capture it byte-exact with `git diff | sha256sum`, `git stash push -u`, run
-the gate on a clean HEAD, `git stash pop`, then reverify the same hash and
-an empty `git status --porcelain` diff against it before declaring the gate
-result. The last-verified patch hash is:
-
-```
-2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691
+```text
+fad6954c04e36ba9ea3f993dc41e71d919a62a3cef6b671d5baf3e4588bd00f4
 ```
 
-Reverify this hash unchanged at every stash/pop cycle **unless and until the
-user commits this cleanup themselves** — at that point it stops being
-unstaged state to preserve and this whole section becomes moot; do not
-re-derive or "fix" a mismatch without first checking whether the user
-committed it.
+The old `2dd22...` hash is obsolete. A three-way proof showed the current
+Dockerfile contains both Wave F's routing removal and every user-owned Dockerfile
+hunk. Around future merges/gates, stash these files, restore them, and verify the
+`fad695...` hash unless another committed change legitimately changes one of
+their bases. If that happens, do another explicit three-way preservation proof.
 
-## External cleanup debt (unchanged, still open)
+## Active worktrees
 
-Pre-fix run `run-20260824-092338-d4c384f5` leaked
-`pix-uatenv-fixture-image`. On the host, first verify the exact name and
-workspace with `sbx ls --json`; only if they still match, remove it, then
-probe again before calling the debt cleared. This debt predates Wave D/E and
-is unrelated to either wave's work; do not fold its cleanup into either
-review.
+- `/tmp/pix-native-schema-parity`, branch `fix/native-schema-parity`, currently
+  clean at `67e6bdf6`. A `deep` implementation attempt was dispatched and
+  aborted without changes. Reuse or recreate it.
+- `/tmp/pix-native-wave-f`, branch `unit/native-wave-f`, stale at `c3608f83`.
+  Wave F is already merged. Remove this worktree and branch.
 
-## Resume instructions (exact commands)
+No stash is active.
+
+## Host UAT evidence and current blocker
+
+The UAT MCP is available through the `mcp-gateway` cached tools even when search
+returns no hit. Call `mcp_gateway_uat_*` directly.
+
+### Host attempt 1
+
+- Candidate: `54152f2b`
+- Run: `run-20260829-161325-d3c9a7be`
+- Six candidate-owned Story 0 environment checks passed.
+- Candidate launch failed before sandbox visibility:
+
+```text
+field workspaces not found in type sbxenv.Config
+```
+
+This proved E2.1 had invented an invalid top-level `workspaces:` field. Commit
+`67e6bdf6` replaced it with documented sbx 0.39 `workspace:` and
+`additionalWorkspaces:` forms and added strict parser/renderer tests.
+
+### Host attempt 2
+
+- Candidate: `67e6bdf6`
+- Run: `run-20260829-211707-aa7177e1`
+- Six candidate-owned Story 0 environment checks again passed.
+- The corrected effective file got past the workspace field but candidate
+  no-environment launch failed:
+
+```text
+invalid .../effective.sbxenv.yaml: agent is required
+```
+
+The built-in `none` document emits no `agent`. Do **not** spend another host run
+fixing only this field. The same audit found the production schema still differs
+from official sbx 0.39 in several places.
+
+## Immediate next task: comprehensive native-schema parity
+
+Use the official Docker reference as the source of truth:
+
+`https://docs.docker.com/ai/sandboxes/configuration/environment-files/`
+
+Fix all of these in one red-first pass before another host retry:
+
+1. Effective RuntimeFacts always render `agent: pix` for built-in defaults and
+   selected Pix environments. Strict authored parsing requires `agent`.
+2. Top-level official fields:
+   - `schemaVersion`, `name`, `agent`, `kits`
+   - `workspace` string or `{path, clone}`
+   - `additionalWorkspaces` list of `{path, readOnly}`
+   - `env`, exact `sandboxOptions`, `secrets`, `bindings`, `registries`, `mcp`,
+     and `ports`.
+3. Replace loose `sandboxOptions map[string]string` with the strict official
+   object: `template`, `memory`, integer `cpus`, `pullPolicy`, `profile`.
+4. A secret source is exactly one of `value`, `ref`, or **string** `command`,
+   plus optional `refresh`, `backend` (`sdk|cli`), and `noVerify`. Current Pix
+   incorrectly models `command` as `[]string`. Pix policy still refuses every
+   literal `value`.
+5. A registry entry is `{secret: <secret source>, username: <optional secret
+   source>}`. Current Pix incorrectly models a flat registry ref/command.
+   Literal `value` remains refused in either nested source.
+6. Bindings support both `apiKey.domains` and `oauth.domains`.
+7. MCP servers require `name` and exactly one of `url` or `command`; `args` is a
+   string list.
+8. Ports preserve/validate `sandbox`, `host`, `protocol`, and `hostIP`.
+9. Update parse/merge/tree/HMAC attribution/trust review/render so every official
+   field is preserved and fingerprinted without exposing resolved values.
+10. Add an independent test-only mirror of the official schema and one fixture
+    containing every field. Strict-parse rendered bytes through that mirror.
+    Add sentinels banning old `workspaces:`, flat registry entries, and
+    `command: []` secret shapes.
+11. Preserve A3/A6 non-claims. Do not claim host acceptance until the next UAT.
+
+The aborted deep prompt already described this exact task; there are no partial
+changes to salvage. Dispatch a fresh `deep` agent in
+`/tmp/pix-native-schema-parity`, then merge and run one full gate.
+
+## Host gate after schema parity
+
+Submit `uat/scenarios/smoke.yaml` against the fixed commit through
+`mcp_gateway_uat_submit`, poll `mcp_gateway_uat_status`, and inspect bounded
+artifacts on failure. The smoke run proves candidate build, all six upstream
+environment checks, and a real no-environment candidate launch.
+
+Before E2.8 may land, still record live proof for:
+
+- sbx >= 0.39
+- home environment create, attach, and teardown
+- private work environment conversion and live run (A8/R6)
+- native MCP name/render behavior
+- exact `sbx env rm` invocation and target name
+
+The current closed UAT scenario does not know the user's private work environment.
+That final private conversion may require one host-side user action after all
+agent-verifiable host checks pass. Do not fake it or treat verbal confirmation as
+evidence.
+
+External cleanup debt remains: `pix-uatenv-fixture-image` from
+`run-20260824-092338-d4c384f5` is still visible on the host. Verify its exact
+workspace identity before removing it.
+
+## Remaining delivery order
+
+1. Comprehensive schema parity fix and host smoke retry.
+2. Complete the host gate, including private work environment evidence.
+3. E2.8: delete every selectable pack launch path. No landing before host proof.
+4. Wave G, one engineer pass in order E5.1 -> E5.2 -> E5.3 -> E5.4.
+   E5.1 must re-derive the live pack-trust test/assertion inventory and publish a
+   named environment replacement for every assertion before deleting anything.
+5. Wave H, one engineer pass E6.1 -> E6.4. Never touch or resurrect the eight
+   user-owned files above. Update README, reference, getting-started, AGENTS.md,
+   onboarding, and healthcheck to the environment/roster model.
+6. Host Gate 2: concurrent home + work UAT.
+7. Mandatory final security review, QA/UAT matrix with full AC traceability, two
+   explicit cross-vendor review rounds (final clean), PM/DX/copy closeout, final
+   gate, and status/evidence commit.
+
+## Resume commands
 
 ```bash
-# 1. Orient: confirm main HEAD and the 8 preserved unstaged files
-git status --short
-git log -1 --format='%H %D'
-git worktree list
-
-# 2. Review the two waiting units at their fix heads
-cd /tmp/pix-native-e2-5 && git log --oneline -5   # expect 7b2ff399 on unit/native-e2-5
-cd /tmp/pix-native-e3-4 && git log --oneline -5   # expect 94a9c908 on unit/native-e3-4
-
-# 3. Merge each after its one concise final review (stash the user's
-#    8-file cleanup around each merge + gate, pop and reverify after)
 cd /Users/mcavage/dev/pix
-git stash push -u -m "user-legal-cleanup-preserve"
-git merge --no-ff unit/native-e2-5 -m "Merge unit/native-e2-5 (E2.5 cutover)"
-git merge --no-ff unit/native-e3-4 -m "Merge unit/native-e3-4 (E3.4 roster)"
-make gate
-git stash pop
-git diff | sha256sum   # must equal 2dd22c878cb7723c929bf6c5f21c0a8567bdc3fc5d75dc057f30e8fcf4656691
-git status --porcelain # must be empty aside from the 8 known files
+git status --short
+git log -8 --oneline
+git worktree list
+git stash list
 
-# 4. Remove the finished worktrees once merged
-git worktree remove /tmp/pix-native-e2-5
-git worktree remove /tmp/pix-native-e3-4
-git branch -d unit/native-e2-5 unit/native-e3-4
+# Remove stale merged Wave F worktree.
+git worktree remove /tmp/pix-native-wave-f
+git branch -d unit/native-wave-f
 
-# 5. Continue with E2.6/E2.7 (one batched pass), then the host gate,
-#    then Waves F/G/H per the ordering above, gating the whole delivery
-#    once at the end per lean_mode.
+# Confirm schema-parity branch is clean at main HEAD, then dispatch the fix.
+git -C /tmp/pix-native-schema-parity status --short
+git -C /tmp/pix-native-schema-parity log -1 --oneline
 ```
-
-## Resume checklist
-
-1. Read this file, `status.json` (`lean_mode`, `wave_d`, `wave_e`, and the
-   `E2.5`/`E3.4` unit entries), `prd.md`, `architecture.md`, and
-   `units.json`.
-2. Confirm main HEAD is `7275e5fe` before this handoff commit, and that the
-   8 unstaged user files above are present, unstaged, exactly as listed.
-3. Review E2.5, then E3.4, each exactly once, then merge both.
-4. Run E2.6/E2.7 as one lean batched pass.
-5. Do not open E2.8 before the host gate (`sbx` >= 0.39, home
-   create/attach/teardown, private-work-env conversion + live run proving
-   A8/R6, removal name/argv proof) passes live on the host.
-6. Run Waves F, G, H each as one lean engineer pass in the stated unit
-   order; re-derive E5.1's test list from the live tree first (C9); never
-   touch `SECURITY.md` in E6.1 (C10) or any of the other 7 preserved files.
-7. Run Host Gate 2 (concurrent home + work UAT) after Wave H.
-8. Run the mandatory final security review, final QA, and 2 cross-vendor
-   reviews once, at the very end — these are never cut by lean mode.
-9. Clear the external `pix-uatenv-fixture-image` debt on the host,
-   independently of the wave work, once the name/workspace is reverified.
