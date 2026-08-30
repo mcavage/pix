@@ -1093,6 +1093,72 @@ export function reapLiveChildren(sig: NodeJS.Signals = "SIGKILL"): number {
 	return reaped;
 }
 
+// ─── Session-control Gateway delegation (host-held lease) ──────────────────
+// architecture §7.2 / pix-session (services/host/session, cmd/pix's hidden
+// `__pix-session-mcp`/`__pix-session-child` invocations): a delegated child
+// can outlive THIS process by having a small host `pix` child-runner hold
+// the sandbox's reference lease instead of relying on this extension's own
+// (in-session) reaper. Reaching that path means a static-mcp server named
+// session.ReservedMCPName ("pix-session") was registered at sandbox CREATE
+// and is reachable through the Gateway right now — launch-time wiring this
+// change does not reach yet (see docs/design/pix-v2-architecture.md §7.2 and
+// the host-side handoff note in sessionctl.go). Until that wiring lands,
+// sessionGatewayAvailability() always reports unavailable, so every existing
+// call site keeps using the direct spawn below UNCHANGED: this is the
+// explicit, tested FALLBACK strategy, not a silent no-op.
+//
+// The request shape mirrors the host's bounded ChildRequest contract
+// (services/host/session/request.go) byte for byte on purpose: an argv or
+// shell field must never even be constructible here, because a mismatch
+// between the two sides is exactly how a bounded contract quietly grows a
+// general one.
+export interface SessionDelegateRequest {
+	agent: string;
+	task: string;
+	model?: string;
+	target: "local-process" | "local-sandbox" | "cloud-sandbox";
+}
+
+export interface SessionGatewayAvailability {
+	available: boolean;
+	reason: string;
+}
+
+// sessionGatewayAvailability is a PURE capability check: it never spawns, never
+// calls the Gateway, and never mutates state, so it is trivially testable and
+// safe to call from any code path (including one that decides, per call, to
+// keep using the direct spawn fallback). PIX_SESSION_MCP_TOOL is the seam the
+// eventual launch-time wiring sets once the reserved "pix-session" static-mcp
+// server is preloaded for this sandbox; env is injectable for tests.
+export function sessionGatewayAvailability(
+	env: NodeJS.ProcessEnv = process.env,
+): SessionGatewayAvailability {
+	const tool = env.PIX_SESSION_MCP_TOOL?.trim();
+	if (!tool) {
+		return {
+			available: false,
+			reason:
+				"PIX_SESSION_MCP_TOOL is unset: this sandbox was not launched with the pix-session static-mcp server, so local-process delegation stays on the direct child spawn (LIVE_CHILD_PGIDS) fallback.",
+		};
+	}
+	return { available: true, reason: `pix-session Gateway tool ${tool} is wired` };
+}
+
+// buildSessionDelegateRequest is the ONLY place a SessionDelegateRequest is
+// constructed, so "does this ever carry a field outside the bounded contract"
+// is a question answerable by reading one function rather than auditing every
+// call site.
+export function buildSessionDelegateRequest(
+	agentName: string,
+	task: string,
+	model: string | undefined,
+	target: SessionDelegateRequest["target"] = "local-process",
+): SessionDelegateRequest {
+	const req: SessionDelegateRequest = { agent: agentName, task, target };
+	if (model) req.model = model;
+	return req;
+}
+
 // Registered ONCE at module load, not per-run: 'exit' handlers accumulate
 // otherwise. 'exit' must stay synchronous, which process.kill is. We do not hook
 // SIGINT/SIGTERM — pi owns those, and stealing them would change how the agent
