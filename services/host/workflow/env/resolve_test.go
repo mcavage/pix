@@ -4,12 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"pix/host/cli"
-	"pix/host/config"
 	"pix/host/hosttrust"
 )
 
@@ -24,92 +22,6 @@ func writeFile(t *testing.T, path, content string) error {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-// ── AC-10: exact-name resolution is identical from any cwd ──────────────
-
-// TestResolveIdenticalAcrossThreeOrMoreCwds is AC-10's own table test: the
-// SAME registered name, looked up while the process stands in >= 3 distinct
-// working directories, must return the byte-identical canonical root every
-// time. Resolve never consults the working directory at all (see doc.go),
-// so this proves that by exercising it, not merely by reading the source.
-func TestResolveIdenticalAcrossThreeOrMoreCwds(t *testing.T) {
-	tempConfig(t)
-	cfg := loadConfig(t)
-	envRoot := t.TempDir()
-	want, err := Register(cfg, "home", envRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	origWD, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(origWD) })
-
-	cwds := []string{t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()}
-	if len(cwds) < 3 {
-		t.Fatalf("test setup error: need >= 3 cwds, got %d", len(cwds))
-	}
-	for _, cwd := range cwds {
-		t.Run(cwd, func(t *testing.T) {
-			if err := os.Chdir(cwd); err != nil {
-				t.Fatal(err)
-			}
-			got, err := Resolve(cfg, "home")
-			if err != nil {
-				t.Fatalf("Resolve(home) from cwd %s: %v", cwd, err)
-			}
-			if got != want {
-				t.Errorf("Resolve(home) from cwd %s = %q, want %q (identical regardless of cwd)", cwd, got, want)
-			}
-		})
-	}
-}
-
-// ── unknown exact name: typed error, known list, no fuzzy fallback ───────
-
-func TestResolveUnknownNameIsTypedWithKnownList(t *testing.T) {
-	tempConfig(t)
-	cfg := loadConfig(t)
-	if _, err := Register(cfg, "work", "/abs/work"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Register(cfg, "home", "/abs/home"); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := Resolve(cfg, "hoem")
-	if err == nil {
-		t.Fatal("Resolve(hoem) must fail: no such name is registered")
-	}
-	var unknown *config.UnknownEnvironmentError
-	if !errors.As(err, &unknown) {
-		t.Fatalf("Resolve error = %#v, want *config.UnknownEnvironmentError", err)
-	}
-	if unknown.Name != "hoem" {
-		t.Errorf("Name = %q, want %q", unknown.Name, "hoem")
-	}
-	if want := []string{"home", "work"}; !slices.Equal(unknown.Known, want) {
-		t.Errorf("Known = %v, want %v", unknown.Known, want)
-	}
-}
-
-// TestResolveNeverFuzzyMatches: a name that is a near-miss of a registered
-// one (a prefix, a case fold) must still be reported unknown, never silently
-// resolved to the closest registration.
-func TestResolveNeverFuzzyMatches(t *testing.T) {
-	tempConfig(t)
-	cfg := loadConfig(t)
-	if _, err := Register(cfg, "home", "/abs/home"); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"hom", "HOME", "home-2"} {
-		if _, err := Resolve(cfg, name); err == nil {
-			t.Errorf("Resolve(%q) must fail; only the exact name %q is registered", name, "home")
-		}
-	}
 }
 
 // ── AC-11: containment refusal names both absolute paths ────────────────
@@ -370,88 +282,6 @@ func TestRequiresSymlinkCheckFailsClosedOnAmbiguousShapes(t *testing.T) {
 	}
 }
 
-// ── registered root canonicalized/validated before ANY Join/stat/read ────
-
-// TestResolveEnvironmentFailsClosedOnHandEditedRelativeRoot proves
-// ResolveEnvironment validates the raw value Resolve returns BEFORE doing
-// anything else with it: a *config.Config built directly (bypassing
-// Register/config.AddEnvironment entirely, exactly what a hand-edited
-// config.toml would look like in memory once TOML-decoded) with a relative
-// registered root must refuse, never silently resolve that value against
-// the calling process's current directory. Standing in a cwd that genuinely
-// has a matching subdirectory proves this the hard way: if
-// ResolveEnvironment ever fell through to filepath.Abs/os.Stat on the raw
-// value, this exact setup would succeed instead of refusing.
-func TestResolveEnvironmentFailsClosedOnHandEditedRelativeRoot(t *testing.T) {
-	cfg := &config.Config{Environments: map[string]string{"home": "relative-env"}}
-
-	cwd := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(cwd, "relative-env"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	origWD, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(origWD) })
-	if err := os.Chdir(cwd); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = ResolveEnvironment(cfg, "home", nil)
-	if err == nil {
-		t.Fatal("ResolveEnvironment must refuse a noncanonical (relative) hand-edited root, not resolve it against cwd")
-	}
-	if got := cli.ExitCode(err); got != 2 {
-		t.Errorf("cli.ExitCode(err) = %d, want 2", got)
-	}
-	var nonCanon *NoncanonicalRootError
-	if !errors.As(err, &nonCanon) {
-		t.Fatalf("error = %#v, want *NoncanonicalRootError", err)
-	}
-	if nonCanon.Name != "home" || nonCanon.Root != "relative-env" {
-		t.Errorf("NoncanonicalRootError = %+v, want {Name: home, Root: relative-env}", nonCanon)
-	}
-}
-
-// TestResolveEnvironmentFailsClosedOnHandEditedTildeRoot: same refusal for a
-// leading-`~` value — the other shape config.AddEnvironment always expands
-// before persisting, so it too can only reach cfg.Environments by hand or by
-// a caller building *config.Config directly.
-func TestResolveEnvironmentFailsClosedOnHandEditedTildeRoot(t *testing.T) {
-	cfg := &config.Config{Environments: map[string]string{"home": "~/envs/home"}}
-
-	_, err := ResolveEnvironment(cfg, "home", nil)
-	if err == nil {
-		t.Fatal("ResolveEnvironment must refuse a noncanonical (tilde) hand-edited root")
-	}
-	var nonCanon *NoncanonicalRootError
-	if !errors.As(err, &nonCanon) {
-		t.Fatalf("error = %#v, want *NoncanonicalRootError", err)
-	}
-}
-
-// TestResolveEnvironmentAcceptsAlreadyCanonicalRoot is the negative control:
-// a root that IS already canonical (exactly what Register/AddEnvironment
-// always produce) passes the new check untouched.
-func TestResolveEnvironmentAcceptsAlreadyCanonicalRoot(t *testing.T) {
-	tempConfig(t)
-	cfg := loadConfig(t)
-	root := t.TempDir()
-	canon, err := Register(cfg, "home", root)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := ResolveEnvironment(cfg, "home", nil)
-	if err != nil {
-		t.Fatalf("ResolveEnvironment on an already-canonical root = %v, want nil", err)
-	}
-	if got != canon {
-		t.Errorf("ResolveEnvironment = %q, want %q", got, canon)
-	}
-}
-
 // ── local executable references resolve deterministically, never via cwd ─
 
 // TestResolveLocalCommandBarePathSymlinkRegularMissing is the bare-command
@@ -548,14 +378,10 @@ var errNotFound = errors.New("executable file not found in $PATH")
 // acceptance record is untouched and remains readable — repointing does not
 // even affect it, let alone transfer it.
 func TestRepointNeverInheritsAcceptance(t *testing.T) {
-	tempConfig(t)
-	cfg := loadConfig(t)
-	oldPath := t.TempDir()
-	newPath := t.TempDir()
-
-	oldRoot, err := Register(cfg, "home", oldPath)
-	if err != nil {
-		t.Fatal(err)
+	oldRoot := t.TempDir()
+	newRoot := t.TempDir()
+	if newRoot == oldRoot {
+		t.Fatalf("test setup error: t.TempDir() produced the same root twice %q", newRoot)
 	}
 
 	store := &hosttrust.AcceptanceStore{}
@@ -565,19 +391,13 @@ func TestRepointNeverInheritsAcceptance(t *testing.T) {
 		t.Fatal("setup: old root must read accepted before the repoint")
 	}
 
-	// Repoint "home" to a different canonical root.
-	newRoot, err := Register(cfg, "home", newPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if newRoot == oldRoot {
-		t.Fatalf("test setup error: repoint produced the same root %q", newRoot)
-	}
-	got, _ := Resolve(cfg, "home")
-	if got != newRoot {
-		t.Fatalf("Resolve(home) after repoint = %q, want the new root %q", got, newRoot)
-	}
-
+	// A name ("home", conceptually) repointed from oldRoot to newRoot: the
+	// v2 selection model has no registry to repoint in this package (an
+	// environment IS a directory; "repointing" it is a filesystem symlink
+	// change ResolveIn resolves fresh on every call), but the acceptance
+	// property under test is entirely about Subject/IsAccepted being keyed
+	// by canonical ROOT, never by name — which two distinct roots alone
+	// already prove.
 	if IsAccepted(store, newRoot) {
 		t.Error("the new root must NOT inherit the old root's acceptance (AC-16)")
 	}

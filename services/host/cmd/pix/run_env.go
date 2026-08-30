@@ -7,7 +7,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,7 +62,7 @@ func resolveRunEnvironment(explicit string) (launch.EnvSelection, error) {
 	if err != nil {
 		return launch.EnvSelection{}, err
 	}
-	reviewed, _ := trustAccepted(home, sel)
+	reviewed, _, _ := trustAccepted(home, sel)
 	return launch.EnvSelection{
 		Name:     loaded.Name,
 		Root:     loaded.Root,
@@ -221,35 +220,10 @@ func currentCreationFingerprint(cfg *config.Config, o launch.RunOpts, sel launch
 	return launch.CreationFingerprint(launch.CreationFactsFor(in), launch.AttachHMACResolver(configDirOrEmpty(), nil))
 }
 
-// envHolderProbe is `pix env forget`'s REAL live-holder check (C7): a
-// registered name resolves to its canonical root, and workflow/launch
-// answers from the sandboxes this host actually recorded against that
-// root, failing closed on any sbx state it cannot read.
-func envHolderProbe(cfg *config.Config) nativeenv.HolderProbe {
-	probe := launch.EnvironmentHolderProbe(defaultShellEnv(), func(name string) (string, bool) {
-		if cfg == nil {
-			return "", false
-		}
-		root, ok := cfg.Environments[name]
-		return root, ok
-	})
-	return nativeenv.HolderProbe(probe)
-}
-
-// envSandboxState is `pix env show`'s REAL live state for the selected
-// environment, replacing Wave C's placeholder: the live holders this host
-// recorded against that root, or an explicit unreadable/not-running
-// answer. It never fabricates a state.
-func envSandboxState(cfg *config.Config, root string) string {
-	if strings.TrimSpace(root) == "" {
-		return "not running"
-	}
-	held, err := launch.EnvironmentHolders(defaultShellEnv(), root)
-	if err != nil {
-		return "unknown (could not read sbx state)"
-	}
-	if len(held) == 0 {
-		return "not running"
-	}
-	return fmt.Sprintf("running: %s", strings.Join(held, ", "))
-}
+// envHolderProbe and envSandboxState were removed: both supported
+// `pix env forget`/a live-sandbox-state column on `pix env show`, and
+// neither verb exists in the accepted v2 four-verb surface (list/show/
+// default/trust, docs/design/pix-v2-surface.md §3.4 — there is no
+// forget). Both were already unreachable dead code (no call site) before
+// this comment; they named nativeenv.HolderProbe, a v1 registry-era type
+// that has itself been deleted along with forget.go.

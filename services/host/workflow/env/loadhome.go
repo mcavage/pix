@@ -96,6 +96,18 @@ func LoadHome(sel Selected, effective EffectiveMounts, lookPath func(string) (st
 		return nil, cli.UsageError{Err: err}
 	}
 
+	// A bare `${VAR}` with no default and no value on this host is refused
+	// rather than silently interpolated as empty (PRD: "Undefined bare
+	// `${VAR}` interpolation is refused rather than accepted as empty") —
+	// v1 resolved it to "", which produced an environment nobody authored
+	// (an empty registry host, an empty MCP URL). os.LookupEnv is the real
+	// host-environment probe; this runs on every load, so `pix env show`,
+	// `--effective`, and a real launch (which all funnel through LoadHome)
+	// refuse identically rather than only the launch path catching it.
+	if err := envinfo.RefuseUndefinedInterpolations(tree, os.LookupEnv); err != nil {
+		return nil, cli.UsageError{Err: err}
+	}
+
 	if sidecar != nil {
 		skillWorkspaces := append(workspacePaths(effective), workspacePaths(authored)...)
 		skillWorkspaces = append(skillWorkspaces, root)

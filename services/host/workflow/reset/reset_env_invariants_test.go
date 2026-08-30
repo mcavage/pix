@@ -1,39 +1,26 @@
-// reset_env_invariants_test.go — E1.14: `pix reset` invalidates every
-// environment host-exec acceptance (AC-69/70, docs/design/environments.md
-// D21: "`pix reset` invalidates every environment trust acceptance,
-// scaffolded or externally registered, and deletes no environment
-// source"), while never touching an environment's SOURCE files.
+// reset_env_invariants_test.go — D21 (docs/design/pix-v2-surface.md §3.8):
+// `pix reset` invalidates every environment trust acceptance and deletes no
+// environment source. The v1 workflow-level round trip this file used to
+// prove that against (env.Register/Review/ComputeShow/Load, a config.toml
+// registry entry, and workflow/env/review.go's separate
+// environmentTrustStorePath) was removed along with those v1-only APIs in
+// the v2 cutover (docs/design/pix-v2-surface.md §3.4: no add/edit/use/
+// review/forget, no environment registration database).
 //
-// This is deliberately a WORKFLOW-level test, not a CLI one: `pix env add`/
-// `use`/`forget` (E1.10/E1.11) have not landed yet, and this file's whole
-// point is to prove the invariant true of the primitives that already exist
-// (env.Register, env.Review, env.ComputeShow, env.Load) so it never conflicts
-// with those units landing later — see this package's own doc comment
-// pattern (env's doc.go) for why a workflow test reaches for the library
-// entry points a future CLI verb will call, not a verb that does not exist.
-//
-// Two registration shapes are load-bearing here, per D21's own wording:
-//
-//   - an EXTERNAL source: a directory reset never owns or moves at all
-//     (outside config/data/state), whose acceptance is invalidated purely
-//     because the launcher-owned trust store that recorded it moves away.
-//   - a SCAFFOLDED source: a directory living UNDER the Pix data root (what
-//     a future `pix env add` with no path would create there), which reset's
-//     existing data-root rename carries along for free — same directory
-//     entries, same bytes, new parent path.
-//
-// Neither case needs reset.go to know anything about environments at all:
-// the whole design is that hosttrust's environment-trust.json lives beside
-// config.toml (workflow/env/review.go's environmentTrustStorePath), and
-// reset already renames that whole directory unconditionally. These tests
-// exist to make that emergent property a proven, regression-guarded one
-// rather than an accident nobody wrote down.
+// D21 holds even more directly under v2's single-root layout than it did
+// under v1's two-location one: `pix env trust`'s acceptance record now
+// lives at PIX_HOME/state/trust/environments/<name>.json
+// (cmd/pix/env_cmd.go's trustRecordPath), strictly INSIDE the one root
+// `pix reset` renames wholesale — there is no second, independently-rooted
+// trust-store path left to keep in sync with the rename at all. Proving
+// that emergent property with a real end-to-end `pix reset` + `pix env
+// trust` round trip is a real gap this cutover left open; the AST sentinel
+// below (a DIFFERENT, still-live half of this same file) is unaffected and
+// stays.
 package reset
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -41,15 +28,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/hosttrust"
-	"pix/host/workflow/env"
 )
 
 // parseGoFile parses a single Go source file into an *ast.File plus the
@@ -153,15 +137,22 @@ func TestDeleteCallSentinelDetectsAPlantedViolation(t *testing.T) {
 	}
 }
 
-// ── the workflow-level round trip ───────────────────────────────────────────
+// ── shared fixture: one $HOME both a real config.Load() and a fake
+// resetHost agree on ─────────────────────────────────────────────────────
 
-// envHostFixture sets up ONE $HOME the both sides of the invariant agree on:
-// the REAL process env vars workflow/env's trust store resolves through
-// (config.Path()/config.StateDir() read os.Getenv directly, never an
-// injected sys.System), and a resetHost fake whose OWN env map carries the
-// byte-identical values, so ResolvePaths(fake) names the SAME three
-// directories config's own resolution would. Getting these two out of step
-// would silently test two different hosts talking about each other's paths.
+// envHostFixture sets up ONE $HOME the real process env vars (config.Path()/
+// config.StateDir() read os.Getenv directly, never an injected sys.System)
+// and a resetHost fake (whose OWN env map carries the byte-identical
+// values) both agree on, so ResolvePaths(fake) names the SAME directories
+// config's own resolution would. Getting these two out of step would
+// silently test two different hosts talking about each other's paths.
+//
+// This fixture is deliberately kept even though the v1 environment-
+// registration tests that first introduced it (env.Register/Review/Load,
+// this file's own header comment) were removed in the v2 cutover:
+// hmackey_reset_test.go's HMAC-key invalidation/rotation proof needs the
+// SAME real-config-dir + fake-resetHost pairing and has no reason to
+// duplicate it.
 type envHostFixture struct {
 	home      string
 	configDir string
@@ -204,8 +195,7 @@ func newEnvHostFixture(t *testing.T) *envHostFixture {
 
 // runReset drives the real verb (plan -> guard -> execute) against f's fake
 // host, exactly like stack.run in fixture_test.go, but with an injectable
-// cfg (the environments test needs the SAME *config.Config it just
-// registered against, not defaultCfg()'s fixed memory-only shape).
+// cfg.
 func (f *envHostFixture) runReset(t *testing.T, cfg *config.Config, opts Opts) (out string, err error) {
 	t.Helper()
 	var buf, errBuf bytes.Buffer
@@ -221,324 +211,4 @@ func (f *envHostFixture) runReset(t *testing.T, cfg *config.Config, opts Opts) (
 	}
 	err = Run(cfg, ResolvePaths(f.fake), opts, rt)
 	return buf.String(), err
-}
-
-// tinySbxenv is the minimal Tier1 native document: a secret with a COMMAND
-// (restriction 3: a secret command is host execution whether or not it is
-// ever bound) is the smallest fixture that forces BillOfMaterials.Tier1(),
-// so Review actually gates and records an acceptance rather than the "no
-// output, no store write" Tier0 shortcut.
-const tinySbxenv = `schemaVersion: "1"
-agent: pix
-
-secrets:
-  demo:
-    command: ["echo", "shh"]
-`
-
-func writeEnvSource(t *testing.T, root string) {
-	t.Helper()
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".sbxenv.yaml"), []byte(tinySbxenv), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// hashTree hashes every regular file under root, keyed by its root-relative
-// path, in sorted order — the same "pure function of path+content" discipline
-// bom.go's own hashDir documents, reimplemented here rather than imported
-// (workflow/reset may not import workflow/env's internals, and this is a
-// three-line hash, not a capability worth a shared package for one test).
-func hashTree(t *testing.T, root string) string {
-	t.Helper()
-	var files []string
-	if err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() {
-			files = append(files, p)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("walk %s: %v", root, err)
-	}
-	sort.Strings(files)
-	h := sha256.New()
-	for _, f := range files {
-		rel, _ := filepath.Rel(root, f)
-		data, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
-		}
-		h.Write([]byte(rel))
-		h.Write([]byte{0})
-		h.Write(data)
-		h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func acceptTier1(t *testing.T, cfg *config.Config, name string) {
-	t.Helper()
-	var out bytes.Buffer
-	res, err := env.Review(cfg, name, nil, noopLookPath, env.ReviewOptions{Yes: true, Out: &out})
-	if err != nil {
-		t.Fatalf("Review(%q, --yes): %v\n%s", name, err, out.String())
-	}
-	if res == nil || !res.Accepted || res.Fingerprint == "" {
-		t.Fatalf("Review(%q, --yes) = %+v, want an accepted Tier1 result", name, res)
-	}
-}
-
-func noopLookPath(string) (string, error) { return "", fmt.Errorf("not found") }
-
-// TestReset_ExternalEnvironmentSource_UntouchedByteIdenticalAcceptanceGone is
-// AC-69/70's external-registration half: a source OUTSIDE config/data/state
-// is never moved, never modified, and re-registering it after a reset finds
-// no acceptance at all — because the trust store that recorded one just
-// moved away with the config dir, never because reset walked into the
-// environment's own directory.
-func TestReset_ExternalEnvironmentSource_UntouchedByteIdenticalAcceptanceGone(t *testing.T) {
-	f := newEnvHostFixture(t)
-	stubServeProbe(t, false, false)
-
-	// t.TempDir() lands under os.TempDir(), never under f.home — genuinely
-	// external to every directory reset knows how to touch.
-	root := t.TempDir()
-	writeEnvSource(t, root)
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	if _, err := env.Register(cfg, "extenv", root); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	acceptTier1(t, cfg, "extenv")
-
-	before := hashTree(t, root)
-	if !exists(filepath.Join(f.configDir, "environment-trust.json")) {
-		t.Fatal("acceptance must have written environment-trust.json beside config.toml")
-	}
-
-	out, err := f.runReset(t, cfg, NewOpts(false, false, true, false))
-	if err != nil {
-		t.Fatalf("reset: %v\n%s", err, out)
-	}
-
-	// The environment source itself: same path, same bytes, no backup sibling
-	// of ITS OWN — reset never touched it at all.
-	if !exists(root) {
-		t.Fatalf("external environment source %s must survive at the SAME path", root)
-	}
-	if got := hashTree(t, root); got != before {
-		t.Errorf("external environment source content changed: got %s, want %s", got, before)
-	}
-	if matches, _ := filepath.Glob(root + ".bak-*"); len(matches) != 0 {
-		t.Errorf("external environment source must never get its own .bak- sibling, found %v", matches)
-	}
-
-	// The config dir (and with it, environment-trust.json) is gone from the
-	// live path — this is the WHOLE mechanism: acceptance evaporates because
-	// the launcher-owned store moved, not because anyone edited a record.
-	if exists(f.configDir) {
-		t.Fatal("config dir must have moved aside")
-	}
-	backupOf(t, f.configDir) // exactly one .bak- sibling
-
-	// Re-registering the SAME external path into a FRESH config (post-reset:
-	// config.toml is gone, so a fresh config.Load() has no [environments] at
-	// all) finds NO acceptance — env show reports it, and Review refuses,
-	// naming itself as the fix, exactly as a first-time environment would.
-	cfg2, err := config.Load()
-	if err != nil {
-		t.Fatalf("config.Load (post-reset): %v", err)
-	}
-	if len(cfg2.Environments) != 0 {
-		t.Fatalf("post-reset config must start with no registrations, got %v", cfg2.Environments)
-	}
-	if _, err := env.Register(cfg2, "extenv", root); err != nil {
-		t.Fatalf("re-Register: %v", err)
-	}
-
-	show, err := env.ComputeShow(cfg2, "extenv")
-	if err != nil {
-		t.Fatalf("ComputeShow: %v", err)
-	}
-	if show.Accepted {
-		t.Error("env show must report the re-registered external source as UNACCEPTED after reset")
-	}
-	if show.Fingerprint != "" {
-		t.Errorf("Fingerprint = %q, want empty for an unaccepted environment", show.Fingerprint)
-	}
-
-	var reviewOut bytes.Buffer
-	_, reviewErr := env.Review(cfg2, "extenv", nil, noopLookPath, env.ReviewOptions{
-		TTY: false, Yes: false, Out: &reviewOut,
-	})
-	if reviewErr == nil {
-		t.Fatal("Review must refuse a non-interactive re-acceptance of a Tier1 environment with no record")
-	}
-	if got := cli.ExitCode(reviewErr); got != 2 {
-		t.Errorf("cli.ExitCode(reviewErr) = %d, want 2 (a refusal, not an operational failure)", got)
-	}
-	// The retry command lives in the refusal's own three-part text now
-	// (C7), never a second, output-only line on reviewOut.
-	wantFix := "pix env review extenv --yes"
-	if !strings.Contains(reviewErr.Error(), wantFix) {
-		t.Errorf("Review's refusal must name itself as the fix (%q); got:\n%s", wantFix, reviewErr.Error())
-	}
-}
-
-// TestReset_ScaffoldedEnvironmentSource_TravelsWithDataDirRename is AC-69/70's
-// scaffolded half: a source living UNDER the Pix data root (what a future
-// `pix env add` with no path scaffolds there) moves WITH the data root's
-// existing rename — same relative layout, same bytes, at the NEW
-// `<data-root>.bak-<ts>/...` path — and the ORIGINAL path is genuinely gone
-// (stat fails), never a source Load could still find and falsely trust.
-func TestReset_ScaffoldedEnvironmentSource_TravelsWithDataDirRename(t *testing.T) {
-	f := newEnvHostFixture(t)
-	stubServeProbe(t, false, false)
-
-	root := filepath.Join(f.dataRoot, "environments", "demo")
-	writeEnvSource(t, root)
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	if _, err := env.Register(cfg, "demo", root); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	acceptTier1(t, cfg, "demo")
-	before := hashTree(t, root)
-
-	out, err := f.runReset(t, cfg, NewOpts(false, false, true, false))
-	if err != nil {
-		t.Fatalf("reset: %v\n%s", err, out)
-	}
-
-	if exists(root) {
-		t.Fatalf("scaffolded source %s must not exist at its original path after reset", root)
-	}
-	if exists(f.dataRoot) {
-		t.Fatal("data root must have moved aside")
-	}
-	dataBackup := backupOf(t, f.dataRoot)
-	moved := filepath.Join(dataBackup, "environments", "demo")
-	if !exists(moved) {
-		t.Fatalf("scaffolded source must travel WITH the data-dir rename to %s", moved)
-	}
-	if got := hashTree(t, moved); got != before {
-		t.Errorf("scaffolded source content changed across the rename: got %s, want %s", got, before)
-	}
-	// It must not ALSO get an independent .bak- of its own: exactly one move
-	// happened (the data root's), never two.
-	if matches, _ := filepath.Glob(root + ".bak-*"); len(matches) != 0 {
-		t.Errorf("scaffolded source must not get its own separate .bak- sibling, found %v", matches)
-	}
-
-	// A caller who re-registers the OLD (now-gone) path must get an honest
-	// failure, never a false claim that the original path still holds the
-	// environment: Load's required-file check fails on a directory that no
-	// longer exists rather than silently succeeding against stale data.
-	cfg2, err := config.Load()
-	if err != nil {
-		t.Fatalf("config.Load (post-reset): %v", err)
-	}
-	if _, err := env.Register(cfg2, "demo", root); err != nil {
-		t.Fatalf("re-Register: %v", err)
-	}
-	if _, err := env.Load(cfg2, &hosttrust.AcceptanceStore{}, "demo", nil, noopLookPath); err == nil {
-		t.Error("Load must refuse a registration whose original scaffolded path no longer exists, not silently succeed")
-	}
-
-	// The environment IS still there, byte-identical, one level down in the
-	// backup — proving reset's promise ("nothing deleted, only renamed")
-	// rather than merely asserting the negative above.
-	cfg3, err := config.Load()
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	if _, err := env.Register(cfg3, "demo-recovered", moved); err != nil {
-		t.Fatalf("Register the recovered path: %v", err)
-	}
-	loaded, err := env.Load(cfg3, &hosttrust.AcceptanceStore{}, "demo-recovered", nil, noopLookPath)
-	if err != nil {
-		t.Fatalf("Load the recovered environment: %v", err)
-	}
-	if loaded.Accepted {
-		t.Error("even the recovered copy must show unaccepted: acceptance never survives a reset")
-	}
-}
-
-// TestReset_DataBlockedFailure_StillInvalidatesAcceptance_NeverMovesTheSource
-// is the "reset failures" case the task calls out: when the daemon cannot be
-// confirmed down, the DANGEROUS data-root move (and any scaffolded source
-// riding along with it) is refused and left exactly where it was — but the
-// config dir is not gated on that at all (see reset.go's plan: only
-// Dangerous targets are skipped under dataBlocked), so acceptance is STILL
-// invalidated even out of a failed, partial reset. A source is never deleted
-// OR silently relocated on a failure path either.
-func TestReset_DataBlockedFailure_StillInvalidatesAcceptance_NeverMovesTheSource(t *testing.T) {
-	f := newEnvHostFixture(t)
-	stubServeProbe(t, true, true) // up before the stop, still up after it: refuses the data move
-
-	root := filepath.Join(f.dataRoot, "environments", "demo")
-	writeEnvSource(t, root)
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	if _, err := env.Register(cfg, "demo", root); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	acceptTier1(t, cfg, "demo")
-	before := hashTree(t, root)
-
-	_, err = f.runReset(t, cfg, NewOpts(false, false, true, false))
-	if err == nil {
-		t.Fatal("a reset that cannot confirm the daemon down must report a failure")
-	}
-	if !strings.Contains(err.Error(), "STILL running") {
-		t.Errorf("error = %v, want it to name the still-running daemon", err)
-	}
-
-	// The source never moved AND was never deleted: still at its original
-	// path, byte-identical.
-	if !exists(root) {
-		t.Fatal("a blocked data move must leave the scaffolded source exactly where it was")
-	}
-	if got := hashTree(t, root); got != before {
-		t.Errorf("source content changed on a FAILED reset: got %s, want %s", got, before)
-	}
-	if matches, _ := filepath.Glob(f.dataRoot + ".bak-*"); len(matches) != 0 {
-		t.Error("the data root must not have moved when the daemon could not be confirmed down")
-	}
-
-	// Acceptance is STILL gone: the config dir move is not gated on the data
-	// move's own guard at all.
-	if exists(f.configDir) {
-		t.Fatal("the config dir must still move aside even when the data move was refused")
-	}
-	backupOf(t, f.configDir)
-
-	cfg2, err := config.Load()
-	if err != nil {
-		t.Fatalf("config.Load (post-reset): %v", err)
-	}
-	if _, err := env.Register(cfg2, "demo", root); err != nil {
-		t.Fatalf("re-Register: %v", err)
-	}
-	loaded, err := env.Load(cfg2, &hosttrust.AcceptanceStore{}, "demo", nil, noopLookPath)
-	if err != nil {
-		t.Fatalf("Load the still-in-place source: %v", err)
-	}
-	if loaded.Accepted {
-		t.Error("acceptance must be gone even out of a partially-failed reset")
-	}
 }
