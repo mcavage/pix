@@ -8,8 +8,15 @@ package envinfo
 //
 //   - top-level scalars (schemaVersion, agent, name): later non-empty
 //     value replaces.
-//   - kits, mcp.servers, ports: plain lists — concatenate in argument
-//     order.
+//   - kits, additionalWorkspaces, mcp.servers, ports: plain lists —
+//     concatenate in argument order.
+//   - workspace: a later file that AUTHORS one replaces the earlier one
+//     WHOLESALE, in whichever form it authored (scalar or object). It is
+//     the schema's one scalar-or-object union, and half-merging it (a
+//     `clone:` from one file onto a `path:` from another) would
+//     manufacture a primary workspace neither file declared — the same
+//     reading secrets/registries already get below. A file that omits
+//     `workspace:` contributes nothing and never clears an earlier one.
 //   - sandboxOptions, env: maps of scalars — merge by key, later value
 //     replaces.
 //   - secrets, registries: maps merge by key, but a key collision replaces
@@ -50,6 +57,12 @@ func Merge(docs ...*Document) (*Merged, error) {
 		}
 		if d.Name != "" {
 			m.Name, m.NameSource = d.Name, d.Source
+		}
+		if d.Workspace.Present {
+			m.Workspace, m.WorkspaceSource = d.Workspace, d.Source
+		}
+		for _, ws := range d.AdditionalWorkspaces {
+			m.AdditionalWorkspaces = append(m.AdditionalWorkspaces, MergedAdditionalWorkspace{AdditionalWorkspace: ws, Source: d.Source})
 		}
 		for _, k := range d.Kits {
 			m.Kits = append(m.Kits, MergedKit{KitEntry: k, Source: d.Source})
@@ -96,6 +109,17 @@ type Merged struct {
 	Name                string
 	NameSource          string
 
+	// Workspace is the last AUTHORED primary workspace, and
+	// WorkspaceSource the file that authored it. Both are zero when no
+	// composed file declared one — never upstream's "first file's
+	// directory" default, which this package deliberately does not
+	// materialize (Document.Workspace).
+	Workspace       Workspace
+	WorkspaceSource string
+	// AdditionalWorkspaces is every authored entry from every file, in
+	// argument order, each annotated with the file that contributed it.
+	AdditionalWorkspaces []MergedAdditionalWorkspace
+
 	Kits           []MergedKit
 	SandboxOptions map[string]MergedScalar
 	Env            map[string]MergedScalar
@@ -104,6 +128,13 @@ type Merged struct {
 	Bindings       map[string]MergedBinding
 	MCPServers     []MergedMCPServer
 	Ports          []MergedPort
+}
+
+// MergedAdditionalWorkspace is one additionalWorkspaces[i] entry annotated
+// with the source file that contributed it.
+type MergedAdditionalWorkspace struct {
+	AdditionalWorkspace
+	Source string
 }
 
 // MergedKit is one Kits[i] entry annotated with the source file that

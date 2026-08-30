@@ -134,6 +134,77 @@ func ResolveEnvironment(cfg *config.Config, name string, effective EffectiveMoun
 	return root, nil
 }
 
+// AuthoredMounts is the mount set the DOCUMENT ITSELF declares: its
+// authored primary `workspace:` plus every `additionalWorkspaces[]` entry,
+// each at the path envinfo.Parse already resolved against the environment
+// file's own directory. Before the native schema modeled those two keys,
+// this package could only ever check a root against mounts a CALLER
+// supplied, so an environment whose own file mounted its own directory
+// passed containment silently — the exact placement upstream's own
+// reference warns against ("Keep the environment file outside the
+// directories you mount into the sandbox. That includes the primary
+// workspace and every additionalWorkspaces mount"), because the agent can
+// then rewrite the file that controls the next `sbx env` command.
+//
+// The authored primary is reported READ-ONLY when it declares `clone:
+// true`: clone mode bind-mounts the host repository read-only and gives
+// the agent a private in-container clone instead, so restriction 4's
+// writable-workspace rule does not bite there. Every other entry keeps its
+// own authored readOnly bit.
+//
+// An OMITTED `workspace:` contributes NOTHING here. Upstream's documented
+// default for it is "first file's directory" — which is the environment
+// root itself — but envinfo deliberately does not materialize that default
+// (envinfo.Document.Workspace), and a Pix launch always renders its own run
+// workspace as the effective primary. Synthesizing it here would refuse
+// every environment on earth for a mount Pix never makes.
+func AuthoredMounts(doc *envinfo.Document) EffectiveMounts {
+	if doc == nil {
+		return nil
+	}
+	var out EffectiveMounts
+	if ws := doc.Workspace; ws.Present {
+		if path := authoredWorkspacePath(ws.Resolved, ws.Raw); path != "" {
+			out = append(out, WorkspaceMount{Path: path, ReadOnly: ws.Clone})
+		}
+	}
+	out = append(out, AuthoredAdditionalMounts(doc)...)
+	return out
+}
+
+// AuthoredAdditionalMounts is the subset of AuthoredMounts that actually
+// becomes a mount in the effective document: the authored
+// `additionalWorkspaces[]`. The authored primary is excluded on purpose —
+// a Pix launch overrides it with the run's own project workspace
+// (envinfo/render.go's effectiveWorkspaces), so listing it as a mount in a
+// reviewed bill of materials would ask a reviewer to consent to host
+// access Pix never grants.
+func AuthoredAdditionalMounts(doc *envinfo.Document) EffectiveMounts {
+	if doc == nil {
+		return nil
+	}
+	var out EffectiveMounts
+	for _, ws := range doc.AdditionalWorkspaces {
+		if path := authoredWorkspacePath(ws.Resolved, ws.Path); path != "" {
+			out = append(out, WorkspaceMount{Path: path, ReadOnly: ws.ReadOnly})
+		}
+	}
+	return out
+}
+
+// authoredWorkspacePath prefers Parse's resolved path and falls back to
+// the authored text, which is what a path still carrying an unresolved
+// `${VAR}` keeps (parse.go resolves no interpolation). A containment check
+// against an unexpanded expression cannot match a real directory, and that
+// is the honest outcome: this package never resolves a host variable to
+// decide a refusal.
+func authoredWorkspacePath(resolved, raw string) string {
+	if resolved != "" {
+		return resolved
+	}
+	return raw
+}
+
 // workspacePaths returns every Path in mounts, regardless of its ReadOnly
 // bit — the full set envinfo.ValidateSkillWorkspaces checks a LOCAL
 // sidecar skill against: a skill may legitimately live under a read-only
@@ -230,6 +301,18 @@ func Load(cfg *config.Config, store *hosttrust.AcceptanceStore, name string, eff
 		return nil, cli.UsageError{Err: err}
 	}
 
+	// Containment runs TWICE, and it has to: ResolveEnvironment checked the
+	// root against the CALLER's mounts before there was a document to read
+	// (the document lives inside the root), and this second pass checks it
+	// against the mounts the DOCUMENT ITSELF declares. Same refusal, same
+	// message, two different sources of a writable mount — skipping the
+	// second would leave restriction 4 enforced only for mounts a caller
+	// happened to know about.
+	authored := AuthoredMounts(doc)
+	if err := RefuseContainment(root, writableWorkspacePaths(authored)); err != nil {
+		return nil, err
+	}
+
 	sidecarPath := filepath.Join(root, "pix.toml")
 	var sidecar *envinfo.Sidecar
 	switch _, statErr := os.Stat(sidecarPath); {
@@ -257,7 +340,12 @@ func Load(cfg *config.Config, store *hosttrust.AcceptanceStore, name string, eff
 		// skillWorkspaces is every caller-declared effective mount PLUS the
 		// environment's own root — see Load's doc comment above for why the
 		// root is always implicitly present here and nowhere else.
-		skillWorkspaces := append(workspacePaths(effective), root)
+		// Authored workspaces count here as well: a `[pi].skills` entry may
+		// legitimately live under a tree the environment's own file mounts,
+		// and validating it only against caller-supplied mounts would refuse
+		// a skill that will in fact be readable in the sandbox.
+		skillWorkspaces := append(workspacePaths(effective), workspacePaths(authored)...)
+		skillWorkspaces = append(skillWorkspaces, root)
 		if err := envinfo.ValidateSkillWorkspaces(sidecarPath, sidecar, skillWorkspaces); err != nil {
 			return nil, cli.UsageError{Err: err}
 		}

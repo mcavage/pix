@@ -123,9 +123,28 @@ func ComputeFingerprint(facts RuntimeFacts, resolve InterpolationResolver) (Fing
 		}
 	}
 
-	for i, m := range effectiveWorkspaces(facts) {
-		v := fmt.Sprintf("%s|readOnly=%v|clone=%v", m.Path, m.ReadOnly, m.Clone)
-		if err := set(fmt.Sprintf("mounts[%d]", i), v); err != nil {
+	// Workspace facets are keyed by the SAME addresses the rendered
+	// document uses (`workspace`, `additionalWorkspaces[i]`), never by an
+	// invented `mounts[i]`: a drift record a human reads should name a line
+	// they can find in the effective file. Each value is the canonical path
+	// plus exactly the bit upstream's schema carries at that position —
+	// clone for the primary, readOnly for an additional one — so a changed
+	// mount mode is a changed fingerprint. A path still carrying an authored
+	// ${VAR} (parse.go leaves those unresolved) passes through `set`, so it
+	// is fingerprinted as expression-plus-keyed-HMAC like any other
+	// interpolated facet.
+	primary, additional, err := effectiveWorkspaces(facts)
+	if err != nil {
+		return nil, err
+	}
+	if primary != nil {
+		if err := set("workspace", fmt.Sprintf("%s|clone=%v", primary.Path, primary.Clone)); err != nil {
+			return nil, err
+		}
+	}
+	for i, m := range additional {
+		v := fmt.Sprintf("%s|readOnly=%v", m.Path, m.ReadOnly)
+		if err := set(fmt.Sprintf("additionalWorkspaces[%d]", i), v); err != nil {
 			return nil, err
 		}
 	}
@@ -242,8 +261,8 @@ func canonicalizeFacetValue(raw string, resolve InterpolationResolver) (string, 
 type Drift struct {
 	// ComposedKey is the post-composition address ComputeFingerprint used
 	// ("env.FOO", "mcp.servers[github].url", "kits[2]") — or "kits[]"/
-	// "mounts[]" for a collapsed identityless-list group, or "*" for
-	// ResetInvalidatedDrift's single whole-environment record.
+	// "additionalWorkspaces[]" for a collapsed identityless-list group, or
+	// "*" for ResetInvalidatedDrift's single whole-environment record.
 	ComposedKey string
 	// KeyPath is the E1.2 PRE-composition stable key path this facet
 	// traces back to, when one exists. Empty for a Pix-managed facet with
@@ -263,12 +282,18 @@ type Drift struct {
 }
 
 // indexedListRE matches a whole composed key that is exactly one
-// identityless, index-addressed list entry — "kits[3]", "mounts[0]" — the
-// two composed lists this package ever collapses. Every other bracketed
-// composed key (mcp.servers[name]..., ports[n]..., bindings...domains[d])
-// carries stable identity and is matched against the pre-composition Tree
-// instead; see identityKeyPaths.
-var indexedListRE = regexp.MustCompile(`^(kits|mounts)\[\d+\]$`)
+// identityless, index-addressed list entry — "kits[3]",
+// "additionalWorkspaces[0]" — the two composed lists this package ever
+// collapses. Every other bracketed composed key (mcp.servers[name]...,
+// ports[n]..., bindings...domains[d]) carries stable identity and is
+// matched against the pre-composition Tree instead; see identityKeyPaths.
+//
+// The singular `workspace` facet is NOT here: there is exactly one of it,
+// so it is identity-bearing and attributes as a Pix-managed singleton —
+// which is the honest reading, since the primary workspace a launch
+// renders is its own run workspace and never the authored `workspace:`
+// key (see effectiveWorkspaces).
+var indexedListRE = regexp.MustCompile(`^(kits|additionalWorkspaces)\[\d+\]$`)
 
 // Attribute maps every composed key that differs between stored and
 // current back to pre's PRE-composition stable key paths. It assumes both
@@ -361,8 +386,8 @@ func diffFingerprintKeys(stored, current Fingerprint) []string {
 	return out
 }
 
-// indexedListName reports the list name ("kits", "mounts") when key is
-// exactly one identityless index-addressed entry of it.
+// indexedListName reports the list name ("kits", "additionalWorkspaces")
+// when key is exactly one identityless index-addressed entry of it.
 func indexedListName(key string) (string, bool) {
 	m := indexedListRE.FindStringSubmatch(key)
 	if m == nil {

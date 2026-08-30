@@ -7,6 +7,7 @@ package main
 // just "the shared L1 rule held two files away".
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -163,4 +164,72 @@ func mustReadArchFile(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(b)
+}
+
+// TestArchitecture_NoInventedWorkspacesKey is the static half of the fix
+// for the host failure of run-20260829-161325-d3c9a7be (candidate
+// 54152f2b), where a real `sbx env create` answered:
+//
+//	field workspaces not found in type sbxenv.Config
+//
+// on line 9 of the generated effective file. sbx 0.39's schema has a
+// SINGULAR `workspace:` (string, or object with path/clone) plus
+// `additionalWorkspaces:` (objects with path/readOnly). There is no
+// top-level `workspaces:` list anywhere in it — see Docker's reference,
+// https://docs.docker.com/ai/sandboxes/configuration/environment-files/.
+//
+// envinfo/upstream_schema_test.go proves the RENDERED document parses as
+// the real schema. This sentinel bans the invented key from ever being
+// re-declared or re-pinned in the first place: a `yaml:"workspaces` struct
+// tag in production source, or a top-level `workspaces:` line in a
+// checked-in effective-document golden. The golden half matters most —
+// every golden in this module agreed with the invalid renderer, so the
+// suite was green while the host was refusing every create.
+func TestArchitecture_NoInventedWorkspacesKey(t *testing.T) {
+	// This file necessarily spells the banned tag out to search for it.
+	self := filepath.FromSlash("arch_effective_test.go")
+	var offenders []string
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			switch info.Name() {
+			case "node_modules", ".git":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path == self {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		switch {
+		case strings.HasSuffix(path, ".go"):
+			// The struct tag, in production OR test source: a test that
+			// re-declares it is a test re-pinning the invalid shape.
+			if strings.Contains(string(b), `yaml:"workspaces`) {
+				offenders = append(offenders, path+`: yaml:"workspaces...`+`" struct tag`)
+			}
+		case strings.HasSuffix(path, ".yaml"), strings.HasSuffix(path, ".yml"):
+			for i, line := range strings.Split(string(b), "\n") {
+				if strings.HasPrefix(line, "workspaces:") {
+					offenders = append(offenders, fmt.Sprintf("%s:%d: top-level `workspaces:`", path, i+1))
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(offenders) > 0 {
+		sort.Strings(offenders)
+		t.Errorf("sbx 0.39 has no top-level `workspaces:` key; use `workspace:` + `additionalWorkspaces:`.\n"+
+			"A real `sbx env create` answers `field workspaces not found in type sbxenv.Config`.\noffenders:\n  %s",
+			strings.Join(offenders, "\n  "))
+	}
 }

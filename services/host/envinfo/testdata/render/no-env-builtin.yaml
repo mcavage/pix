@@ -1,12 +1,11 @@
 schemaVersion: "1"
 name: pix-workspace-00000000
-workspaces:
-  - path: /home/user/workspace
-    readOnly: false
-    clone: false
+workspace:
+  path: /home/user/workspace
+  clone: false
+additionalWorkspaces:
   - path: /home/user/.local/share/pix/context
     readOnly: false
-    clone: false
 kits:
   - /tmp/pix-mixin-00000000
 sandboxOptions:

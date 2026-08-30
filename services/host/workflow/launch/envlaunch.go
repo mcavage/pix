@@ -96,11 +96,17 @@ type EffectiveInput struct {
 	// no launch can pick a workspace by empty-string accident.
 	PrimaryWorkspace envinfo.WorkspaceFact
 	PersonalContext  envinfo.WorkspaceFact
-	// AdditionalWorkspaces are this launch's other host mounts (workflow's
-	// MountDirs: configured skill trees, `--skills`, an active pack's
-	// contributed skills/knowledge, `--dev`'s repo skills). After the
+	// AdditionalWorkspaces are this launch's other RUNTIME host mounts
+	// (workflow's MountDirs: configured skill trees, `--skills`, an active
+	// pack's contributed skills/knowledge, `--dev`'s repo skills). After the
 	// cutover `sbx env create` reads ONLY the effective document, so these
 	// travel as workspace facts rather than as extra `sbx run` positionals.
+	//
+	// The environment's OWN authored `additionalWorkspaces:` are NOT copied
+	// in here: envinfo renders them straight from Selection.Document, ahead
+	// of these, and re-adding them would either duplicate the mount or push
+	// a runtime read-write twin ahead of the authored read-only entry.
+	// Envlaunch composes runtime mounts; the document composes its own.
 	AdditionalWorkspaces []envinfo.WorkspaceFact
 
 	// MixinKit is the generated Pi mixin kit REFERENCE (a directory this
@@ -227,6 +233,12 @@ func ComposeRuntimeFacts(in EffectiveInput) envinfo.RuntimeFacts {
 // pre-composition sandbox identity, the pinned pull policy, the project and
 // personal-context workspaces, Pix env vars, and the environment's own
 // declared MCP servers with their reviewed credential wrappers.
+//
+// Clearing AdditionalWorkspaces clears only the RUNTIME mounts (a pack's
+// per-run directories, which move between launches). The environment's own
+// authored `additionalWorkspaces:` stay covered, because they are rendered
+// from Document — which this subset keeps — and an attach recomputes them
+// from the same file.
 func CreationFactsFor(in EffectiveInput) envinfo.RuntimeFacts {
 	facts := ComposeRuntimeFacts(in)
 	facts.Template = ""

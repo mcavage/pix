@@ -164,6 +164,32 @@ The environment schema version and kit-spec version are unrelated. Native
 `.sbxenv.yaml` currently uses `schemaVersion: "1"`; Pix kits remain strict
 kit-spec v2.
 
+### 4.2 Workspace grammar
+
+The schema declares mounts through two keys, and Pix models exactly those:
+
+- `workspace:` — the singular PRIMARY workspace, either a path string or an
+  object with `path` and `clone`. It has no `readOnly`.
+- `additionalWorkspaces:` — a list of objects with `path` and `readOnly`.
+  They have no `clone`; upstream mounts them directly even when the primary
+  workspace uses clone mode.
+
+Relative paths resolve from the environment file's directory. There is no
+top-level `workspaces:` list; asserting one is a create that fails
+(`field workspaces not found in type sbxenv.Config`). See
+`docs/upstream/sbx-0.39-environments.md` §17 for the host run that proved
+this and for what remains unproven.
+
+Pix's effective file always declares its own primary workspace — the run's
+project directory — so an authored `workspace:` is overridden by design. It
+stays a parse and review fact: it is checked by restriction 4 above and
+shown in the tree, and it is never demoted into `additionalWorkspaces`,
+which would turn a superseded declaration into a live writable mount nobody
+reviewed as one. Authored `additionalWorkspaces` ARE mounted: they render
+first, ahead of the personal-context workspace and the launch's runtime
+mounts, so a duplicated path keeps the authored (possibly read-only)
+declaration rather than a runtime read-write twin.
+
 ### 4.1 Local model limitation
 
 sbx 0.39 can route the built-in Claude Code agent to an existing host Ollama:
@@ -196,6 +222,13 @@ A registered environment uses the upstream schema directly:
 ```yaml
 schemaVersion: "1"
 agent: pix
+
+workspace: ./web-app
+
+additionalWorkspaces:
+  - path: ./shared-components
+  - path: ./architecture-docs
+    readOnly: true
 
 kits:
   - ./kit
@@ -234,7 +267,12 @@ Pix imposes six restrictions on top of the upstream parser:
 3. `noVerify` is fingerprinted and visible in review; it never silently weakens
    a proof.
 4. The canonical environment root must not resolve inside any writable
-   workspace it mounts.
+   workspace it mounts — including the ones the file itself declares
+   (`workspace:`, `additionalWorkspaces[]`), not only the mounts a launch
+   adds. Upstream states the same rule for its own reason: an agent that can
+   write the directory holding `.sbxenv.yaml` can rewrite the file that
+   controls the next `sbx env` command. Clone mode and an authored
+   `readOnly: true` are read-only mounts and never trigger it.
 5. Local and Git kit sources used by a registered environment must be pinned or
    content-fingerprinted before host review succeeds.
 6. The effective agent must be Pix. Story 0 determines whether an agent kit
@@ -402,8 +440,9 @@ relative paths against its source directory, applies documented sbx merge
 semantics, and adds only Pix-owned runtime facts:
 
 - pinned Pix template and `pullPolicy: missing`
-- workspace in object form, including clone choice
-- unconditional personal-context additional workspace
+- the primary `workspace:` in object form, including clone choice
+- unconditional personal-context entry in `additionalWorkspaces:`, after the
+  authored ones
 - generated Pi mixin kit
 - development checkout kit and live skill arguments when `--dev`
 - Pix-required environment variables

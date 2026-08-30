@@ -11,6 +11,18 @@ import (
 // (never resolved), and every host-execution facet a reviewer must see
 // before this environment runs anything.
 type Tree struct {
+	// Workspace is the authored primary `workspace:` node, or nil when no
+	// composed file declared one. It is a REVIEW fact: a Pix launch renders
+	// its own run workspace as the effective primary (envinfo/render.go's
+	// effectiveWorkspaces), so this node exists so a reviewer can SEE what
+	// the file asked for and so RefuseContainment can check the environment
+	// root against it — not because it becomes a mount.
+	Workspace *WorkspaceNode
+	// AdditionalWorkspaces are the authored `additionalWorkspaces[<i>]`
+	// nodes. Unlike Workspace these DO reach the effective document as
+	// mounts, so they are host access a reviewer is consenting to.
+	AdditionalWorkspaces []AdditionalWorkspaceNode
+
 	Kits           []KitNode
 	SandboxOptions []ScalarNode
 	Env            []ScalarNode
@@ -21,6 +33,32 @@ type Tree struct {
 	Ports          []PortNode
 	Interpolations []Interpolation
 	HostExecFacets []HostExecFacet
+}
+
+// WorkspaceNode is the singleton `workspace` node. Raw is the authored
+// path text, Resolved its source-directory-resolved form (equal to Raw
+// when the path still carries an authored ${VAR}: parse.go resolves no
+// interpolation). Object records which of the two authored forms was used.
+type WorkspaceNode struct {
+	KeyPath  string
+	Raw      string
+	Resolved string
+	Clone    bool
+	Object   bool
+	Source   string
+}
+
+// AdditionalWorkspaceNode is one index-addressed
+// `additionalWorkspaces[<i>]` node. It is index-addressed rather than
+// path-addressed for the same reason kits are: two files may legitimately
+// mount the same tree, and merge.go concatenates rather than deduping, so
+// a path is not a stable identity here.
+type AdditionalWorkspaceNode struct {
+	KeyPath  string
+	Raw      string
+	Resolved string
+	ReadOnly bool
+	Source   string
 }
 
 // KitNode is one index-addressed `kits[<i>]` node.
@@ -138,6 +176,30 @@ type HostExecFacet struct {
 // interpolated value's own KeyPath is built from.
 func BuildTree(m *Merged) (*Tree, error) {
 	t := &Tree{}
+
+	if m.Workspace.Present {
+		t.Workspace = &WorkspaceNode{
+			KeyPath:  "workspace",
+			Raw:      m.Workspace.Raw,
+			Resolved: m.Workspace.Resolved,
+			Clone:    m.Workspace.Clone,
+			Object:   m.Workspace.Object,
+			Source:   m.WorkspaceSource,
+		}
+		t.Interpolations = append(t.Interpolations, scanInterpolations(m.Workspace.Raw, "workspace")...)
+	}
+
+	for i, ws := range m.AdditionalWorkspaces {
+		kp := fmt.Sprintf("additionalWorkspaces[%d]", i)
+		t.AdditionalWorkspaces = append(t.AdditionalWorkspaces, AdditionalWorkspaceNode{
+			KeyPath:  kp,
+			Raw:      ws.Path,
+			Resolved: ws.Resolved,
+			ReadOnly: ws.ReadOnly,
+			Source:   ws.Source,
+		})
+		t.Interpolations = append(t.Interpolations, scanInterpolations(ws.Path, kp)...)
+	}
 
 	for i, k := range m.Kits {
 		kp := fmt.Sprintf("kits[%d]", i)

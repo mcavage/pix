@@ -95,6 +95,8 @@ func decode(r io.Reader, source, sourceDir string) (*Document, error) {
 		return nil, err
 	}
 
+	resolveWorkspaces(&doc, sourceDir)
+
 	if err := refuseLiteralValues(&doc); err != nil {
 		return nil, err
 	}
@@ -194,6 +196,39 @@ func resolveLocalKits(doc *Document, sourceDir string) error {
 		}
 	}
 	return nil
+}
+
+// resolveWorkspaces fills Resolved on the authored primary workspace and
+// on every additional workspace, against sourceDir — upstream's own rule
+// ("Relative paths resolve from the directory of the first environment
+// file"), and the same source-directory discipline resolveLocalKits
+// already applies.
+//
+// A path still carrying an authored `${VAR}` expression is left VERBATIM,
+// unresolved. Joining sourceDir onto `${HOME}/src` would fabricate a path
+// nobody authored and that cannot exist (the expansion is very often
+// absolute), and this package resolves no interpolation of its own
+// (doc.go: "Interpolation is surfaced, never resolved"). Carrying the
+// expression through instead keeps it visible to BuildTree and lets
+// ComputeFingerprint cover it as expression-plus-keyed-HMAC. Kits keep
+// their older, unchanged behavior here; widening that is not this fix.
+func resolveWorkspaces(doc *Document, sourceDir string) {
+	if doc.Workspace.Present {
+		doc.Workspace.Resolved = resolveWorkspacePath(doc.Workspace.Raw, sourceDir)
+	}
+	for i, ws := range doc.AdditionalWorkspaces {
+		doc.AdditionalWorkspaces[i].Resolved = resolveWorkspacePath(ws.Path, sourceDir)
+	}
+}
+
+func resolveWorkspacePath(raw, sourceDir string) string {
+	if raw == "" || interpolationRE.MatchString(raw) {
+		return raw
+	}
+	if filepath.IsAbs(raw) {
+		return filepath.Clean(raw)
+	}
+	return filepath.Clean(filepath.Join(sourceDir, raw))
 }
 
 // refuseLiteralValues implements docs/design/environments.md §5.1
