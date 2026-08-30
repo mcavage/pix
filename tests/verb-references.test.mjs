@@ -97,6 +97,27 @@ const listFiles = (dir, pred) =>
 			})
 		: [];
 
+// A doc classified HISTORICAL by its own front matter, not by a per-file
+// waiver. `docs/design/**` and `docs/legal/**` are excluded by directory
+// because that is what those trees ARE (design reasoning and compliance
+// history); everything else that is equally a record of a not-yet-migrated
+// or already-retired surface carries the marker itself, one line near the
+// top: `Status: PRE-V2 ...` or `Status: HISTORICAL ...` (a design doc already
+// says `Status: **ACCEPTED FOR IMPLEMENTATION**`, the same shape, so this is
+// one classification mechanism, not two). A live, current-surface doc never
+// carries this marker, so adding one is a deliberate, reviewable act, not a
+// silent opt-out — and it covers the WHOLE file, so no second list of
+// individual line waivers has to be kept in sync with which doc is which.
+const isHistoricalByMarker = (rel) => {
+	let head;
+	try {
+		head = read(rel).split("\n", 15).join("\n");
+	} catch {
+		return false;
+	}
+	return /^Status:\s*\**\s*(PRE-V2|HISTORICAL|SUPERSEDED)\b/im.test(head);
+};
+
 const SURFACES = [
 	"capabilities.json",
 	"README.md",
@@ -107,10 +128,15 @@ const SURFACES = [
 	// not instructions, and a record of a removal necessarily names the removed
 	// thing: docs/design/** (what changed and why) and docs/legal/** (release
 	// and compliance history, which also quotes prose like "pix is an
-	// independent project" that is not an invocation at all).
+	// independent project" that is not an invocation at all). A doc OUTSIDE
+	// those trees can be equally a record rather than live instruction —
+	// typically a human-run UAT/ops doc paired one-to-one with a script that
+	// has not been migrated to the current verb surface yet — and is excluded
+	// the same principled way, by its own `Status: PRE-V2` marker
+	// (isHistoricalByMarker), never by naming the file here.
 	...listFiles(
 		"docs",
-		(f) => f.endsWith(".md") && !f.startsWith("docs/design/") && !f.startsWith("docs/legal/"),
+		(f) => f.endsWith(".md") && !f.startsWith("docs/design/") && !f.startsWith("docs/legal/") && !isHistoricalByMarker(f),
 	),
 	...listFiles("extensions", (f) => f.endsWith(".ts")),
 	...fs

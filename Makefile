@@ -29,9 +29,10 @@ KIT         ?= ./pi-kit
 # host tree instead of the copies baked into the image — edit a SKILL.md, /reload in
 # pi, and it's live, no rebuild. `--no-skills` turns off baked discovery; `--skill
 # <root>` recurses for SKILL.md. Company/private context is NOT compiled into
-# the image — it's a pack (`pix pack use <path>`, used with the installed binary), and
-# host-executing integrations ship as containers the sbx gateway runs (see the
-# pix-docker-integrations repo). Consumers who `sbx run --kit git+...` never hit this
+# the image — it lives in an environment (~/.pix/envs/<name>, see
+# docs/design/pix-v2-surface.md), and host-executing integrations are declared
+# directly in that environment's .sbxenv.yaml and run through the sbx MCP
+# Gateway. Consumers who `sbx run --kit git+...` never hit this
 # target, so they get the baked set (Mode A). See AGENTS.md.
 DEV_SKILLS = --no-skills --skill $(CURDIR)/skills
 # Runtime config — the SINGLE source of truth is ~/.config/pix/config.toml,
@@ -138,8 +139,8 @@ help: ## Show this help
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Runtime, agent, and parallel-task commands live in the launcher,"
-	@echo "not make:  pix help --all  (e.g. pix models add,"
-	@echo "pix agent ls, pix task new)."
+	@echo "not make:  pix help --all  (e.g. pix task new, pix env,"
+	@echo "pix doctor)."
 
 build: build-agent ## Alias for build-agent (the sandbox image consumers pull; pix-memory is built separately, see build-memory)
 

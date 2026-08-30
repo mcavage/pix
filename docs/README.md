@@ -35,8 +35,12 @@ tutorials.
   live tracker for running subagents.
 - [self-learning-loop.md](design/self-learning-loop.md) — the memory capture and
   recall loop.
-- [serve-lifecycle.md](design/serve-lifecycle.md) — the `pix serve` daemon
-  lifecycle: lazy auto-start, the managed login service, and the hardening addendum.
+- [serve-lifecycle.md](design/serve-lifecycle.md) — HISTORICAL: the pre-v2
+  host-daemon lifecycle (`serve`). `pix-host` and its supervision tree were
+  deleted outright in the Pix v2 cutover
+  (`docs/design/pix-v2-architecture.md` §14); memory is now the plain Docker
+  container `pix-memory`, see [runbooks/host-services.md](runbooks/host-services.md)
+  for its runbook.
 - [worktree-tasks.md](design/worktree-tasks.md) and
   [task-ux-decisions.md](design/task-ux-decisions.md) — the `pix task`
   parallel-work workflow.
