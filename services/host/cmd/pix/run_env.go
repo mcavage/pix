@@ -171,12 +171,14 @@ func builtinMCPFacts() envinfo.BuiltinMCPFacts {
 	return facts
 }
 
-// mcpSessionSubcommand is the pix-session built-in's argv[1]. It names no
-// implemented verb yet (architecture §7.2's session-control MCP command is
-// future work); the reserved declaration is emitted now so an authored
-// environment can never collide with it, and so the effective document's
-// shape does not change again once that verb lands.
-const mcpSessionSubcommand = "mcp-session"
+// mcpSessionSubcommand is the pix-session built-in's argv[1]: the SAME
+// constant sessionctl.go's dispatch intercepts before kong ever sees argv
+// (hiddenSessionMCPVerb, "__pix-session-mcp"), not an independent literal.
+// A Gateway declaration naming any other token would preload a command
+// that starts, falls straight through kong's ordinary verb parser as an
+// unknown command, and never reaches runSessionMCP at all — exactly the
+// bug this alias exists to make unrepeatable.
+const mcpSessionSubcommand = hiddenSessionMCPVerb
 
 // validateRunRoster runs E3.3's roster validation over the environment
 // this run actually selected (not merely the configured default), so a

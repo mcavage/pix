@@ -19,19 +19,19 @@
       }
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3153,
-      "test_loc": 4148,
+      "prod_loc": 3404,
+      "test_loc": 4386,
       "exports": 5,
       "exports_used_externally": 0,
       "exits": 1,
       "streams": 0,
-      "globals": 18,
+      "globals": 19,
       "init": 2,
-      "edges": 23,
+      "edges": 24,
       "parser_families": {
         "cmd": 8,
-        "core": 9,
-        "test": 36
+        "core": 10,
+        "test": 37
       }
     },
     "pix/host/config": {
@@ -258,18 +258,18 @@
       }
     },
     "pix/host/session": {
-      "prod_loc": 1020,
-      "test_loc": 818,
-      "exports": 37,
-      "exports_used_externally": 2,
+      "prod_loc": 1072,
+      "test_loc": 918,
+      "exports": 38,
+      "exports_used_externally": 5,
       "exits": 0,
       "streams": 1,
-      "globals": 13,
+      "globals": 14,
       "init": 0,
       "edges": 0,
       "parser_families": {
-        "core": 5,
-        "test": 6
+        "core": 6,
+        "test": 7
       }
     },
     "pix/host/sys": {

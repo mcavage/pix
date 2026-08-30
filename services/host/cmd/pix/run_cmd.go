@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"pix/host/cli"
 	"pix/host/config"
@@ -492,8 +493,16 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	sessionKey := sessionKeyFor(o)
 	fp := launch.SessionFingerprint(cfg, o)
 	attachExec := false
+	// root is this launch's interactive-root reference (session.go/session_root.go,
+	// architecture §7.2): acquired synchronously below once the attach path has a
+	// positive instance receipt, or awaited concurrently with a fresh create
+	// further down. Released on every path out of runLaunchAttempt via releaseRoot.
+	var root *interactiveRoot
+	releaseRoot := func(failed bool) { root.release(failed) }
 	if plan.Reattach {
 		entry, _ := launch.FindPositivelyIdentifiedRunning(defaultShellEnv(), o.Name)
+		recordedInstanceID := launch.ReadRecordedInstanceID(sessionKey)
+
 		// §10.2's third condition: the RECREATE-ONLY creation fingerprint,
 		// recomputed from the environment as it is now under the STORED
 		// launcher key (never a freshly generated one — a missing key is the
@@ -505,7 +514,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		}
 		rec, _ := launch.ReadSessionEnvironment(sessionKey)
 		decision := launch.DecideEnvAttach(attachGateFor(sessionKey, o.Workspace, entry, launch.AttachGate{
-			RecordedInstanceID: launch.ReadRecordedInstanceID(sessionKey),
+			RecordedInstanceID: recordedInstanceID,
 			Stored:             stored,
 			StoredFound:        storedFound,
 			Current:            current,
@@ -546,6 +555,23 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			return runFail(d, 1, "%s", decision.Refusal)
 		}
 		attachExec = true
+
+		// The interactive-root Hold: this attach has a POSITIVE instance receipt
+		// right here (a fresh probe's entry.InstanceID, else the recorded one
+		// this same decision already trusted), so a second live interactive root
+		// for the SAME sandbox is refused BEFORE anything execs, not discovered
+		// after two terminals are already sharing one pi session.
+		attachInstanceID := recordedInstanceID
+		if entry != nil && entry.InstanceID != nil && *entry.InstanceID != "" {
+			attachInstanceID = *entry.InstanceID
+		}
+		if attachInstanceID != "" {
+			r, herr := holdInteractiveRootNow(sessionKey, o.Name, o.Workspace, selection.Name, o.Model, attachInstanceID)
+			if herr != nil {
+				return runFail(d, 1, "%v", herr)
+			}
+			root = r
+		}
 	} else if verr := launch.ValidateCreateKits(plan.Args, launch.ValidateSbxKit); verr != nil {
 		return runFail(d, 1, "%v", verr)
 	}
@@ -625,6 +651,24 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			fmt.Fprintf(d.Err, "pix: warning: %v\n", rerr)
 		}
 	}
+
+	// The interactive-root Hold, CREATE half: no instance exists yet, so the
+	// positive receipt is awaited CONCURRENTLY with RunSession's own create,
+	// below, rather than blocking it. The deferred cancel fires on every path
+	// out of this function, which bounds the poll to this launch's own
+	// lifetime even if RunSession itself never returns a usable receipt.
+	var rootWait <-chan *interactiveRoot
+	if creating {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ch := make(chan *interactiveRoot, 1)
+		go func() {
+			r, herr := awaitInteractiveRootHold(ctx, defaultShellEnv(), sessionKey, o.Name, o.Workspace, selection.Name, o.Model)
+			warnInteractiveRootFailure(d.Err, o.Name, herr)
+			ch <- r
+		}()
+		rootWait = ch
+	}
 	spec := launch.SessionSpec{
 		Key:               sessionKey,
 		Name:              o.Name,
@@ -656,7 +700,24 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			return cmd
 		},
 	}
-	if xerr := launch.RunSession(spec, deps); xerr != nil {
+	xerr := launch.RunSession(spec, deps)
+	// The create-path Hold, awaited only now: RunSession has returned (created
+	// and run to completion, or refused before anything started), so the
+	// sandbox's fate is already decided and the poll above has nothing left to
+	// wait for. A short bound, not the unbounded creating poll: by this point
+	// either the sandbox positively appeared (the common case; the goroutine
+	// already returned or is finishing its last probe) or RunSession itself
+	// refused, in which case FindPositivelyIdentifiedRunning will keep saying
+	// no and the deferred cancel above ends the wait.
+	if rootWait != nil {
+		select {
+		case r := <-rootWait:
+			root = r
+		case <-time.After(5 * time.Second):
+		}
+	}
+	releaseRoot(xerr != nil)
+	if xerr != nil {
 		var refused *launch.SessionRefused
 		if errors.As(xerr, &refused) {
 			// Decided under the lifecycle lock, before anything started: no create, no
