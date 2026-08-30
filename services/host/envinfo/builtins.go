@@ -87,6 +87,64 @@ func RefuseReservedMCPNames(doc *Document) error {
 	return &ReservedMCPCollisionError{Source: doc.Source, Names: hits}
 }
 
+// BuiltinMCPFacts is the caller-resolved facts needed to render Pix's two
+// reserved built-in MCP declarations (docs/design/pix-v2-architecture.md
+// §10): pix-memory, a remote Streamable HTTP endpoint registered by `pix
+// setup`, and pix-session, a Gateway-launched host stdio command. A field
+// left at its zero value means the caller could not resolve that built-in
+// yet (no memory container reconciled, no resolvable pix executable) —
+// BuiltinMCPServers renders no entry for it rather than inventing one.
+type BuiltinMCPFacts struct {
+	MemoryURL      string
+	SessionCommand string
+	SessionArgs    []string
+}
+
+// BuiltinMCPServers renders Pix's reserved built-ins, in the fixed order
+// pix-memory then pix-session, as ordinary MCPWrapperFact entries. They
+// need no host review of their own — RefuseReservedMCPNames is what keeps
+// an authored server from ever colliding with either name in the first
+// place, so by the time this runs both names are exclusively Pix's own.
+func BuiltinMCPServers(facts BuiltinMCPFacts) []MCPWrapperFact {
+	var out []MCPWrapperFact
+	if strings.TrimSpace(facts.MemoryURL) != "" {
+		out = append(out, MCPWrapperFact{Name: MCPMemoryName, URL: facts.MemoryURL})
+	}
+	if strings.TrimSpace(facts.SessionCommand) != "" {
+		out = append(out, MCPWrapperFact{
+			Name:    MCPSessionName,
+			Command: facts.SessionCommand,
+			Args:    append([]string(nil), facts.SessionArgs...),
+		})
+	}
+	return out
+}
+
+// WithBuiltinMCPServers layers Pix's own reserved built-ins onto an
+// already-composed server list, LAST, and WINNING: any existing entry
+// under either reserved name is dropped first. Such an entry can only ever
+// have reached this point through a host-global static-MCP NAME the
+// legacy pack/config surface asked to preload (§9.2's "host-global server
+// names this create preloads") — never an authored `.sbxenv.yaml` server,
+// which RefuseReservedMCPNames already refused long before an effective
+// document is composed. A name-only placeholder from that legacy surface
+// must never shadow the real URL/command Pix's own built-in carries, so it
+// is superseded here rather than folded in beside it.
+func WithBuiltinMCPServers(servers []MCPWrapperFact, builtin BuiltinMCPFacts) []MCPWrapperFact {
+	out := make([]MCPWrapperFact, 0, len(servers)+2)
+	for _, s := range servers {
+		if IsReservedMCPName(s.Name) {
+			continue
+		}
+		out = append(out, s)
+	}
+	out = append(out, BuiltinMCPServers(builtin)...)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // UndefinedInterpolationError is the refusal for an authored `${VAR}` with
 // no default and no value on the host environment. v1 resolved it to the
 // empty string, which silently produced an environment nobody authored (an

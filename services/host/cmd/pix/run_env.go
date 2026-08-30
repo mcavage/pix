@@ -8,35 +8,46 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"pix/host/config"
 	"pix/host/envinfo"
+	"pix/host/pixhome"
 	"pix/host/sandbox"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/models"
+	"pix/host/workflow/provision"
 
 	nativeenv "pix/host/workflow/env"
 )
 
-// resolveRunEnvironment resolves §6.1's selection order — explicit `--env`,
+// resolveRunEnvironment resolves §3.1's selection order — explicit `--env`,
 // else the machine default, else `none` — with ONE hard rule: an explicit
-// name is EXACT. An unknown one returns the registry's own unknown-
-// environment refusal (known names, closest match, how to register) and
-// the caller exits non-zero having created nothing; it NEVER degrades to
-// the configured default, because a typo silently launching the wrong
+// name is EXACT. An unknown one returns the pixhome resolver's own
+// unknown-environment refusal (known names, how to create one) and the
+// caller exits non-zero having created nothing; it NEVER degrades to the
+// configured default, because a typo silently launching the wrong
 // credential set is the worst outcome this feature can produce.
 //
-// Nothing here writes config: `--env` selects for this run only (AC-22).
+// This is the v2 selection model (docs/design/pix-v2-surface.md §3.4): an
+// environment is a directory under PIX_HOME/envs, resolved by workflow/env's
+// pixhome-based ResolveIn — there is no config.Environments registry left in
+// this path, and no fallback to one. Nothing here writes config: `--env`
+// selects for this run only (AC-22).
 func resolveRunEnvironment(explicit string) (launch.EnvSelection, error) {
-	cfg, err := config.Load()
+	home, err := pixhome.Resolve()
+	if err != nil {
+		return launch.EnvSelection{}, err
+	}
+	machine, err := pixhome.LoadMachine(home)
 	if err != nil {
 		return launch.EnvSelection{}, err
 	}
 	name := strings.TrimSpace(explicit)
 	if name == "" {
-		name = strings.TrimSpace(cfg.Environment)
+		name = strings.TrimSpace(machine.DefaultEnvironment)
 	}
 	if name == "" {
 		// D17's `none`: no environment registered or selected. The built-in
@@ -44,17 +55,22 @@ func resolveRunEnvironment(explicit string) (launch.EnvSelection, error) {
 		// absence of an environment.
 		return launch.EnvSelection{}, nil
 	}
-	loaded, err := nativeenv.LoadForLaunch(cfg, name)
+	sel, err := nativeenv.ResolveIn(home, name)
 	if err != nil {
 		return launch.EnvSelection{}, err
 	}
+	loaded, err := nativeenv.LoadHome(sel, nil, nil)
+	if err != nil {
+		return launch.EnvSelection{}, err
+	}
+	reviewed, _ := trustAccepted(home, sel)
 	return launch.EnvSelection{
 		Name:     loaded.Name,
 		Root:     loaded.Root,
 		Document: loaded.Document,
 		Sidecar:  loaded.Sidecar,
 		Tree:     loaded.Tree,
-		Reviewed: loaded.Accepted,
+		Reviewed: reviewed,
 	}, nil
 }
 
@@ -118,9 +134,49 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 	// The environment's OWN declared servers (with their reviewed pix.toml
 	// credential wrappers) plus the host-global names this create preloads.
 	in.EnvMCPServers = launch.EnvMCPWrapperFacts(sel.Document, sel.Sidecar)
-	in.MCPServers = launch.ComposeMCPServerFacts(in.EnvMCPServers, o.StaticMCP)
+	in.MCPServers = envinfo.WithBuiltinMCPServers(
+		launch.ComposeMCPServerFacts(in.EnvMCPServers, o.StaticMCP),
+		builtinMCPFacts(),
+	)
 	return in, nil
 }
+
+// builtinMCPFacts resolves docs/design/pix-v2-architecture.md §10's two
+// reserved built-ins for THIS host: pix-memory, the loopback Streamable
+// HTTP endpoint `pix setup` reconciles and registers with the sbx Gateway
+// (the SAME URL homeContainerSpec/provision.MemoryMCPURL compose for that
+// registration — never a second, independently-derived one that could
+// silently disagree), and pix-session, the Gateway-launched host stdio
+// command that names this SAME running `pix` binary.
+//
+// Either half degrades to "omit that built-in" rather than failing the
+// launch: an unresolved PIX_HOME or an unresolvable running executable is
+// an environment problem doctor already surfaces, not a reason to refuse
+// every `pix run` outright. pix-session's actual in-sandbox behavior is not
+// yet implemented — see this repo's host-UAT tracking for that gap; this
+// function only emits the reserved declaration a future implementation
+// fills in.
+func builtinMCPFacts() envinfo.BuiltinMCPFacts {
+	var facts envinfo.BuiltinMCPFacts
+	if home, err := pixhome.Resolve(); err == nil {
+		facts.MemoryURL = provision.MemoryMCPURL(homeContainerSpec(home))
+	}
+	if exe, err := os.Executable(); err == nil {
+		if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+			exe = resolved
+		}
+		facts.SessionCommand = exe
+		facts.SessionArgs = []string{mcpSessionSubcommand}
+	}
+	return facts
+}
+
+// mcpSessionSubcommand is the pix-session built-in's argv[1]. It names no
+// implemented verb yet (architecture §7.2's session-control MCP command is
+// future work); the reserved declaration is emitted now so an authored
+// environment can never collide with it, and so the effective document's
+// shape does not change again once that verb lands.
+const mcpSessionSubcommand = "mcp-session"
 
 // validateRunRoster runs E3.3's roster validation over the environment
 // this run actually selected (not merely the configured default), so a

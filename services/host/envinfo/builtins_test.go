@@ -35,6 +35,71 @@ func TestRefuseReservedMCPNames(t *testing.T) {
 	}
 }
 
+func TestBuiltinMCPServers(t *testing.T) {
+	out := BuiltinMCPServers(BuiltinMCPFacts{
+		MemoryURL:      "http://127.0.0.1:18080/mcp",
+		SessionCommand: "/usr/local/bin/pix",
+		SessionArgs:    []string{"mcp-session"},
+	})
+	if len(out) != 2 {
+		t.Fatalf("expected both built-ins, got %+v", out)
+	}
+	if out[0].Name != MCPMemoryName || out[0].URL != "http://127.0.0.1:18080/mcp" {
+		t.Fatalf("pix-memory fact wrong: %+v", out[0])
+	}
+	if out[1].Name != MCPSessionName || out[1].Command != "/usr/local/bin/pix" || len(out[1].Args) != 1 || out[1].Args[0] != "mcp-session" {
+		t.Fatalf("pix-session fact wrong: %+v", out[1])
+	}
+
+	// A caller that resolved neither fact gets no entries at all -- never a
+	// fabricated one.
+	if got := BuiltinMCPServers(BuiltinMCPFacts{}); got != nil {
+		t.Fatalf("an empty BuiltinMCPFacts must render no built-ins, got %+v", got)
+	}
+
+	// Only the resolved half renders.
+	memOnly := BuiltinMCPServers(BuiltinMCPFacts{MemoryURL: "http://x"})
+	if len(memOnly) != 1 || memOnly[0].Name != MCPMemoryName {
+		t.Fatalf("memory-only facts must render only pix-memory, got %+v", memOnly)
+	}
+
+	// Mutating the caller's SessionArgs after the call must not reach the
+	// rendered fact's own copy.
+	args := []string{"mcp-session"}
+	fact := BuiltinMCPServers(BuiltinMCPFacts{SessionCommand: "/bin/pix", SessionArgs: args})
+	args[0] = "clobbered"
+	if fact[0].Args[0] != "mcp-session" {
+		t.Fatalf("SessionArgs must be copied, not aliased: %+v", fact[0].Args)
+	}
+}
+
+func TestWithBuiltinMCPServers(t *testing.T) {
+	existing := []MCPWrapperFact{
+		{Name: "github"},
+		// A legacy static-MCP NAME-only placeholder under a reserved name --
+		// the only way this could ever have reached here (see the function's
+		// own doc comment) -- must be superseded, not folded in beside the
+		// real fact.
+		{Name: MCPMemoryName},
+	}
+	got := WithBuiltinMCPServers(existing, BuiltinMCPFacts{MemoryURL: "http://127.0.0.1:18080/mcp"})
+	if len(got) != 2 {
+		t.Fatalf("expected github + the real pix-memory fact, got %+v", got)
+	}
+	if got[0].Name != "github" {
+		t.Fatalf("non-reserved entries must keep their place, got %+v", got)
+	}
+	if got[1].Name != MCPMemoryName || got[1].URL != "http://127.0.0.1:18080/mcp" {
+		t.Fatalf("the real pix-memory fact must win over the placeholder, got %+v", got[1])
+	}
+
+	// No existing servers and no resolved builtins: nil, never an empty
+	// non-nil slice a caller could mistake for "servers explicitly cleared".
+	if got := WithBuiltinMCPServers(nil, BuiltinMCPFacts{}); got != nil {
+		t.Fatalf("expected nil, got %+v", got)
+	}
+}
+
 func TestRefuseUndefinedInterpolations(t *testing.T) {
 	def := "fallback"
 	tree := &Tree{Interpolations: []Interpolation{
