@@ -86,6 +86,12 @@ var routingSentinelSkipFiles = map[string]string{
 	"docs/design/ollama-inference.md":                 "historical design doc, banner-marked: it predates the deletion",
 	"scripts/semantic-diff/intended-changes.json":     "the semantic pin that DECLARES these removals intended",
 	"tests/subagent-roster-resolution.test.mjs":       "asserts the roster comes from inference.json, never routing.json",
+	// The v2 deletion ledger. A doc whose JOB is to enumerate what Pix does
+	// not have must be allowed to write the names down; a sentinel that
+	// forbids naming a deleted concept forbids documenting its deletion,
+	// which is how a removal quietly stops being provable.
+	"docs/design/pix-v2-surface.md":      "the accepted surface's removed-surfaces ledger names what v2 has no more of",
+	"docs/design/pix-v2-architecture.md": "the accepted architecture's deletion ledger names what is deleted, not ported",
 }
 
 // repoRootForRoutingSentinel walks up from services/host to the repo root.

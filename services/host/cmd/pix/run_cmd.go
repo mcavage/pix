@@ -214,6 +214,24 @@ func resolveSandboxName(explicit, workspace string) string {
 // workspace across sandboxes) must never resolve to the same lease directory.
 func sessionKeyFor(o launch.RunOpts) string { return o.Name }
 
+// attachGateFor completes the attach gate with the two facts only this
+// layer holds: the sbx row it just read, and the RecreateProof built from
+// this host's real lease state for that sandbox.
+//
+// It is a named function, not an inline struct literal, because the proof
+// is the field whose ZERO VALUE silently authorizes nothing: the first
+// cutover commit shipped the whole recreation decision layer and never
+// filled it, so every pinned-image upgrade still refused with the manual
+// `pix rm && pix run`. Filling it in one testable place is what keeps that
+// from happening again.
+func attachGateFor(sessionKey, workspace string, entry *sandbox.Entry, g launch.AttachGate) launch.AttachGate {
+	g.Entry = entry
+	// entry != nil is this launch's own fresh, schema-verified listing;
+	// nothing here reads a recorded one.
+	g.Proof = launch.RecreateProofFor(sessionKey, workspace, entry != nil)
+	return g
+}
+
 // runFail reports a launch failure in run's own words and hands the root the
 // exit code to use. The message is already complete, so it travels as a
 // SilentError rather than being re-prefixed by the root's renderer.
@@ -557,8 +575,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			return runFail(d, 1, "environment: %v", cerr)
 		}
 		rec, _ := launch.ReadSessionEnvironment(sessionKey)
-		decision := launch.DecideEnvAttach(launch.AttachGate{
-			Entry:              entry,
+		decision := launch.DecideEnvAttach(attachGateFor(sessionKey, o.Workspace, entry, launch.AttachGate{
 			RecordedInstanceID: launch.ReadRecordedInstanceID(sessionKey),
 			Stored:             stored,
 			StoredFound:        storedFound,
@@ -566,13 +583,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			ResetInvalidated:   resetInvalidated && storedFound,
 			Reviewed:           !selection.Selected() || selection.Reviewed,
 			Tree:               selection.Tree,
-			// The proof an AUTOMATIC recreation needs, read here because
-			// only this layer knows the listing above was taken on THIS
-			// launch. Its zero value authorizes nothing, so leaving it out
-			// (as the first cutover commit did) is what kept every pinned
-			// image upgrade a manual `pix rm && pix run`.
-			Proof: launch.RecreateProofFor(sessionKey, o.Workspace, entry != nil),
-		}, o.Name, rec.Name)
+		}), o.Name, rec.Name)
 		// A recreation-safe drift with a complete proof set: remove the
 		// sandbox through the ordinary proof-gated teardown, then re-enter
 		// the ordinary create path with the user's original options. No
