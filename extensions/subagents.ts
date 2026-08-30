@@ -49,6 +49,13 @@ import {
 	aggregateSubagentUsage,
 	hiddenUsageFromChildEvent,
 } from "../lib/subagent-usage.ts";
+import {
+	createMcpGatewayClient,
+	loadGatewayServerConfig,
+	resolvePiMcpConfigPath,
+	type GatewayServerConfig,
+	type McpGatewayClient,
+} from "../lib/mcp-gateway-client.ts";
 
 // ─── Config (all env-tunable) ────────────────────────────────────────────────
 const num = (name: string, dflt: number): number => {
@@ -1100,12 +1107,25 @@ export function reapLiveChildren(sig: NodeJS.Signals = "SIGKILL"): number {
 // the sandbox's reference lease instead of relying on this extension's own
 // (in-session) reaper. Reaching that path means a static-mcp server named
 // session.ReservedMCPName ("pix-session") was registered at sandbox CREATE
-// and is reachable through the Gateway right now — launch-time wiring this
-// change does not reach yet (see docs/design/pix-v2-architecture.md §7.2 and
-// the host-side handoff note in sessionctl.go). Until that wiring lands,
-// sessionGatewayAvailability() always reports unavailable, so every existing
-// call site keeps using the direct spawn below UNCHANGED: this is the
-// explicit, tested FALLBACK strategy, not a silent no-op.
+// and is reachable through the Gateway right now.
+//
+// Detection is REAL, not a hardcoded/dead env-var seam: it reads the SAME
+// injected mcp.json lib/mcp-gateway-client.ts already resolves the memory
+// Gateway from (loadGatewayServerConfig), because the sandbox has no other
+// signal that says "a Gateway is even reachable" — the aggregated server
+// list behind it (which static-mcp servers the Gateway is fronting) is not
+// exposed in that file at all, so whether `pix_session_delegate`
+// SPECIFICALLY exists can only be learned by trying the call itself
+// (delegateViaSessionGateway) and reading how it fails.
+//
+// The fallback rule this whole section exists to implement (PRD: "fall back
+// to the direct spawn only when the capability is truly absent, never on an
+// arbitrary call failure") is resolveSessionDelegation below. No existing
+// call site consumes it yet: every current subagent mode (single/parallel/
+// chain) WAITS for and returns the child's full result (messages, usage,
+// cost), which a fire-and-forget host delegate cannot produce — wiring a
+// real "outlives this session" tool mode that consumes this is future work
+// (see docs/design/subagents-extension.md), not a silent no-op today.
 //
 // The request shape mirrors the host's bounded ChildRequest contract
 // (services/host/session/request.go) byte for byte on purpose: an argv or
@@ -1124,24 +1144,32 @@ export interface SessionGatewayAvailability {
 	reason: string;
 }
 
-// sessionGatewayAvailability is a PURE capability check: it never spawns, never
-// calls the Gateway, and never mutates state, so it is trivially testable and
-// safe to call from any code path (including one that decides, per call, to
-// keep using the direct spawn fallback). PIX_SESSION_MCP_TOOL is the seam the
-// eventual launch-time wiring sets once the reserved "pix-session" static-mcp
-// server is preloaded for this sandbox; env is injectable for tests.
+// The one MCP tool name pix-session ever exposes (services/host/session/mcp.go's
+// toolName), so a caller never has to spell it twice.
+export const SESSION_DELEGATE_TOOL = "pix_session_delegate";
+
+// sessionGatewayAvailability is a PURE capability check: it never calls the
+// Gateway and never mutates state, so it is trivially testable and safe to
+// call from any code path. probe defaults to the REAL, shared Gateway config
+// reader (lib/mcp-gateway-client.ts's loadGatewayServerConfig) rather than a
+// dead env var: "available" means "an MCP gateway is injected and worth
+// trying pix_session_delegate through", not a guarantee that pix-session
+// specifically is behind it — only delegateViaSessionGateway's own call can
+// prove that, per this file's own header note above.
 export function sessionGatewayAvailability(
-	env: NodeJS.ProcessEnv = process.env,
+	probe: () => GatewayServerConfig | null = loadGatewayServerConfig,
 ): SessionGatewayAvailability {
-	const tool = env.PIX_SESSION_MCP_TOOL?.trim();
-	if (!tool) {
+	const cfg = probe();
+	if (!cfg) {
 		return {
 			available: false,
-			reason:
-				"PIX_SESSION_MCP_TOOL is unset: this sandbox was not launched with the pix-session static-mcp server, so local-process delegation stays on the direct child spawn (LIVE_CHILD_PGIDS) fallback.",
+			reason: `no MCP gateway is registered at ${resolvePiMcpConfigPath()}: this sandbox has no injected Gateway to delegate through, so local-process delegation stays on the direct child spawn (LIVE_CHILD_PGIDS) fallback.`,
 		};
 	}
-	return { available: true, reason: `pix-session Gateway tool ${tool} is wired` };
+	return {
+		available: true,
+		reason: `an MCP gateway is registered at ${cfg.url}; ${SESSION_DELEGATE_TOOL} will be tried through it before the direct spawn fallback`,
+	};
 }
 
 // buildSessionDelegateRequest is the ONLY place a SessionDelegateRequest is
@@ -1157,6 +1185,115 @@ export function buildSessionDelegateRequest(
 	const req: SessionDelegateRequest = { agent: agentName, task, target };
 	if (model) req.model = model;
 	return req;
+}
+
+export interface SessionDelegateResult {
+	tree: string;
+	node: string;
+}
+
+// CAPABILITY_ABSENT_PATTERNS classify a callTool failure as "pix-session (or
+// the Gateway itself) does not exist for this sandbox" — the ONLY case that
+// may fall back to the direct spawn. lib/mcp-gateway-client.ts's own
+// "no MCP gateway registered" message covers the Gateway-absent case
+// (loadGatewayServerConfig returned null, matched defensively here too in
+// case a caller ever calls delegateViaSessionGateway without checking
+// sessionGatewayAvailability first); the tool-shaped patterns cover a
+// Gateway that IS reachable but is not fronting pix-session (no static-mcp
+// server registered for this sandbox at create). Every other failure —
+// a timeout, an HTTP error, a malformed response, or an isError result whose
+// message names a REAL problem calling a tool that does exist — must never
+// match here: those are real failures the caller has to report, not silently
+// swallow into a fallback that could duplicate the delegated work or hide a
+// genuine Gateway outage.
+const CAPABILITY_ABSENT_PATTERNS = [
+	/no mcp gateway registered/i,
+	/unknown tool/i,
+	/tool not found/i,
+	/no such tool/i,
+	/^method not found$/i,
+];
+
+export function isSessionCapabilityAbsent(err: unknown): boolean {
+	const msg = err instanceof Error ? err.message : String(err ?? "");
+	return CAPABILITY_ABSENT_PATTERNS.some((re) => re.test(msg));
+}
+
+// delegateViaSessionGateway makes the REAL pix_session_delegate call through
+// the injected Gateway (lib/mcp-gateway-client.ts — the SAME transport
+// extensions/memory-recall.ts already uses, never a second host connection
+// or a direct dial to any sandbox-side port). It throws on every failure;
+// resolveSessionDelegation below is what turns that into the fallback
+// decision, so this function's own contract stays simple: call, validate
+// the bounded {tree, node} shape, or throw.
+export async function delegateViaSessionGateway(
+	client: Pick<McpGatewayClient, "callTool">,
+	req: SessionDelegateRequest,
+	timeoutMs: number,
+): Promise<SessionDelegateResult> {
+	const result = await client.callTool(SESSION_DELEGATE_TOOL, req, timeoutMs);
+	if (
+		!result ||
+		typeof result !== "object" ||
+		typeof (result as any).tree !== "string" ||
+		typeof (result as any).node !== "string"
+	) {
+		throw new Error(
+			`pix-session Gateway returned an unexpected ${SESSION_DELEGATE_TOOL} result: ${JSON.stringify(result)}`,
+		);
+	}
+	return { tree: (result as any).tree, node: (result as any).node };
+}
+
+export type SessionDelegationOutcome =
+	| { ok: true; result: SessionDelegateResult }
+	| { ok: false; fallback: true; reason: string }
+	| { ok: false; fallback: false; error: unknown };
+
+// resolveSessionDelegation is the ONE place the fallback rule lives:
+//   1. no Gateway configured at all -> fall back, no call attempted;
+//   2. the call succeeds -> use it;
+//   3. the call fails with a capability-absent signature -> fall back;
+//   4. the call fails any OTHER way -> report the failure, do NOT fall back.
+// A future "outlives this session" tool mode calls this once per delegated
+// child and only spawns the existing direct child_process path when
+// `fallback` comes back true.
+export async function resolveSessionDelegation(
+	client: Pick<McpGatewayClient, "callTool">,
+	req: SessionDelegateRequest,
+	timeoutMs: number,
+	availability: SessionGatewayAvailability = sessionGatewayAvailability(),
+): Promise<SessionDelegationOutcome> {
+	if (!availability.available) {
+		return { ok: false, fallback: true, reason: availability.reason };
+	}
+	try {
+		const result = await delegateViaSessionGateway(client, req, timeoutMs);
+		return { ok: true, result };
+	} catch (err) {
+		if (isSessionCapabilityAbsent(err)) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return { ok: false, fallback: true, reason };
+		}
+		return { ok: false, fallback: false, error: err };
+	}
+}
+
+// One Gateway client per module instance (mirrors extensions/memory-recall.ts's
+// own createMcpGatewayClient() usage): every session id/negotiated protocol
+// version this file has learned lives in this one closure.
+const sessionGatewayClient = createMcpGatewayClient();
+
+// delegateChildViaGateway is the real, ready-to-call entry point: resolve the
+// bounded request against the actual injected Gateway, honoring the exact
+// fallback rule resolveSessionDelegation implements, using this module's own
+// shared client. A future "outlives this session" tool mode calls this
+// directly instead of re-deriving the client/availability plumbing itself.
+export async function delegateChildViaGateway(
+	req: SessionDelegateRequest,
+	timeoutMs: number,
+): Promise<SessionDelegationOutcome> {
+	return resolveSessionDelegation(sessionGatewayClient, req, timeoutMs);
 }
 
 // Registered ONCE at module load, not per-run: 'exit' handlers accumulate
