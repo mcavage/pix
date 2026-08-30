@@ -67,22 +67,17 @@ type WorkspaceMount struct {
 // this type on each of Load/Review, so no caller can pass workspaces
 // separately from effective mounts at all.
 //
-// E1.7/envinfo has no native "workspace" modeling of its own yet (resolve.go's
-// RefuseContainment doc comment: "that composition belongs to whichever
-// later unit builds the effective declaration"), so this package cannot
-// derive EffectiveMounts itself — it only fingerprints and renders whatever
-// the caller asserts is effective, exactly as it already does for every
-// other host-exec fact. Actually COMPUTING the effective set (from declared
-// workspaces, kit mounts, and whatever else `sbx env` would mount) is a
-// future E2 renderer's job, not this package's: a caller (env_cmd.go, pre-
-// E2) supplies nil today, and Load derives only its own INTRINSIC
-// environment-root read-only entry internally for skill validation — never
-// a project/current-cwd mount, since that would depend on the calling
-// process's cwd (see load.go's Load doc comment). This is the compile-time
-// seam a future E2 must fill: EffectiveMounts is a required, typed
-// parameter on Load/Review, not an optional bare string list, so E2's
-// launch composition cannot supply a real writable mount without
-// constructing a genuine value of this type.
+// A caller still supplies the RUNTIME mounts (a launch's MountDirs: skill
+// trees, a pack's contributed directories, `--dev`'s repo skills); this
+// package derives none of those, since they depend on the calling
+// process's cwd and flags. What it DOES derive, now that envinfo models
+// the native `workspace:`/`additionalWorkspaces:` keys, is the set the
+// DOCUMENT declares (load.go's AuthoredMounts / AuthoredAdditionalMounts):
+// those are not a caller's assertion, they are a parsed fact, and a
+// reviewer must see them. EffectiveMounts stays a required, typed
+// parameter on Load/Review — not an optional bare string list — so a
+// launch composition still cannot smuggle a writable runtime mount past
+// review without constructing a genuine value of this type.
 type EffectiveMounts []WorkspaceMount
 
 // HostCommand is one local-command MCP server: docs/design/environments.md
@@ -267,7 +262,26 @@ func (b BillOfMaterials) NoVerifyRegistries() []RegistryFact {
 // surface is refused, never silently fingerprinted as absent.
 func ComputeBoM(env *Environment, effective EffectiveMounts, lookPath func(string) (string, error)) (BillOfMaterials, error) {
 	var b BillOfMaterials
-	b.EffectiveMounts = append(EffectiveMounts(nil), effective...)
+	// The bill's mounts are the caller's effective set UNIONED with the
+	// additional workspaces the document itself declares. Authored entries
+	// go first so that a path declared twice keeps the AUTHORED readOnly
+	// bit rather than a runtime duplicate's — the same precedence
+	// envinfo's renderer applies when it composes the same two sources into
+	// `additionalWorkspaces:`, so what a reviewer consents to here is what
+	// gets rendered there.
+	var mounts EffectiveMounts
+	if env != nil {
+		mounts = append(mounts, AuthoredAdditionalMounts(env.Document)...)
+	}
+	mounts = append(mounts, effective...)
+	seenMount := map[string]bool{}
+	for _, m := range mounts {
+		if seenMount[m.Path] {
+			continue
+		}
+		seenMount[m.Path] = true
+		b.EffectiveMounts = append(b.EffectiveMounts, m)
+	}
 	sort.Slice(b.EffectiveMounts, func(i, j int) bool { return b.EffectiveMounts[i].Path < b.EffectiveMounts[j].Path })
 
 	if env.Document != nil {

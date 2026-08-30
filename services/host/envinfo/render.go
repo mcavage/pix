@@ -33,7 +33,7 @@
 //     accepted.
 //   - Sidecar (pix.toml) facts never appear in this document at all. §6.2
 //     enumerates the Pix-owned runtime facts the effective file adds
-//     (pinned template/pullPolicy, workspaces in object form, the
+//     (pinned template/pullPolicy, the primary workspace in object form, the
 //     unconditional personal-context workspace, the generated Pi mixin
 //     kit, a `--dev` checkout kit, Pix-required env vars, reviewed
 //     local-MCP credential wrappers) and inference/roster is not among
@@ -68,6 +68,7 @@ package envinfo
 import (
 	"bytes"
 	"errors"
+	"fmt"
 
 	"gopkg.in/yaml.v3"
 )
@@ -79,12 +80,20 @@ import (
 // RenderEffective renders no mount for it then (PersonalContextWorkspace
 // is the one field where a caller found no personal context configured at
 // all — never a fabricated mount).
+//
+// The two bools are NOT both meaningful in both positions, because
+// upstream's schema does not make them so: `workspace:` accepts
+// path/clone, `additionalWorkspaces[]` accepts path/readOnly. One type
+// still carries both so a caller composes ONE kind of workspace value, but
+// RenderEffective refuses the two impossible combinations rather than
+// dropping a bit (ErrReadOnlyPrimaryWorkspace / ErrClonedAdditionalWorkspace).
 type WorkspaceFact struct {
 	Path     string
 	ReadOnly bool
 	// Clone reports whether this workspace is a fresh git clone of Path
 	// (true) rather than a direct bind mount of it (false) — the
-	// "including clone choice" half of §6.2's workspace object.
+	// "including clone choice" half of §6.2's workspace object. It is
+	// meaningful only on the PRIMARY workspace.
 	Clone bool
 }
 
@@ -185,14 +194,21 @@ type RuntimeFacts struct {
 	PrimaryWorkspace         WorkspaceFact
 	PersonalContextWorkspace WorkspaceFact
 
-	// AdditionalWorkspaces are the caller's OTHER host mounts, in the
-	// caller's own order, rendered after the primary and personal-context
-	// ones (workflow/launch's MountDirs: configured skill trees, `--skills`
-	// trees, an active pack's skills/knowledge). They exist because
-	// `sbx env create` takes ONLY this document: a mount the pre-cutover
-	// `sbx run` argv passed as an extra positional has nowhere else to go,
-	// and silently dropping it would take a pack's skills away from the
-	// session. A nil slice renders no extra mount and never fabricates one.
+	// AdditionalWorkspaces are the caller's OTHER RUNTIME host mounts, in
+	// the caller's own order (workflow/launch's MountDirs: configured skill
+	// trees, `--skills` trees, an active pack's skills/knowledge). They
+	// exist because `sbx env create` takes ONLY this document: a mount the
+	// pre-cutover `sbx run` argv passed as an extra positional has nowhere
+	// else to go, and silently dropping it would take a pack's skills away
+	// from the session. A nil slice renders no extra runtime mount and
+	// never fabricates one.
+	//
+	// This list is RUNTIME-ONLY: the AUTHORED `additionalWorkspaces:` come
+	// from Document and are rendered by this package (see
+	// effectiveWorkspaces), BEFORE these. A caller must not copy the
+	// authored entries in here as well — they would be deduplicated away in
+	// the best case and reordered ahead of their authored read-only twin in
+	// the worst.
 	AdditionalWorkspaces []WorkspaceFact
 
 	// ExtraKits are the caller's other already-resolved kit references, in
@@ -254,11 +270,18 @@ func RenderEffective(facts RuntimeFacts) ([]byte, error) {
 		return nil, ErrNoDocument
 	}
 
+	primary, additional, err := effectiveWorkspaces(facts)
+	if err != nil {
+		return nil, err
+	}
+
 	out := effectiveDocument{
-		SchemaVersion:  effectiveSchemaVersion(doc),
-		Agent:          doc.Agent,
-		Name:           effectiveName(facts),
-		Workspaces:     effectiveWorkspaces(facts),
+		SchemaVersion:        effectiveSchemaVersion(doc),
+		Agent:                doc.Agent,
+		Name:                 effectiveName(facts),
+		Workspace:            primary,
+		AdditionalWorkspaces: additional,
+
 		Kits:           effectiveKits(facts),
 		SandboxOptions: effectiveSandboxOptions(facts),
 		Env:            effectiveEnv(facts),
@@ -307,25 +330,68 @@ func effectiveName(facts RuntimeFacts) string {
 	return facts.Document.Name
 }
 
-// effectiveWorkspaces renders the primary workspace, then the
-// personal-context workspace, then the caller's additional mounts, each in
-// object form, skipping any fact whose Path is unset and any exact path
-// repeat.
-func effectiveWorkspaces(facts RuntimeFacts) []effectiveWorkspace {
-	var out []effectiveWorkspace
-	all := append([]WorkspaceFact{facts.PrimaryWorkspace, facts.PersonalContextWorkspace}, facts.AdditionalWorkspaces...)
+// effectiveWorkspaces splits the caller's workspace facts into upstream's
+// two distinct fields: the singular primary `workspace:` and the
+// `additionalWorkspaces:` list.
+//
+// The primary is facts.PrimaryWorkspace and nothing else. The AUTHORED
+// `workspace:` (Document.Workspace) is deliberately NOT rendered anywhere:
+// a Pix launch always mounts its own run workspace as the primary (a `pix
+// run DIR`, never the environment's declaration directory), so the
+// authored one is overridden by design. It stays a parse/review fact —
+// visible in the Tree and the bill of materials — and it is specifically
+// NOT demoted into the additional list, which would turn a superseded
+// declaration into a live, writable host mount nobody reviewed as one.
+//
+// The additional list is, in this fixed order: the authored
+// `additionalWorkspaces:` (already resolved against the environment file's
+// own directory by Parse), then the unconditional personal-context
+// workspace, then the caller's runtime mounts. Authored entries come first
+// so that when a path appears twice, the AUTHORED declaration wins the
+// dedup — an authored read-only mount can then never be widened to
+// read-write by a later runtime duplicate, only the reverse-safe
+// narrowing.
+//
+// Dedup is by exact path and covers the primary too: `sbx env create`
+// mounts each declared path, and declaring one path twice is at best
+// redundant and at worst two conflicting read-only bits for one mount. The
+// personal-context tree is the concrete case — it is BOTH the
+// unconditional mount and, for a caller that also lists it as a skill
+// tree, a runtime one.
+func effectiveWorkspaces(facts RuntimeFacts) (*effectiveWorkspace, []effectiveAdditionalWorkspace, error) {
+	var primary *effectiveWorkspace
 	seen := map[string]bool{}
-	for _, ws := range all {
-		// An unset fact renders no mount; a repeated path renders once (the
-		// personal-context tree is BOTH the unconditional mount and, for a
-		// caller that also lists it as a skill tree, an additional one).
+	if p := facts.PrimaryWorkspace; p.Path != "" {
+		if p.ReadOnly {
+			return nil, nil, fmt.Errorf("%w: %s", ErrReadOnlyPrimaryWorkspace, p.Path)
+		}
+		primary = &effectiveWorkspace{Path: p.Path, Clone: p.Clone}
+		seen[p.Path] = true
+	}
+
+	var rest []WorkspaceFact
+	for _, ws := range facts.Document.AdditionalWorkspaces {
+		path := ws.Resolved
+		if path == "" {
+			path = ws.Path
+		}
+		rest = append(rest, WorkspaceFact{Path: path, ReadOnly: ws.ReadOnly})
+	}
+	rest = append(rest, facts.PersonalContextWorkspace)
+	rest = append(rest, facts.AdditionalWorkspaces...)
+
+	var out []effectiveAdditionalWorkspace
+	for _, ws := range rest {
 		if ws.Path == "" || seen[ws.Path] {
 			continue
 		}
+		if ws.Clone {
+			return nil, nil, fmt.Errorf("%w: %s", ErrClonedAdditionalWorkspace, ws.Path)
+		}
 		seen[ws.Path] = true
-		out = append(out, effectiveWorkspace{Path: ws.Path, ReadOnly: ws.ReadOnly, Clone: ws.Clone})
+		out = append(out, effectiveAdditionalWorkspace{Path: ws.Path, ReadOnly: ws.ReadOnly})
 	}
-	return out
+	return primary, out, nil
 }
 
 // effectiveKits renders the authored kits first (already resolved against

@@ -1,13 +1,12 @@
 schemaVersion: "1"
 agent: pix
 name: pix-work-22222222
-workspaces:
-  - path: /home/user/work
-    readOnly: false
-    clone: false
+workspace:
+  path: /home/user/work
+  clone: false
+additionalWorkspaces:
   - path: /home/user/.local/share/pix/context
     readOnly: false
-    clone: false
 kits:
   - /tmp/pix-mixin-22222222
 sandboxOptions:

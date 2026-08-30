@@ -1,13 +1,12 @@
 schemaVersion: "1"
 agent: pix
 name: pix-gateway-33333333
-workspaces:
-  - path: /home/user/gateway
-    readOnly: false
-    clone: false
+workspace:
+  path: /home/user/gateway
+  clone: false
+additionalWorkspaces:
   - path: /home/user/.local/share/pix/context
     readOnly: false
-    clone: false
 kits:
   - /tmp/pix-mixin-33333333
 sandboxOptions:

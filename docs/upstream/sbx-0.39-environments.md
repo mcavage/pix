@@ -383,3 +383,85 @@ Left as later-story responsibility, not proven here:
 - `services/host/workflow/uat/env_matrix.go` (the seam that runs the
   candidate's own `pix-host uat-env-matrix` binary)
 - `uat/scenarios/smoke.yaml` (the unchanged scenario this run executed)
+
+## 17. Workspace grammar: a later host run's correction (A8)
+
+Story 0 never authored a `workspace:` or an `additionalWorkspaces:` key.
+Every fixture in sections 4 through 12 above declared only `schemaVersion`,
+`agent`, `name`, `kits`, `sandboxOptions` and `env`, so **nothing in this
+run observed the workspace grammar at all** — not its field names, not the
+string-vs-object union, not relative-path resolution. Do not read section 15
+as covering it.
+
+A later run did observe it, by failing:
+
+- run: `run-20260829-161325-d3c9a7be`
+- candidate: `54152f2b`
+- command: real `sbx env create <state>/environments/<name>/effective.sbxenv.yaml`
+- observed: `field workspaces not found in type sbxenv.Config`, at line 9 of
+  the generated effective file
+
+Pix's renderer had invented a top-level `workspaces:` list of objects
+carrying `path`/`readOnly`/`clone`. No such key exists. Every golden in
+`services/host/envinfo/testdata/render` agreed with the renderer, so the
+suite was green while every create on a host was refused: the goldens were
+Pix checking Pix.
+
+The real schema, transcribed from Docker's own reference
+(<https://docs.docker.com/ai/sandboxes/configuration/environment-files/>,
+"File reference"), is two separate keys:
+
+| key | type | fields |
+| --- | --- | --- |
+| `workspace` | string **or** object | `path`, `clone` — no `readOnly` |
+| `additionalWorkspaces` | list of objects | `path`, `readOnly` — no `clone` |
+
+Relative paths resolve from the directory of the first environment file.
+
+### What is proven, and what is not
+
+Proven by the host: a top-level `workspaces:` key is rejected outright by
+`sbx env create` on 0.39, with the error text above. That is a refusal, and
+refusals are the strongest evidence this document carries.
+
+**Not proven by any host run:** that the corrected shape is ACCEPTED. The
+run that failed never got past line 9, so it never exercised
+`workspace:`/`additionalWorkspaces:` against the real loader. The shape Pix
+now renders is transcribed from Docker's published reference and pinned by
+a planted schema test (`services/host/envinfo/upstream_schema_test.go`,
+which strict-decodes the rendered document through a type transcribed from
+that reference rather than from anything in this repository). A planted test
+is not a host. The next host UAT run is what upgrades this from
+"documented and pinned" to "observed".
+
+The same honesty applies to two things this fix deliberately did not settle:
+
+- **Multi-file relative resolution (extends A6).** Upstream resolves
+  relative workspace paths "from the directory of the first environment
+  file"; Pix's parser resolves each file's paths against ITS OWN directory,
+  the same rule it already applies to `kits:`. With one authored file these
+  are identical, and Pix composes exactly one file today. Two files with
+  divergent directories would diverge, and no run has observed upstream's
+  behavior there. A6 remains unobserved.
+- **Interpolated workspace paths.** A path still carrying `${VAR}` is left
+  unresolved by Pix and rendered verbatim, on the reasoning that joining a
+  source directory onto an expression fabricates a path nobody authored.
+  Whether sbx expands `${VAR}` inside `workspace.path` specifically was not
+  observed by any run; section 6's interpolation results are for `env:`
+  values only.
+
+### Known nested divergences still outstanding
+
+The failed create stopped at line 9, so it never reached these. They are
+recorded, and pinned by `TestUpstreamSchema_KnownNestedDivergences`, rather
+than left to be rediscovered by another host run:
+
+- `registries.<host>`: upstream takes a nested `secret` (and optional
+  `username`) secret-source object; Pix renders a bare `ref`/`command` plus
+  `noVerify` at the record's top level.
+- `secrets.<name>.command`: upstream takes a single shell-command string;
+  Pix models and renders an argv list.
+
+Neither is exercised by any current fixture or golden, and no environment in
+the repository declares one, which is why the host run did not surface them.
+Fixing either is its own change with its own host proof.

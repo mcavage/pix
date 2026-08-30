@@ -45,6 +45,28 @@ var ErrAmbiguousKitReference = errors.New("envinfo: ambiguous kit reference")
 // forward silently — see tree.go's BuildTree for the full rationale.
 var ErrEmptyBindingDomains = errors.New("envinfo: binding declared with zero domains")
 
+// ErrReadOnlyPrimaryWorkspace and ErrClonedAdditionalWorkspace are
+// RenderEffective's two workspace refusals. Both exist because upstream's
+// schema has no field for the fact in question, so the only alternatives
+// to refusing are silently dropping a bit that RESTRICTS or ISOLATES host
+// access:
+//
+//   - a read-only primary workspace has no `readOnly` key under
+//     `workspace:`; dropping it mounts the tree read-write.
+//   - a cloned additional workspace has no `clone` key under
+//     `additionalWorkspaces[]` (upstream mounts them directly "even when
+//     the primary workspace uses clone mode"); dropping it direct-mounts a
+//     tree the caller asked to be a private clone.
+//
+// Either silent drop expands what the sandbox can write on the host, which
+// is precisely the class of change §9.1 requires to be visible.
+var (
+	ErrReadOnlyPrimaryWorkspace = errors.New(
+		"envinfo: a read-only primary workspace is not expressible in sbx's schema (workspace has no readOnly field); refusing to render it read-write")
+	ErrClonedAdditionalWorkspace = errors.New(
+		"envinfo: an additional workspace cannot be cloned in sbx's schema (additionalWorkspaces has no clone field); refusing to render it as a direct mount")
+)
+
 // errNoDocuments and errNoSchemaVersion are Merge's own two refusals: no
 // input at all, or an input set whose every document somehow declared an
 // empty schemaVersion (Parse already refuses that per file, so this is a
