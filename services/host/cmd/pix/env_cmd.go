@@ -5,16 +5,19 @@
 // and listing come from workflow/env's pixhome-based ResolveIn/List
 // (home.go). `default` reads/writes the one config.toml field pixhome.Machine
 // owns. `trust` is the explicit host-execution approval command: it
-// fingerprints the environment's two authored files and records acceptance
-// under ~/.pix/state/trust, outside the environment directory itself.
+// computes workflow/env's canonical host bill of materials (bom.go) and
+// records acceptance of its fingerprint under ~/.pix/state/trust, outside
+// the environment directory itself — never a hash of just the two authored
+// files, which would miss a change that only shows up once the document is
+// composed (an authored `${VAR}` losing its default, a sidecar host service
+// gaining an argument that resolves through a symlink, ...).
 package main
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +25,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/pixhome"
+	"pix/host/sys"
 	nativeenv "pix/host/workflow/env"
 )
 
@@ -41,7 +45,7 @@ approved with 'pix env trust NAME' before a launch will use it.`
 // 'env list'.
 type envCmd struct {
 	List    envListCmd    `cmd:"" default:"1" help:"List environments under ~/.pix/envs, the default, and trust state."`
-	Show    envShowCmd    `cmd:"" help:"What NAME is: files, resolved root, trust state."`
+	Show    envShowCmd    `cmd:"" help:"What NAME is: files, resolved root, trust state. --path/--effective/--json."`
 	Default envDefaultCmd `cmd:"" help:"Print, or set, the machine default environment."`
 	Trust   envTrustCmd   `cmd:"" help:"Read and accept what NAME runs on your host."`
 }
@@ -86,7 +90,7 @@ func (c *envListCmd) Run(d *cli.Deps) error {
 	m, _ := pixhome.LoadMachine(home)
 	rows := make([]envListRow, 0, len(sels))
 	for _, s := range sels {
-		trusted, _ := trustAccepted(home, s)
+		trusted, _, _ := trustAccepted(home, s)
 		rows = append(rows, envListRow{
 			Name: s.Name, Root: s.Root, Symlinked: s.Symlinked,
 			Default: s.Name == m.DefaultEnvironment, Trusted: trusted,
@@ -98,7 +102,8 @@ func (c *envListCmd) Run(d *cli.Deps) error {
 		return nil
 	}
 	if len(rows) == 0 {
-		fmt.Fprintln(d.Out, "No environments yet. Create one: mkdir -p ~/.pix/envs/<name> && author .sbxenv.yaml there.")
+		fmt.Fprintln(d.Out, "pix: no environments registered; pix run launches with Pix's own built-in defaults.")
+		fmt.Fprintln(d.Out, "     create one: mkdir -p ~/.pix/envs/<name> && author .sbxenv.yaml there.")
 		return nil
 	}
 	for _, r := range rows {
@@ -117,10 +122,16 @@ func (c *envListCmd) Run(d *cli.Deps) error {
 
 // ── show ─────────────────────────────────────────────────────────────────
 
+// envShowCmd implements docs/design/pix-v2-surface.md §3.4's
+// `pix env [NAME] [--path|--effective|--json]`. Name is OPTIONAL: omitted,
+// it resolves the machine default exactly as a launch would
+// (docs/design/pix-v2-architecture.md §6.1); with no default set either,
+// this is D17's `none` state, never an error.
 type envShowCmd struct {
-	Name string `arg:"" help:"Exact environment name."`
-	JSON bool   `help:"Emit machine-readable JSON."`
-	Path bool   `help:"Print only the resolved root."`
+	Name      string `arg:"" optional:"" help:"Exact environment name (omit to use the machine default)."`
+	JSON      bool   `help:"Emit machine-readable JSON."`
+	Path      bool   `help:"Print only the resolved root."`
+	Effective bool   `help:"Print the exact native sbx environment a new sandbox would use, without creating one."`
 }
 
 func (c *envShowCmd) Run(d *cli.Deps) error {
@@ -128,7 +139,47 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return err
 	}
-	sel, err := nativeenv.ResolveIn(home, c.Name)
+
+	// --effective renders through the SAME compiler a real launch uses
+	// (workflow/env's RenderEffectiveDocument -> envinfo.RenderEffective),
+	// including the reserved pix-memory/pix-session built-ins, with no
+	// sandbox in existence (D8). It resolves name itself (explicit, else
+	// the machine default, else D17's `none`), so it is handled before
+	// this command's own name resolution below.
+	if c.Effective {
+		doc, err := nativeenv.RenderEffectiveDocument(home, c.Name)
+		if err != nil {
+			return envRun(d, err)
+		}
+		d.Out.Write(doc)
+		return nil
+	}
+
+	name := strings.TrimSpace(c.Name)
+	if name == "" {
+		m, err := pixhome.LoadMachine(home)
+		if err != nil {
+			return err
+		}
+		name = strings.TrimSpace(m.DefaultEnvironment)
+	}
+
+	if name == "" {
+		// D17: no environment registered or selected. Never an error —
+		// `pix run` launches with Pix's own built-in defaults.
+		switch {
+		case c.Path:
+			return envRun(d, fmt.Errorf("env show --path: no environment selected (none); nothing to print"))
+		case c.JSON:
+			b, _ := json.MarshalIndent(map[string]any{"environment": "none"}, "", "  ")
+			fmt.Fprintln(d.Out, string(b))
+		default:
+			fmt.Fprintln(d.Out, "environment: none (no environment selected; pix run launches with Pix's own built-in defaults)")
+		}
+		return nil
+	}
+
+	sel, err := nativeenv.ResolveIn(home, name)
 	if err != nil {
 		return envRun(d, err)
 	}
@@ -136,12 +187,16 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 		fmt.Fprintln(d.Out, sel.Root)
 		return nil
 	}
-	trusted, fp := trustAccepted(home, sel)
+	trusted, fp, bomErr := trustAccepted(home, sel)
 	if c.JSON {
-		b, _ := json.MarshalIndent(map[string]any{
+		fields := map[string]any{
 			"name": sel.Name, "root": sel.Root, "symlinked": sel.Symlinked,
 			"trusted": trusted, "fingerprint": fp,
-		}, "", "  ")
+		}
+		if bomErr != nil {
+			fields["trust_error"] = bomErr.Error()
+		}
+		b, _ := json.MarshalIndent(fields, "", "  ")
 		fmt.Fprintln(d.Out, string(b))
 		return nil
 	}
@@ -151,6 +206,13 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 	fmt.Fprintf(d.Out, "sbxenv:      %s\n", presentIfExists(sel.SbxEnvPath()))
 	fmt.Fprintf(d.Out, "sidecar:     %s\n", presentIfExists(sel.SidecarPath()))
 	fmt.Fprintf(d.Out, "trusted:     %v\n", trusted)
+	if trusted {
+		fmt.Fprintf(d.Out, "fingerprint: %s\n", fp)
+	}
+	if bomErr != nil {
+		fmt.Fprintf(d.Out, "trust check: could not compute (%s)\n", bomErr)
+	}
+	fmt.Fprintf(d.Out, "effective:   pix env %s --effective\n", sys.ShellQuote(sel.Name))
 	return nil
 }
 
@@ -202,6 +264,10 @@ func (c *envDefaultCmd) Run(d *cli.Deps) error {
 // <PIX_HOME>/state/trust/environments/<name>.json — outside the environment
 // root itself, per docs/design/pix-v2-surface.md §9 ("Approval is stored
 // under ~/.pix/state, never inside the environment being approved").
+// Fingerprint is workflow/env's canonical BillOfMaterials.Fingerprint, never
+// a raw hash of the two authored files: two environments byte-identical on
+// disk but composing to a different host-exec surface (a resolved `${VAR}`
+// losing its default value between runs, for example) must re-gate.
 type envTrustRecord struct {
 	Root        string `json:"root"`
 	Fingerprint string `json:"fingerprint"`
@@ -212,43 +278,58 @@ func trustRecordPath(home pixhome.Paths, name string) string {
 	return filepath.Join(home.StateTrustEnvironments, name+".json")
 }
 
-// environmentFingerprint hashes the byte content of both files this package
-// interprets (.sbxenv.yaml, pix.toml). A file that does not exist
-// contributes its path only, so adding/removing either file changes the
-// fingerprint too.
-func environmentFingerprint(sel nativeenv.Selected) (string, error) {
-	h := sha256.New()
-	for _, p := range []string{sel.SbxEnvPath(), sel.SidecarPath()} {
-		fmt.Fprintf(h, "path=%s\n", p)
-		if data, err := os.ReadFile(p); err == nil {
-			h.Write(data)
-		}
+// environmentBoM loads sel and computes its canonical host bill of
+// materials (workflow/env's ComputeBoM) plus its fingerprint
+// (BillOfMaterials.Fingerprint) — the "complete canonical host BOM" every
+// `pix env trust`/list/show trust check reads, never a two-file content
+// hash. effective is nil: no runtime mount is known outside an actual
+// launch, exactly as workflow/env's own preview compiler
+// (ComputeEffective) composes none either.
+func environmentBoM(sel nativeenv.Selected) (nativeenv.BillOfMaterials, string, error) {
+	loaded, err := nativeenv.LoadHome(sel, nil, nil)
+	if err != nil {
+		return nativeenv.BillOfMaterials{}, "", err
 	}
-	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+	bom, err := nativeenv.ComputeBoM(loaded, nil, nil)
+	if err != nil {
+		return nativeenv.BillOfMaterials{}, "", err
+	}
+	fp, err := nativeenv.Fingerprint(bom)
+	if err != nil {
+		return nativeenv.BillOfMaterials{}, "", err
+	}
+	return bom, fp, nil
 }
 
-// trustAccepted reports whether sel's CURRENT fingerprint matches a
-// recorded acceptance. A changed fingerprint (file edited since trust) or no
-// record at all both report false: a stale approval never counts as trust.
-func trustAccepted(home pixhome.Paths, sel nativeenv.Selected) (bool, string) {
-	fp, err := environmentFingerprint(sel)
+// trustAccepted reports whether sel's CURRENT canonical bill-of-materials
+// fingerprint matches a recorded acceptance. A changed fingerprint (the
+// environment's host-exec surface changed since trust), no record at all,
+// or a load/BOM-compute failure (an unsafe symlink, an undefined bare
+// interpolation, ...) all report untrusted: a stale or unfingerprintable
+// environment never counts as trusted. The third return is non-nil only
+// for that last case, so a caller can surface WHY trust could not even be
+// checked rather than silently printing "untrusted" for a load failure
+// same as for "never reviewed".
+func trustAccepted(home pixhome.Paths, sel nativeenv.Selected) (bool, string, error) {
+	_, fp, err := environmentBoM(sel)
 	if err != nil {
-		return false, ""
+		return false, "", err
 	}
 	data, err := os.ReadFile(trustRecordPath(home, sel.Name))
 	if err != nil {
-		return false, fp
+		return false, fp, nil
 	}
 	var rec envTrustRecord
 	if json.Unmarshal(data, &rec) != nil {
-		return false, fp
+		return false, fp, nil
 	}
-	return rec.Fingerprint == fp && rec.Root == sel.Root, fp
+	return rec.Fingerprint == fp && rec.Root == sel.Root, fp, nil
 }
 
 type envTrustCmd struct {
-	Name string `arg:"" help:"Exact environment name."`
-	Yes  bool   `help:"Accept without an interactive prompt (still prints what is being approved)."`
+	Name    string `arg:"" help:"Exact environment name."`
+	Yes     bool   `help:"Accept without an interactive prompt (still prints what is being approved)."`
+	Verbose bool   `help:"Print full argv and content digests, not just counts and destinations."`
 }
 
 func (c *envTrustCmd) Run(d *cli.Deps) error {
@@ -260,21 +341,19 @@ func (c *envTrustCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return envRun(d, err)
 	}
-	fp, err := environmentFingerprint(sel)
+	bom, fp, err := environmentBoM(sel)
 	if err != nil {
-		return err
+		return envRun(d, err)
 	}
-	fmt.Fprintf(d.Out, "pix env trust %s\n", sel.Name)
-	fmt.Fprintf(d.Out, "  root:        %s\n", sel.Root)
-	fmt.Fprintf(d.Out, "  sbxenv:      %s\n", presentIfExists(sel.SbxEnvPath()))
-	fmt.Fprintf(d.Out, "  sidecar:     %s\n", presentIfExists(sel.SidecarPath()))
-	fmt.Fprintf(d.Out, "  fingerprint: %s\n", fp)
+	renderTrustBill(d.Out, sel.Name, bom, c.Verbose)
+	fmt.Fprintf(d.Out, "  fingerprint: %s\n\n", fp)
+
 	accept := c.Yes
 	if !c.Yes {
 		if !d.Interactive {
 			return envRun(d, fmt.Errorf("env trust: refusing to accept on a non-interactive terminal without --yes"))
 		}
-		fmt.Fprint(d.Out, "Accept and record this exact fingerprint? [y/N] ")
+		fmt.Fprint(d.Out, "Accept this host-execution footprint? [y/N] ")
 		reader := bufio.NewReader(d.In)
 		line, _ := reader.ReadString('\n')
 		accept = strings.EqualFold(strings.TrimSpace(line), "y")
@@ -293,4 +372,74 @@ func (c *envTrustCmd) Run(d *cli.Deps) error {
 	}
 	fmt.Fprintf(d.Out, "pix: environment %q trusted.\n", sel.Name)
 	return nil
+}
+
+// renderTrustBill prints workflow/env's canonical BillOfMaterials: counts
+// plus every host command/service name, credential destination, and mount
+// expansion by default (D15); full argv and content digests behind
+// --verbose. Every value that can carry AUTHORED environment content
+// (attacker-controlled for a cloned or shared environment) passes through
+// sys.TerminalSafe before reaching the terminal a human is about to answer
+// "y" on: a raw ESC/CSI/OSC could repaint or retitle the consent screen,
+// and a raw newline could forge a renderer-owned line (a fake count, a
+// fake prompt, a fake "trusted" verdict). This is the same discipline the
+// deleted v1 `pix env review` renderer applied (docs/design/environments.md
+// §9.1's Wave C security M1); it is not optional polish.
+func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, verbose bool) {
+	safe := sys.TerminalSafe
+	fmt.Fprintf(out, "pix env trust %s\n", safe(name))
+	fmt.Fprintln(out, "  environment runs code on your host and hands it credentials:")
+	fmt.Fprintf(out, "  %d host command(s), %d host service(s), %d credential target(s), %d mount(s), %d MCP server(s), %d kit(s)\n\n",
+		len(b.HostCommands), len(b.HostServices), len(b.CredentialTargets), len(b.EffectiveMounts), len(b.MCPServers), len(b.Kits))
+	for _, c := range b.HostCommands {
+		fmt.Fprintf(out, "  runs on this host: %s\n", safe(c.Name))
+	}
+	for _, s := range b.HostServices {
+		fmt.Fprintf(out, "  host service:      %s  port %d\n", safe(s.Name), s.Port)
+	}
+	for _, t := range b.CredentialTargets {
+		fmt.Fprintf(out, "  credential:        %s -> %s\n", safe(t.Source), safe(t.Destination))
+	}
+	for _, m := range b.EffectiveMounts {
+		ro := "rw"
+		if m.ReadOnly {
+			ro = "ro"
+		}
+		fmt.Fprintf(out, "  mount:             %s (%s)\n", safe(m.Path), ro)
+	}
+	for _, r := range b.NoVerifyRegistries() {
+		fmt.Fprintf(out, "  no-verify registry: %s\n", safe(r.Host))
+	}
+	for _, it := range b.Interpolations {
+		src := fmt.Sprintf("${%s}", it.Var)
+		if it.Default != nil {
+			src = fmt.Sprintf("${%s:-%s}", it.Var, *it.Default)
+		}
+		fmt.Fprintf(out, "  interpolation:     %s -> %s\n", safe(src), safe(it.KeyPath))
+	}
+	if !verbose {
+		fmt.Fprintf(out, "\n  full argv and content digests: pix env trust %s --verbose\n", sys.ShellQuote(name))
+		return
+	}
+	fmt.Fprintln(out)
+	for _, c := range b.HostCommands {
+		fmt.Fprintf(out, "  argv %-20s %s\n", safe(c.Name), safe(strings.Join(c.Argv, " ")))
+	}
+	for _, s := range b.HostServices {
+		line := s.Command
+		if len(s.Args) > 0 {
+			line += " " + strings.Join(s.Args, " ")
+		}
+		fmt.Fprintf(out, "  argv %-20s %s\n", safe(s.Name), safe(line))
+		if s.SHA != "" {
+			fmt.Fprintf(out, "       %-20s sha256:%s\n", "", safe(s.SHA))
+		}
+	}
+	for _, k := range b.Kits {
+		if !k.Local {
+			continue
+		}
+		fmt.Fprintf(out, "  kit  %-20s %s\n", safe(k.Raw), safe(k.Resolved))
+		fmt.Fprintf(out, "       %-20s sha256:%s\n", "", safe(k.SHA))
+	}
 }

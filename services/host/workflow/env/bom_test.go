@@ -1,35 +1,34 @@
 package env
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"pix/host/envinfo"
-	"pix/host/hosttrust"
+	"pix/host/pixhome"
 )
 
-// hostexecFixture copies testdata/hostexec-fixture into a fresh temp
-// directory (never operated on in place — Load/Review mutate nothing, but
-// several tests in this file deliberately mutate a COPY to prove
-// fingerprint sensitivity) and registers it under name, returning the
-// loaded *Environment.
+// hostexecFixture copies testdata/hostexec-fixture into a fresh v2 PIX_HOME
+// under envs/<name>/ and loads it via ResolveIn+LoadHome, returning the
+// loaded *Environment and its root.
 func hostexecFixture(t *testing.T, name string) (*Environment, string) {
 	t.Helper()
-	tempConfig(t)
-	cfg := loadConfig(t)
-
-	root := t.TempDir()
+	home := pixhome.New(t.TempDir())
+	root := home.EnvironmentDir(name)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	copyFixture(t, "testdata/hostexec-fixture", root)
 
-	if _, err := Register(cfg, name, root); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	env, err := Load(cfg, &hosttrust.AcceptanceStore{}, name, nil, noBareLookPath)
+	sel, err := ResolveIn(home, name)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("ResolveIn: %v", err)
+	}
+	env, err := LoadHome(sel, nil, noBareLookPath)
+	if err != nil {
+		t.Fatalf("LoadHome: %v", err)
 	}
 	return env, root
 }
@@ -61,82 +60,10 @@ func prdMounts() EffectiveMounts {
 	return EffectiveMounts{{Path: "/Users/alice/dev/work-pix-env", ReadOnly: false}}
 }
 
-// wantPRDBillDefault is byte-exact PRD §5.8's own fixture text (the
-// `pix env review work` code block, verbatim) — the golden this test proves
-// renderBill reproduces exactly, not merely "close".
-const wantPRDBillDefault = `Environment "work" runs code on your host and hands it credentials.
-
-  2 host commands      github-mcp, warehouse-mcp
-  1 host service       warehouse-proxy  port 19443
-  2 credential targets op://Personal/Anthropic/api-key -> api.anthropic.com
-                       WAREHOUSE_TOKEN                 -> warehouse-mcp (host)
-  1 new mount          /Users/alice/dev/work-pix-env   (rw)
-
-  full argv and content digests: pix env review work --verbose
-
-Accept this host-execution footprint? [y/N]:`
-
-// ── golden: default tier, byte-exact against PRD §5.8 ────────────────────
-
-func TestRenderBill_DefaultTierByteExactAgainstPRD(t *testing.T) {
-	env, _ := hostexecFixture(t, "work")
-	bom, err := ComputeBoM(env, prdMounts(), noBareLookPath)
-	if err != nil {
-		t.Fatalf("ComputeBoM: %v", err)
-	}
-
-	var buf bytes.Buffer
-	renderBill(&buf, "work", bom, false)
-
-	if buf.String() != wantPRDBillDefault {
-		t.Fatalf("default bill mismatch:\n--- got ---\n%s\n--- want ---\n%s", buf.String(), wantPRDBillDefault)
-	}
-}
-
-// ── golden: verbose tier adds full argv and content digests ──────────────
-
-func TestRenderBill_VerboseAddsArgvAndDigests(t *testing.T) {
-	env, _ := hostexecFixture(t, "work")
-	bom, err := ComputeBoM(env, prdMounts(), noBareLookPath)
-	if err != nil {
-		t.Fatalf("ComputeBoM: %v", err)
-	}
-
-	var buf bytes.Buffer
-	renderBill(&buf, "work", bom, true)
-	got := buf.String()
-
-	if !strings.Contains(got, "argv: github-mcp-server --stdio") {
-		t.Errorf("verbose output missing full argv for github-mcp, got:\n%s", got)
-	}
-	if !strings.Contains(got, "argv: warehouse-mcp-server") {
-		t.Errorf("verbose output missing full argv for warehouse-mcp, got:\n%s", got)
-	}
-	if strings.Contains(got, "--verbose") {
-		t.Errorf("verbose output must not repeat the --verbose tip line, got:\n%s", got)
-	}
-	if !strings.HasPrefix(strings.TrimRight(got, "\n"), strings.Split(wantPRDBillDefault, "\n")[0]) {
-		t.Errorf("verbose output must keep the same header, got:\n%s", got)
-	}
-	if !strings.HasSuffix(got, "Accept this host-execution footprint? [y/N]:") {
-		t.Errorf("verbose output must still end with the consent prompt, got:\n%s", got)
-	}
-}
-
 // ── Tier0 (no host-exec facet at all): empty bill ─────────────────────────
 
 func TestComputeBoM_NonHostExecutingEnvironmentIsEmpty(t *testing.T) {
-	tempConfig(t)
-	cfg := loadConfig(t)
-	root := t.TempDir()
-	writeEnvFile(t, root, ".sbxenv.yaml", minimalSbxenv)
-	if _, err := Register(cfg, "home", root); err != nil {
-		t.Fatal(err)
-	}
-	env, err := Load(cfg, nil, "home", nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	env := loadTestEnv(t, "home", minimalSbxenv, "")
 
 	bom, err := ComputeBoM(env, nil, nil)
 	if err != nil {
@@ -220,63 +147,12 @@ func TestFingerprint_ChangesOnEveryFingerprintedFact(t *testing.T) {
 	}
 }
 
-// ── every SHOWN summary fact is fingerprinted ─────────────────────────────
-
-// TestFingerprint_EveryShownFactIsFingerprinted proves the reverse
-// direction from the mutation table above: mutate exactly what
-// renderCounts prints for host commands/services/credentials/mounts and
-// confirm the fingerprint moves too — the "no cosmetic-only rendering"
-// half of AC-66's pairing.
-func TestFingerprint_EveryShownFactIsFingerprinted(t *testing.T) {
-	env, _ := hostexecFixture(t, "work")
-	bom, err := ComputeBoM(env, prdMounts(), noBareLookPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var buf bytes.Buffer
-	renderCounts(&buf, bom)
-	shown := buf.String()
-
-	for _, want := range []string{
-		"github-mcp", "warehouse-mcp", "warehouse-proxy", "19443",
-		"op://Personal/Anthropic/api-key", "api.anthropic.com",
-		"WAREHOUSE_TOKEN", "/Users/alice/dev/work-pix-env", "(rw)",
-	} {
-		if !strings.Contains(shown, want) {
-			t.Fatalf("renderCounts output missing %q; fixture/render drifted:\n%s", want, shown)
-		}
-	}
-
-	base, err := Fingerprint(bom)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bom.HostCommands[0].Name = "renamed"
-	changed, err := Fingerprint(bom)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if base == changed {
-		t.Fatal("renaming a rendered host command name must change the fingerprint")
-	}
-}
-
 // ── interpolation metadata present, values never shown ───────────────────
 
 func TestBoM_InterpolationsShowVarAndKeyPathNeverResolvedValue(t *testing.T) {
-	tempConfig(t)
-	cfg := loadConfig(t)
-	root := t.TempDir()
-	writeEnvFile(t, root, ".sbxenv.yaml", "schemaVersion: \"1\"\nenv:\n  PIX_MEMORY_SCOPE: ${MEMORY_SCOPE}\n")
-	if _, err := Register(cfg, "home", root); err != nil {
-		t.Fatal(err)
-	}
 	t.Setenv("MEMORY_SCOPE", "super-secret-resolved-value")
+	env := loadTestEnv(t, "home", "schemaVersion: \"1\"\nenv:\n  PIX_MEMORY_SCOPE: ${MEMORY_SCOPE}\n", "")
 
-	env, err := Load(cfg, nil, "home", nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	bom, err := ComputeBoM(env, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -286,16 +162,6 @@ func TestBoM_InterpolationsShowVarAndKeyPathNeverResolvedValue(t *testing.T) {
 	}
 	if bom.Interpolations[0].Var != "MEMORY_SCOPE" || bom.Interpolations[0].KeyPath != "env.PIX_MEMORY_SCOPE" {
 		t.Fatalf("Interpolations[0] = %+v, want Var=MEMORY_SCOPE KeyPath=env.PIX_MEMORY_SCOPE", bom.Interpolations[0])
-	}
-
-	var buf bytes.Buffer
-	renderCounts(&buf, bom)
-	got := buf.String()
-	if !strings.Contains(got, "${MEMORY_SCOPE}") || !strings.Contains(got, "env.PIX_MEMORY_SCOPE") {
-		t.Fatalf("interpolation line missing var/keypath:\n%s", got)
-	}
-	if strings.Contains(got, "super-secret-resolved-value") {
-		t.Fatalf("resolved value leaked into review output:\n%s", got)
 	}
 
 	fp, err := Fingerprint(bom)
@@ -309,19 +175,8 @@ func TestBoM_InterpolationsShowVarAndKeyPathNeverResolvedValue(t *testing.T) {
 
 // ── noVerify: displayed and fingerprint-changing ─────────────────────────
 
-func TestBoM_NoVerifyDisplaysAndChangesFingerprint(t *testing.T) {
-	tempConfig(t)
-	cfg := loadConfig(t)
-
-	withoutRoot := t.TempDir()
-	writeEnvFile(t, withoutRoot, ".sbxenv.yaml", "schemaVersion: \"1\"\nregistries:\n  registry.example.com:\n    ref: op://Personal/Registry/token\n")
-	if _, err := Register(cfg, "without", withoutRoot); err != nil {
-		t.Fatal(err)
-	}
-	withoutEnv, err := Load(cfg, nil, "without", nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestBoM_NoVerifyChangesFingerprintAndRaisesTier1(t *testing.T) {
+	withoutEnv := loadTestEnv(t, "without", "schemaVersion: \"1\"\nregistries:\n  registry.example.com:\n    ref: op://Personal/Registry/token\n", "")
 	withoutBoM, err := ComputeBoM(withoutEnv, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -331,15 +186,7 @@ func TestBoM_NoVerifyDisplaysAndChangesFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	withRoot := t.TempDir()
-	writeEnvFile(t, withRoot, ".sbxenv.yaml", "schemaVersion: \"1\"\nregistries:\n  registry.example.com:\n    ref: op://Personal/Registry/token\n    noVerify: true\n")
-	if _, err := Register(cfg, "with", withRoot); err != nil {
-		t.Fatal(err)
-	}
-	withEnv, err := Load(cfg, nil, "with", nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	withEnv := loadTestEnv(t, "with", "schemaVersion: \"1\"\nregistries:\n  registry.example.com:\n    ref: op://Personal/Registry/token\n    noVerify: true\n", "")
 	withBoM, err := ComputeBoM(withEnv, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -355,15 +202,10 @@ func TestBoM_NoVerifyDisplaysAndChangesFingerprint(t *testing.T) {
 	if !withBoM.Tier1() {
 		t.Fatal("a noVerify registry must raise Tier1")
 	}
-
-	var buf bytes.Buffer
-	renderCounts(&buf, withBoM)
-	if !strings.Contains(buf.String(), "no-verify registry") || !strings.Contains(buf.String(), "registry.example.com") {
-		t.Fatalf("noVerify must be displayed, got:\n%s", buf.String())
+	if len(withBoM.NoVerifyRegistries()) != 1 || withBoM.NoVerifyRegistries()[0].Host != "registry.example.com" {
+		t.Fatalf("NoVerifyRegistries() = %+v, want exactly one registry.example.com entry", withBoM.NoVerifyRegistries())
 	}
-	var bufWithout bytes.Buffer
-	renderCounts(&bufWithout, withoutBoM)
-	if strings.Contains(bufWithout.String(), "no-verify") {
-		t.Fatalf("a registry without noVerify must not render a no-verify line, got:\n%s", bufWithout.String())
+	if len(withoutBoM.NoVerifyRegistries()) != 0 {
+		t.Fatalf("a registry without noVerify must not appear in NoVerifyRegistries(), got %+v", withoutBoM.NoVerifyRegistries())
 	}
 }

@@ -9,58 +9,9 @@ import (
 	"strings"
 
 	"pix/host/cli"
-	"pix/host/config"
 	"pix/host/hosttrust"
 	"pix/host/sys"
 )
-
-// Resolve returns the canonical root registered under name in cfg. It is a
-// pure exact-name lookup — no prefix or fuzzy fallback (docs/design/
-// environments.md §8) — over cfg.Environments, which config.AddEnvironment
-// only ever populates with an already-canonical absolute path. Resolve
-// itself performs no path arithmetic of its own (no filepath.Abs, no
-// consulting the working directory), so the same registered name returns
-// the byte-identical root no matter what directory the calling process
-// happens to be standing in when it asks (AC-10).
-//
-// An unregistered name returns *config.UnknownEnvironmentError — the same
-// typed error config.UseEnvironment already returns — carrying the sorted
-// list of every currently registered name, so a caller can render its own
-// presentation (a "closest:" suggestion, JSON, a non-TTY short form)
-// without re-parsing Error()'s prose.
-func Resolve(cfg *config.Config, name string) (string, error) {
-	root, ok := Root(cfg, name)
-	if !ok {
-		return "", &config.UnknownEnvironmentError{Name: name, Known: Known(cfg)}
-	}
-	return root, nil
-}
-
-// NoncanonicalRootError is ResolveEnvironment's refusal when a registered
-// environment's stored root is not already exactly what config's own
-// canonicalization (config.IsCanonicalEnvironmentPath) would produce: an
-// absolute, clean path with no leading `~`. config.AddEnvironment (E1.5)
-// never persists anything else, and config.Load's own
-// dropNoncanonicalEnvironments already drops a hand-edited entry that
-// somehow reached config.toml — but a *config.Config a caller assembles
-// directly (a test, a future in-memory composition) never runs that pass at
-// all, so ResolveEnvironment applies the SAME check itself rather than
-// trusting cfg.Environments unconditionally. This is what stops a relative
-// or `~`-prefixed value from ever reaching this package's first
-// filepath.Join/os.Stat/os.Lstat, which would otherwise resolve it against
-// the CALLING PROCESS's own working directory — silently reading whatever
-// happens to sit there instead of refusing outright.
-type NoncanonicalRootError struct {
-	Name string
-	Root string
-}
-
-func (e *NoncanonicalRootError) Error() string {
-	return fmt.Sprintf(
-		"pix: environment %q's registered root is not a canonical absolute path; refusing rather than resolving it against the current directory.\n     root: %s\n     re-register it: pix env add %s <path>",
-		e.Name, e.Root, sys.ShellQuote(e.Name),
-	)
-}
 
 // ContainmentError is RefuseContainment's structured refusal (AC-11): Root
 // resolves inside Workspace, one of the writable workspaces the environment

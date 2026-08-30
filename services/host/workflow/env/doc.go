@@ -1,63 +1,80 @@
-// Package env is E1.7's new L3 workflow: the native-environment
-// registry/exact-name-resolution/location-refusal spine (docs/design/
-// environments.md §5.3, §8.1; Wave C of the native-environments delivery,
-// units.json E1.7). It composes config (L0), hosttrust (L1) and envinfo (L1)
-// and owns nothing they already own.
+// Package env is the v2 native-environment L3 workflow (docs/design/
+// pix-v2-surface.md §3.4, docs/design/pix-v2-architecture.md §6): an
+// environment IS a directory under $PIX_HOME/envs/<name>/ declaring
+// .sbxenv.yaml (native sbx grammar) and an optional pix.toml sidecar. There
+// is no registration database — Pix does not maintain one — so this
+// package has no add/edit/use/review/forget mutation API and no
+// config-registry lookup. What it does own:
 //
-// This unit is deliberately narrow — "the resolution spine only" per its
-// units.json scope line. It has NO `pix env` verb, NO command dispatch, and
-// NO host bill-of-materials rendering (that is E1.8's review.go/bom.go) or
-// CLI wiring (E1.9-E1.13's cmd/pix/env_cmd.go). What it does own:
-//
-//   - registry.go — Register/Unregister/Root/Known, each a thin wrapper over
-//     the config-owned helpers (config.AddEnvironment, config.RemoveEnvironment,
-//     the Environments map) added in E1.5. This package never reimplements
-//     canonicalization, name validation, or the sparse-Save contract — those
-//     stay config's job, and this file's whole point is that a `pix env` verb
-//     never has to reach into cfg.Environments directly.
-//   - resolve.go — Resolve (exact-name -> canonical root, typed unknown
-//     error, no prefix/fuzzy fallback: AC-10), RefuseContainment (AC-11),
-//     RefuseSymlinkedRoot/RefuseSymlinkedReference (AC-12), and the
-//     Subject/IsAccepted pair that proves repointing a name never inherits
-//     acceptance (AC-16) — the hosttrust Subject is keyed by CANONICAL ROOT,
-//     never by NAME, so a name that starts pointing somewhere else is, from
-//     hosttrust's point of view, simply a different subject with no record
-//     at all.
-//   - load.go — ResolveEnvironment (Resolve + RefuseSymlinkedRoot +
-//     RefuseContainment composed into the one root-resolution step every
-//     later stage shares) and Load: the end-to-end pre-spine composition
-//     this unit's primitives alone did not provide. Load reads the required
-//     native `.sbxenv.yaml` and optional `pix.toml` sidecar (envinfo.Parse /
-//     envinfo.ParseSidecar), builds the pre-composition Tree (envinfo.Merge
-//     + envinfo.BuildTree), validates every sidecar skill path against the
-//     caller-supplied workspaces (envinfo.ValidateSkillWorkspaces), and
-//     refuses every local referenced kit/command/executable it can name
-//     that is symlinked or ambiguously classified. It returns the typed
-//     *Environment aggregate — root, native doc/tree, optional sidecar,
-//     subject/review state — E1.8's bill-of-materials/review consumes
-//     without re-doing any of this package's work, distinguishing a
-//     usage/refusal failure (cli.UsageError, exit 2) from an operational one
-//     it cannot itself resolve (a plain error, exit 1). Still no `pix env`
-//     verb: Load is a library composition, not a command.
+//   - home.go — ValidName/ResolveIn/List/SelectName/SelectIn: the whole v2
+//     selection model. An environment stored elsewhere is a SYMLINK inside
+//     envs/, resolved AT MOST one hop (a chain is refused, never chased) so
+//     every later read, containment check, and fingerprint uses the same
+//     resolved Root. refuseUnsafeMode refuses a group- or world-writable
+//     root.
+//   - resolve.go — RefuseContainment (an environment root must not resolve
+//     inside any writable workspace it mounts), RefuseSymlinkedRoot /
+//     RefuseSymlinkedReference (a symlinked root or referenced local
+//     executable is refused), RequiresSymlinkCheck (fail-closed local-vs-
+//     remote classification), ResolveLocalCommand (bare/relative/absolute
+//     command resolution that never touches the calling process's cwd),
+//     and the Subject/IsAccepted pair a future trust rewrite may key
+//     acceptance by (hosttrust.Subject is keyed by CANONICAL ROOT, never
+//     NAME, so repointing a name never inherits acceptance).
+//   - load.go / loadhome.go — the end-to-end pre-BOM composition: read the
+//     required native `.sbxenv.yaml` and optional `pix.toml` sidecar
+//     (envinfo.Parse/ParseSidecar), build the pre-composition Tree
+//     (envinfo.Merge + envinfo.BuildTree), refuse an authored collision
+//     with either reserved built-in MCP name (envinfo.RefuseReservedMCPNames),
+//     refuse an undefined bare `${VAR}` interpolation
+//     (envinfo.RefuseUndefinedInterpolations), validate every sidecar skill
+//     path against the caller-supplied workspaces
+//     (envinfo.ValidateSkillWorkspaces), and refuse every local referenced
+//     kit/command/executable that is symlinked or ambiguously classified.
+//     LoadHome (loadhome.go) is the v2 entry point, taking an already
+//     pixhome-resolved Selected (home.go) instead of a registry lookup;
+//     load.go supplies the shared helpers (AuthoredMounts,
+//     AuthoredAdditionalMounts, workspacePaths, writableWorkspacePaths,
+//     refuseLocalReferenceSymlinks) both LoadHome and bom.go's ComputeBoM
+//     reuse.
+//   - bom.go — the canonical, pure-function-of-the-document host bill of
+//     materials (ComputeBoM) and its fingerprint (Fingerprint): every host
+//     command/service, credential target, mount expansion, MCP server,
+//     kit digest, and authored interpolation an environment would run on
+//     or hand a credential to. `pix env trust` (cmd/pix/env_cmd.go) is the
+//     one caller; this is the "complete canonical host BOM", never a
+//     two-file hash.
+//   - effective.go — ComputeEffective/RenderEffectiveDocument: the ONE
+//     preview-side caller of envinfo.RenderEffective (`pix env [NAME]
+//     --effective`), composing the SAME reserved pix-memory/pix-session
+//     built-ins a real launch adds (cmd/pix/run_env.go's own
+//     builtinMCPFacts), so a preview never shows a shape a real create
+//     would then silently add to.
+//   - runhint.go — the one-shot "you have an unregistered .sbxenv.yaml
+//     right here" hint `pix run` prints for a project workspace that
+//     carries a native file Pix was never asked to use (docs/design/
+//     pix-v2-surface.md §3.4: "Pix never auto-selects a `.sbxenv.yaml`
+//     found in a project workspace").
 //
 // # Why this is a workflow, not a capability
 //
-// It composes two L1 capabilities (hosttrust, envinfo) plus L0 config and
-// cli — exactly what an L3 workflow is for (architecture.md). It imports no
-// other workflow/* package (see arch_test.go's sibling-workflow rule) and,
-// per this unit's own scope, contains no domain knowledge envinfo or
-// hosttrust do not already own: it wires their answers together and returns
-// the caller (E1.8, E1.9, a future `pix env` verb) a resolved root, a typed
-// refusal, a trust lookup, or (load.go) the full composed result.
+// It composes L1 capabilities (hosttrust, envinfo, sandbox) plus L0
+// pixhome/config/cli — exactly what an L3 workflow is for
+// (services/host/arch_test.go). It imports no other workflow/* package
+// (the sibling-workflow rule) and contains no domain knowledge envinfo or
+// hosttrust do not already own: it wires their answers together and
+// returns the caller (cmd/pix/env_cmd.go, workflow/launch) a resolved
+// root, a typed refusal, or the full composed *Environment.
 //
 // # No process globals
 //
-// Every function here takes its inputs explicitly: a *config.Config to read
-// or mutate, a canonical root or list of workspace roots to check, a
+// Every function here takes its inputs explicitly: a pixhome.Paths to
+// read, a canonical root or list of workspace roots to check, a
 // *hosttrust.AcceptanceStore to query. None of them call config.Load,
-// os.Getwd, or any other process-global lookup on their own — a caller (a
-// future command layer) decides which config or working directory is live
-// and hands it in. This is what makes "resolves identically from any cwd"
-// (AC-10) true by construction rather than by convention: nothing in this
-// package's resolution path ever consults the process's current directory.
+// os.Getwd, or any other process-global lookup on their own (ComputeEffective
+// is the one caller that reads os.Getwd, and it does so explicitly for the
+// documented "current directory is the project workspace" contract, never
+// implicitly) — a caller decides which home or working directory is live
+// and hands it in. This is what makes exact-name resolution identical from
+// any cwd true by construction rather than by convention.
 package env
