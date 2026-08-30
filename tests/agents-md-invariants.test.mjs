@@ -1,18 +1,16 @@
-// U-W0b.08 (AC-P0-114) — AGENTS.md is always-on prompt content, so every byte
-// in it is paid for on every turn of every session. The ~15 KB launcher CLI
-// reference that used to live in it duplicated `pix help --all` and
-// docs/reference.md, both of which are generated or maintained closer to the
-// code and therefore cannot drift the way a hand-copied verb list does.
+// U-W0b.08 (AC-P0-114), carried forward into Pix v2 — AGENTS.md is always-on
+// prompt content, so every byte in it is paid for on every turn of every
+// session. It must not carry a hand-copied verb/flag catalogue (that lives in
+// `pix help --all` and docs/reference.md, both generated or maintained closer
+// to the code) and it must not silently drop a load-bearing safety property.
 //
-// Deleting prose from a file the agent reads every turn is only safe if the
-// SAFETY INVARIANTS buried in that prose survive the cut. This test is the
-// enumeration: each entry below is a property that cost a real incident to
-// learn, and each must remain stated in AGENTS.md. A future trim that removes
-// one fails here, with the invariant named.
-//
-// It also pins the two halves of the deal:
-//   * the CLI reference stays OUT (no verb/flag catalogue creeps back in), and
-//   * the pointers AGENTS.md now offers instead actually resolve.
+// The Pix v2 cutover (docs/design/pix-v2-architecture.md, docs/design/
+// pix-v2-surface.md) replaced the whole command surface and deleted
+// pix-host/packs/routing/XDG-split state. The invariant set below was
+// rewritten to match: it enumerates the v2 safety properties AGENTS.md must
+// still state, not the v1 ones (config.toml via `pix config set`, pack trust,
+// serve-stop-through-supervisor, ...) that described a system this cutover
+// removed.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -23,95 +21,89 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const agentsPath = path.join(repoRoot, "AGENTS.md");
 const agents = fs.readFileSync(agentsPath, "utf8");
 
-// The ceiling this trim bought, plus a little headroom for ordinary editing.
-// It is NOT AC-P0-111's 8 KB target for project context (see
-// tests/context-budget.test.mjs, which measures and reports that gap); it is a
-// non-regression ceiling so the deleted reference cannot quietly grow back.
+// The ceiling this trim bought, plus headroom for ordinary editing. Not
+// AC-P0-111's 8 KB project-context target; a non-regression ceiling so a
+// deleted reference cannot quietly grow back.
 const AGENTS_MD_CEILING_BYTES = 40 * 1024;
 
-// Each entry: the invariant in one line (this is the enumeration the PR body
-// quotes), and the phrases that must all still appear in AGENTS.md for it to
-// count as stated. Phrases are matched case-insensitively so a re-word of the
-// surrounding sentence does not fail the build, but deleting the fact does.
+// Each entry: the invariant in one line, and the phrases that must all still
+// appear in AGENTS.md for it to count as stated. Phrases are matched
+// case-insensitively so a re-word of the surrounding sentence does not fail
+// the build, but deleting the fact does.
 const SAFETY_INVARIANTS = [
 	{
-		id: "config-never-hand-edit",
-		invariant: "config.toml is the single runtime config, managed by `pix config set` — never hand-edited.",
-		phrases: ["config.toml", "never hand-edit", "config set"],
+		id: "pix-home-no-xdg-split",
+		invariant: "PIX_HOME is the single root; there is no XDG config/data/state/cache split.",
+		phrases: ["PIX_HOME is the single root", "no xdg", "$PIX_HOME"],
+	},
+	{
+		id: "config-single-named-writers",
+		invariant: "config.toml and secrets.env each have one named writer; there is no generic config mutation command.",
+		phrases: ["config.toml", "secrets.env", "one named writer", "no generic config mutation command"],
 	},
 	{
 		id: "implicit-launch-needs-a-tty",
-		invariant:
-			"An IMPLICIT launch (bare `pix`, or `pix DIR`) requires an interactive " +
-			"terminal; non-interactive stdin degrades to read-only status and never " +
-			"creates or attaches a sandbox.",
-		phrases: ["implicit launch", "non-interactive", "read-only status"],
+		invariant: "An implicit launch (bare `pix`) requires an interactive terminal; non-interactive stdin never creates or attaches a sandbox.",
+		phrases: ["implicit launch requires a tty", "non-interactive stdin", "never creates or attaches"],
 	},
 	{
-		id: "serve-stop-through-supervisor",
-		invariant: "`serve stop` stops a managed daemon through its supervisor, never with a bare pid SIGTERM.",
-		phrases: ["serve stop", "supervisor", "SIGTERM", "came right back"],
-	},
-	{
-		id: "serve-state-dir",
-		invariant: "Serve runtime state lives in the state dir, so `reset` cannot orphan a daemon from its pidfile.",
-		phrases: ["serve.pid", "state dir", "orphan"],
-	},
-	{
-		id: "direct-keys-1password-only",
-		invariant: "Direct API keys come from 1Password only; keyless and Ollama backends never trigger that flow.",
-		phrases: ["Direct provider keys come from 1Password only", "HARD failure", "never trigger an irrelevant 1Password flow"],
-	},
-	{
-		id: "run-refuses-only-on-positive-no-key",
-		invariant: "`run` refuses only on a positively confirmed missing model key; a transient probe failure proceeds.",
-		phrases: ["tri-state", "transient", "false refusal"],
-	},
-	{
-		id: "existing-sandbox-untouched",
-		invariant:
-			"An existing sandbox is never force-removed or replayed into; nothing recreates one implicitly (--replace is deleted); unknown sandbox state fails closed.",
-		// "--replace" alone, not "`--replace` is RETIRED/DELETED": the fact is
-		// that the flag is named and disclaimed, not which word disclaims it.
-		// Pinning the verb made a mechanism rename (retirement -> deletion) fail
-		// a build where nothing about the invariant had changed.
-		phrases: ["never force-removed", "--replace", "proof-gated `pix rm BOX`", "FAILS CLOSED"],
-	},
-	{
-		id: "pack-trust-gate",
-		invariant:
-			"Pack adoption that runs host code hits the Tier-1 gate; trust state is launcher-owned; unknown MCP classification fails closed; op:// creds only.",
-		phrases: ["Tier-1", "non-TTY fails closed", "host-state store", "NEVER in the pack payload", "op://"],
-	},
-	{
-		id: "host-mode-off-by-default",
-		invariant: "Host mode is deleted outright (not merely off by default); `host.enabled` gates no real code path.",
-		// Same loosening: "host mode" states the subject, and "host.enabled" +
-		// "no code path" carry the actual claim (the flag gates nothing real).
-		// The disclaiming verb is not the fact.
-		phrases: ["host mode", "host.enabled", "no code path"],
-	},
-	{
-		id: "secret-never-writes-values",
-		invariant: "`pix secret` never writes a secret value to disk.",
-		phrases: ["never writes a secret value to disk"],
+		id: "existing-sandbox-never-forced",
+		invariant: "An existing sandbox is never force-removed or replayed into; unknown sbx state fails closed; --force never widens the pix-* namespace.",
+		phrases: ["never force-removed or replayed into", "fails closed", "never widens the `pix-*` namespace"],
 	},
 	{
 		id: "rm-scoped-to-pix",
-		invariant: "`pix rm` only ever removes `pix-*` sandboxes.",
-		phrases: ["scoped to `pix-*` sandboxes"],
+		invariant: "`pix rm` only ever removes pix-* sandboxes it created.",
+		phrases: ["scoped to `pix-*` sandboxes only"],
+	},
+	{
+		id: "liveness-is-a-reference-lock",
+		invariant: "Liveness is proven by a reference lock bound to the recorded sbx instance ID, never a bare PID.",
+		phrases: ["reference lock bound to the recorded sbx instance", "never by a bare pid"],
+	},
+	{
+		id: "orphans-need-five-positive-proofs",
+		invariant: "`pix rm --orphans` requires five positive proofs (fresh listing, pix-* name, matching instance ID, zero reference locks, no keep marker); an unknown answer preserves the sandbox.",
+		phrases: ["five positive proofs", "any unknown answer preserves the sandbox"],
+	},
+	{
+		id: "direct-keys-1password-only",
+		invariant: "Direct provider keys come from 1Password only; keyless and Gateway-authenticated backends never trigger an irrelevant 1Password flow.",
+		phrases: ["direct provider keys come from 1password only", "never trigger an irrelevant 1password flow"],
+	},
+	{
+		id: "trust-hmac-outside-environment",
+		invariant: "Environment trust is HMAC-bound and stored outside the environment; a changed fingerprint refuses launch; --yes never skips the fingerprint check.",
+		phrases: ["hmac-bound", "stored outside the environment", "it never skips the fingerprint check", "trust review defaults to no"],
+	},
+	{
+		id: "pix-host-packs-routing-deleted",
+		invariant: "pix-host, packs, scored model routing, and the custom memory RPC are deleted outright, not merely hidden; no code path reaches any of them.",
+		phrases: ["deleted, not merely hidden", "no code path reaches any of them", "no unsandboxed host-agent mode"],
+	},
+	{
+		id: "memory-is-mcp-tools-only",
+		invariant: "Memory is operated only through MCP tools (memory_recall/remember/forget/observe/stats/status/snapshot/restore); there is no private memory protocol.",
+		phrases: ["memory_recall", "memory_remember", "never a private protocol"],
 	},
 	{
 		id: "success-words-are-probed",
-		invariant: "`ready`/`verified` are post-probe success words; `configured`/`enabled` are not success verdicts.",
-		phrases: ["Success words", "post-mutation"],
+		invariant: "`ready`/`verified` are post-probe success words; doctor never repairs, registers, restarts, or authenticates, and never prints `configured`/`enabled` as a verdict.",
+		phrases: ["success words are earned by a probe", "never repairs, registers, restarts, or authenticates"],
 	},
 ];
+
+// Markdown line-wraps a long sentence across lines; a phrase that happens to
+// straddle a wrap point should not fail this check over whitespace alone, so
+// both the haystack and the needle are compared with runs of whitespace
+// (including newlines) collapsed to one space.
+const collapse = (s) => s.replace(/\s+/g, " ").toLowerCase();
+const agentsFlat = collapse(agents);
 
 test("every enumerated safety invariant is still stated in AGENTS.md", () => {
 	const missing = [];
 	for (const { id, invariant, phrases } of SAFETY_INVARIANTS) {
-		const gone = phrases.filter((p) => !agents.toLowerCase().includes(p.toLowerCase()));
+		const gone = phrases.filter((p) => !agentsFlat.includes(collapse(p)));
 		if (gone.length) missing.push(`${id}: ${invariant}\n    missing phrase(s): ${gone.map((p) => JSON.stringify(p)).join(", ")}`);
 	}
 	assert.deepEqual(missing, [], `AGENTS.md dropped safety invariant(s):\n  ${missing.join("\n  ")}`);
@@ -121,18 +113,13 @@ test("the invariant enumeration itself is not silently shrunk", () => {
 	// Deleting a row from SAFETY_INVARIANTS is the easy way to make the test
 	// above pass while losing the invariant. Removing one now has to also edit
 	// this number, which shows up in review.
-	//
-	// 13 -> 12: "monitor ingest binds loopback by default" was retired with the
-	// monitor itself. The invariant is not weakened, it is VACUOUS -- there is no
-	// listener left to bind, and the :11437 network-allowlist entry that reached
-	// it is gone from pi-kit/spec.yaml too.
 	assert.equal(SAFETY_INVARIANTS.length, 12);
 	assert.equal(new Set(SAFETY_INVARIANTS.map((i) => i.id)).size, SAFETY_INVARIANTS.length);
 });
 
 test("AGENTS.md carries no CLI reference block", () => {
-	const launcher = section(agents, "## `pix` launcher");
-	assert.ok(launcher, "AGENTS.md must keep a `pix` launcher section (the pointers live there)");
+	const launcher = section(agents, "## Command surface");
+	assert.ok(launcher, "AGENTS.md must keep a `## Command surface` section (the pointers live there)");
 
 	// The deleted block was a verb catalogue: one bulleted entry per verb, each
 	// leading with a `pix <verb> …` code span. Three or more of those in one
@@ -140,7 +127,7 @@ test("AGENTS.md carries no CLI reference block", () => {
 	const verbBullets = launcher.split("\n").filter((l) => /^\s*[-*]\s+\*{0,2}`pix [a-z]/.test(l));
 	assert.ok(
 		verbBullets.length < 3,
-		`the launcher section is turning back into a verb reference (${verbBullets.length} verb bullets); it belongs in \`pix help --all\` and docs/reference.md:\n${verbBullets.join("\n")}`,
+		`the command-surface section is turning back into a verb reference (${verbBullets.length} verb bullets); it belongs in \`pix help --all\` and docs/reference.md:\n${verbBullets.join("\n")}`,
 	);
 
 	// Flag tables are the other shape the reference took.
@@ -157,32 +144,30 @@ test("AGENTS.md is under its non-regression size ceiling", () => {
 });
 
 test("the pointers AGENTS.md offers instead of the reference all resolve", () => {
-	const launcher = section(agents, "## `pix` launcher");
+	const launcher = section(agents, "## Command surface");
 	const docPaths = [...launcher.matchAll(/`(docs\/[A-Za-z0-9._\/-]+\.md)`/g)].map((m) => m[1]);
-	// `serve-lifecycle.md`-style bare names are relative to the `docs/design/` named alongside them.
-	const bare = [...launcher.matchAll(/`([a-z0-9-]+\.md)`/g)].map((m) => m[1]);
-	assert.ok(
-		docPaths.length + bare.length >= 3,
-		"the launcher section must point at docs/reference.md and the design docs",
-	);
-	const missing = [];
-	for (const p of docPaths) if (!fs.existsSync(path.join(repoRoot, p))) missing.push(p);
-	for (const b of bare) if (!fs.existsSync(path.join(repoRoot, "docs/design", b))) missing.push(`docs/design/${b}`);
+	assert.ok(docPaths.length >= 1, "the command-surface section must point at docs/reference.md");
+	const missing = docPaths.filter((p) => !fs.existsSync(path.join(repoRoot, p)));
 	assert.deepEqual(missing, [], `AGENTS.md points at doc(s) that do not exist: ${missing.join(", ")}`);
 	assert.ok(launcher.includes("pix help --all"), "AGENTS.md must point at the generated verb tree");
-	assert.ok(docPaths.includes("docs/reference.md"), "AGENTS.md must point at docs/reference.md");
+	assert.ok(docPaths.includes("docs/reference.md") || agents.includes("docs/\nreference.md"), "AGENTS.md must point at docs/reference.md");
 });
 
-test("docs/reference.md carries the command map AGENTS.md defers to", () => {
+test("docs/reference.md carries the command map AGENTS.md defers to, with only the v2 verb set", () => {
 	const ref = fs.readFileSync(path.join(repoRoot, "docs/reference.md"), "utf8");
 	const map = section(ref, "## 0. Command map");
 	assert.ok(map, "docs/reference.md must have a `## 0. Command map` section");
-	// LIVE verbs only. `host` used to be in this list, but it only ever appeared
-	// in the command map via the retired-verbs paragraph; the verb itself has
-	// not existed since host mode was deleted (safety invariant 9). Requiring a
-	// non-verb here made the map's own removal notice load-bearing.
-	for (const verb of ["run", "status", "doctor", "setup", "serve", "pack", "mcp", "config", "task"]) {
+	for (const verb of ["run", "ls", "rm", "task", "env", "secret", "setup", "doctor", "reset"]) {
 		assert.ok(new RegExp(`\`${verb}[ \`]`).test(map), `command map is missing \`${verb}\``);
+	}
+	// Verbs the v2 cutover deleted outright must not be listed as live rows in
+	// the command map (a "was removed" mention elsewhere in the doc is fine;
+	// this only guards the map table itself).
+	for (const verb of ["serve", "pack", "mcp", "config", "models", "agent", "uat", "resume", "status"]) {
+		assert.ok(
+			!new RegExp(`^\\|\\s*\`?${verb}\\b`, "m").test(map),
+			`command map lists a removed verb as a live row: \`${verb}\``,
+		);
 	}
 });
 

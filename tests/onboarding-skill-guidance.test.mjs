@@ -24,8 +24,14 @@ test("onboarding distinguishes disabled memory from enabled-but-stopped memory",
 	assert.match(skill, /If memory is\s+disabled, do not call it broken or tell the user to start it/s);
 });
 
-test("onboarding never claims ordinary setup creates a pack", () => {
-	assert.match(skill, /`pack\.exists` is false, say creating one is a `pack\.toml`/s);
-	assert.match(skill, /Ordinary `pix\s+setup` does not/s);
-	assert.doesNotMatch(skill, /`pix setup` \(or `pix pack new/);
+// Pix v2 deleted packs outright (docs/design/pix-v2-architecture.md §14):
+// there is no `pack.toml`, no `pack use`, and the trusted host-state payload
+// (services/host/workflow/launch/hoststate.go's HostState) carries no `pack`
+// field at all. Onboarding must not invent one.
+test("onboarding never claims or invents a pack", () => {
+	assert.doesNotMatch(skill, /pack\.active/);
+	assert.doesNotMatch(skill, /pack\.exists/);
+	assert.doesNotMatch(skill, /pack\.toml/);
+	assert.doesNotMatch(skill, /`pix pack/);
+	assert.match(skill, /Pix v2 has no pack/s);
 });

@@ -37,21 +37,21 @@ the three-agent smoke test in A5; do not independently fan out across every
 model or agent.
 
 ### A2. Memory service
-This raw curl is an explicit **harness diagnostic**, it hits the daemon directly
-to verify the service itself is up, separate from whether any memory has been
-captured yet. It is NOT how a normal agent workflow reads memory; that's the
-`memory_recall`/`memory_stats` tools (or `/recall`/`/remember`/`/forget` in the
-sandbox, `pix memory stats` on the host), which is the path to point
-someone at for actually using memory.
+This raw curl is an explicit **harness diagnostic**, it hits the `pix-memory`
+container's `/healthz` endpoint directly to verify the service itself is up,
+separate from whether any memory has been captured yet. It is NOT how a
+normal agent workflow reads memory; that's the `memory_recall`/`memory_stats`
+MCP tools (or `/recall`/`/remember`/`/forget` in the sandbox, `pix doctor` on
+the host), which is the path to point someone at for actually using memory.
 ```bash
-curl -s -m3 -X POST "${MEMORY_URL:-http://host.docker.internal:11435}" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"health"}' || echo "no memory service"
+curl -s -m3 "${MEMORY_URL:-http://host.docker.internal:11435}/healthz" || echo "no memory service"
 ```
 Reads as `{"ok":true,"vector":<bool>,"capture":<bool>,"captureReason":"<string>","watcherModel":"<name>"}`.
-`ok` means the daemon answered at all, "no memory service" (a failed curl)
-means the host hasn't started it (`make memory-serve` / `pix serve` on the
-host); the harness still works, recall is just empty. Given `ok`, report the
-other fields as **daemon-reported state**, not proof of a live inference:
+`ok` means the container answered at all, "no memory service" (a failed curl)
+means the host hasn't started or reconciled it (`pix setup` on the host, or
+`docker restart pix-memory` for a wedged-but-running container); the harness
+still works, recall is just empty. Given `ok`, report the other fields as
+**container-reported state**, not proof of a live inference:
 `vector:true` means the startup embedding probe succeeded, but a later failure
 can still force keyword-only fallback; `capture:true` means the watcher is not
 currently latched unavailable, but it does not prove the next chat request will

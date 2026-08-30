@@ -1,5 +1,16 @@
 # Host UAT
 
+Status: **PRE-V2**. This document and the script it certifies
+(`scripts/macos/verify-pix-lifecycle.sh`) describe the pre-cutover host
+surface (`pix-host`, `pix serve`, `pix mcp`, `pix pack`, `pix uat`), not the
+accepted Pix v2 command surface (`docs/design/pix-v2-surface.md`). Neither
+has been migrated yet. Do not run the commands below against a v2 build; the
+v2 Host UAT gate is `docs/design/pix-v2-architecture.md` §16, and a rewritten
+version of this document should replace this one when the script is ported.
+Kept as a historical/pending record, not as live instruction.
+
+---
+
 An agent working inside a pix sandbox cannot run `make load` / `make run` —
 those need the HOST's Docker + `sbx` CLI, which the sandbox has no access to
 (see AGENTS.md, "Build → load → run"). This is what a **human** runs on their
