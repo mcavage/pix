@@ -13,8 +13,10 @@ import (
 	"os"
 
 	"pix/host/cli"
+	"pix/host/container"
 	"pix/host/hostenv"
 	"pix/host/mcp"
+	"pix/host/pixhome"
 	"pix/host/sandbox"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
@@ -78,6 +80,18 @@ func (c *setupCmd) hostArgs() []string {
 }
 
 func (c *setupCmd) Run(d *cli.Deps) error {
+	// The v2 PIX_HOME phase runs FIRST and unconditionally: idempotently
+	// establish ~/.pix (pixhome.Init), then reconcile the one named
+	// pix-memory container and register/verify its reserved sbx MCP name
+	// (provision.Setup, the pixhome.go path — distinct from the v1 host phase
+	// below, which still owns packs/mcp servers/models). Neither step
+	// depends on the (still-live, v1) workspace config, and a failure here
+	// is reported but does not block the v1 phase: an operator with no
+	// Docker yet should still be able to finish everything else setup does.
+	if err := c.runHomeSetup(d); err != nil {
+		fmt.Fprintf(d.Err, "pix setup: pix home: %v\n", err)
+	}
+
 	hostArgs := c.hostArgs()
 
 	env := defaultShellEnv()
@@ -148,6 +162,55 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 	return runSetupHandoff(c.Dir, name, state, d.Out, func(argv []string) error {
 		return dispatchRun(d, argv)
 	})
+}
+
+// runHomeSetup runs the v2 pixhome phase: pixhome.Init, then
+// provision.Setup's reconcile of the named pix-memory container and its
+// reserved sbx MCP registration, with concrete production adapters (real
+// git/Docker runners, a real HTTP readiness prober, a real `sbx mcp`
+// registrar). It never touches the v1 pack/mcp/models machinery below.
+func (c *setupCmd) runHomeSetup(d *cli.Deps) error {
+	home, err := pixhome.Resolve()
+	if err != nil {
+		return err
+	}
+	spec := homeContainerSpec(home)
+	res, err := provision.Setup(provision.Deps{
+		Home:            home,
+		ContainerRunner: container.DefaultRunner,
+		Prober:          httpProber{},
+		ContainerSpec:   spec,
+		ConfirmReplace:  confirmContainerReplace(d),
+		MCP:             sbxMemoryRegistrar{},
+	})
+	if err != nil {
+		return err
+	}
+	if !c.Verbose {
+		return nil
+	}
+	fmt.Fprintf(d.Err, "pix setup: pix home %s: container %s\n", home.Home, res.Container.Action)
+	return nil
+}
+
+// confirmContainerReplace is the exact prompt architecture §9.1 requires
+// before a mismatched pix-memory container is stopped, removed, and
+// recreated: show the drift, ask, default to declining on anything that
+// cannot ask (non-interactive, no confirmation requested with --yes).
+func confirmContainerReplace(d *cli.Deps) func(current container.Info, want container.Spec) bool {
+	return func(current container.Info, want container.Spec) bool {
+		fmt.Fprintf(d.Err, "pix setup: the running pix-memory container does not match the pinned release:\n")
+		fmt.Fprintf(d.Err, "  running: %s (fingerprint %s)\n", current.Image, current.Fingerprint())
+		fmt.Fprintf(d.Err, "  wanted:  %s (fingerprint %s)\n", want.Image, want.Fingerprint())
+		if !d.Interactive {
+			fmt.Fprintln(d.Err, "pix setup: refusing to replace it on a non-interactive terminal; rerun interactively or remove it yourself: docker rm -f pix-memory")
+			return false
+		}
+		fmt.Fprint(d.Err, "Replace it? Its /data volume is preserved either way. [y/N] ")
+		var line string
+		fmt.Fscanln(d.In, &line)
+		return line == "y" || line == "Y"
+	}
 }
 
 // dispatchRun re-enters the ROOT for the handoff launch, so setup cannot acquire

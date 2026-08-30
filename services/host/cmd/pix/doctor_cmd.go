@@ -10,7 +10,9 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/container"
 	"pix/host/health"
+	"pix/host/pixhome"
 	"pix/host/workflow/doctor"
 	"pix/host/workspace"
 )
@@ -37,6 +39,32 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 		}
 		return doctor.RenderRecreates(d.Out, dir)
 	}
+	// The v2 PIX_HOME probe set (release identity, Docker/Git, the pix-memory
+	// container, its reserved MCP registration) runs first and read-only,
+	// independent of whether the (still-live, v1) workspace config loads at
+	// all — CheckHome never mutates anything, so a config load failure below
+	// must not suppress it. A required gap here fails the process even when
+	// every v1 check below still passes.
+	homeFailed := false
+	if home, herr := pixhome.Resolve(); herr == nil {
+		spec := homeContainerSpec(home)
+		ctx, cancel := context.WithTimeout(context.Background(), health.DefaultBudget)
+		snap := doctor.CheckHome(ctx, doctor.HomeDeps{
+			Home:            home.Home,
+			Exec:            execChecker{},
+			ContainerRunner: container.DefaultRunner,
+			ContainerSpec:   spec,
+			Prober:          httpProber{},
+			// MCPLister is deliberately unset: sbx has no machine-readable MCP
+			// listing (homeadapters.go's own doc comment), so this probe
+			// reports StatusUnknown rather than guessing a URL match.
+		}, health.DefaultBudget)
+		cancel()
+		if !c.JSON {
+			health.RenderDoctorWith(d.Out, snap, health.DoctorOpts{Verbose: c.Verbose})
+		}
+		homeFailed = snap.ExitCode() != health.ExitOK
+	}
 	cfg, profile, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		// Doctor DOES fail here: an unreadable config is a verified gap in something
@@ -54,6 +82,9 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 	}
 	if code != health.ExitOK {
 		return cli.SilentError{Code: code}
+	}
+	if homeFailed {
+		return cli.SilentError{Code: health.ExitNotReady}
 	}
 	return nil
 }

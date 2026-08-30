@@ -37,6 +37,7 @@ type RunOpts struct {
 	Env     string
 	EnvName string
 	Model   string   // --model M: active pi model (passed through to pi)
+	Resume  string   // --resume SESSION: resume this pi session, on every path (create or attach)
 	Models  []string // create-time callable model cycle, derived from probed bindings
 	Pack    string   // --pack PATH: active pack for this run (overrides config.Pack)
 	// Keep is -k/--keep: bind a sticky, identity-bound keep marker to this
@@ -190,6 +191,9 @@ func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
 	if o.Model != "" {
 		piArgs = append(piArgs, "--model", o.Model)
 	}
+	if o.Resume != "" {
+		piArgs = append(piArgs, "--resume", o.Resume)
+	}
 	if len(o.Models) > 0 {
 		piArgs = append(piArgs, "--models", strings.Join(o.Models, ","))
 	}
@@ -246,6 +250,9 @@ func BuildReattachArgs(o RunOpts) []string {
 	var piArgs []string
 	if o.Model != "" {
 		piArgs = append(piArgs, "--model", o.Model)
+	}
+	if o.Resume != "" {
+		piArgs = append(piArgs, "--resume", o.Resume)
 	}
 	piArgs = append(piArgs, o.Passthrough...)
 	if len(piArgs) > 0 {

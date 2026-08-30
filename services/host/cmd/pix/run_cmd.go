@@ -91,18 +91,13 @@ func (c *runCmd) Help() string { return runDescription }
 type runCmd struct {
 	Dir string `arg:"" optional:"" default:"." help:"Workspace to launch in (default: the current directory)."`
 
-	Dev      bool     `help:"Mode B: use the local checkout kit + load skills live from it (needs a checkout)."`
-	Skills   []string `help:"Mount an extra skill tree and load it live (repeatable)." placeholder:"DIR"`
-	Kit      []string `help:"Override the KIT (image + entrypoint + creds + egress + skills) instead of the auto git/local pin (repeatable; path or git+URL)." placeholder:"K"`
-	KitRef   string   `help:"Pin the auto kit to a git ref (v0.1.0, main) instead of the latest stable release." placeholder:"REF"`
-	Template string   `help:"Override only the IMAGE sbx boots (the ref 'make load' prints). Orthogonal to --kit." placeholder:"REF"`
-	Mcp      []string `help:"Attach an MCP server at creation (repeatable)." placeholder:"M"`
-	Pack     string   `help:"Active pack for this run (path or git-url); overrides the configured one." placeholder:"P"`
-	Name     string   `help:"Sandbox name." placeholder:"N"`
-	Env      string   `help:"Launch under a registered environment by EXACT name (never a prefix); overrides the configured default for this run only." placeholder:"NAME"`
-	Model    string   `help:"Active pi model (passed through to pi)." placeholder:"M"`
-	Task     string   `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
-	Keep     bool     `short:"k" help:"Keep the sandbox when the last shell exits: a sticky, identity-bound marker the teardown/orphan reaper refuses on (an explicit 'pix rm' still removes it)."`
+	Dev    bool   `help:"Mode B: use the local checkout kit + load skills live from it (needs a checkout)."`
+	Name   string `help:"Sandbox name." placeholder:"N"`
+	Env    string `help:"Launch under a named environment (an exact ~/.pix/envs/<name> directory, never a prefix); overrides the machine default for this run only." placeholder:"NAME"`
+	Model  string `help:"Active pi model (passed through to pi)." placeholder:"M"`
+	Resume string `help:"Resume this pi session (passed through to pi on every attach or create)." placeholder:"SESSION"`
+	Task   string `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
+	Keep   bool   `short:"k" help:"Keep the sandbox when the last shell exits: a sticky, identity-bound marker the teardown/orphan reaper refuses on (an explicit 'pix rm' still removes it)."`
 
 	// PiArg is the `--` tail, rewritten by rewriteRunPassthrough. Hidden because a
 	// user never types it: they type `-- <pi args>`, documented above.
@@ -132,19 +127,12 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 	o := launch.RunOpts{
 		Workspace:   c.Dir,
 		Dev:         c.Dev,
-		Skills:      c.Skills,
-		Kits:        c.Kit,
-		Template:    c.Template,
-		MCP:         c.Mcp,
 		Name:        c.Name,
 		Env:         c.Env,
 		Model:       c.Model,
-		Pack:        c.Pack,
+		Resume:      c.Resume,
 		Passthrough: c.PiArg,
 		Keep:        c.Keep,
-	}
-	if c.KitRef != "" {
-		o.KitRef = launch.NormalizeKitRef(c.KitRef)
 	}
 	// `--task NAME` is the `pix task run NAME` shorthand: task.Resolve does the work
 	// and this fills the ordinary DIR + --name shape, so no sandbox-lifecycle code is
