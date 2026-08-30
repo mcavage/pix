@@ -1,11 +1,11 @@
 // onboarding.go — the HOST half of the agentic first-run flow
-// (docs/design/onboarding.md), plus `pix setup`'s argv parser. The interactive
-// experience lives INSIDE a pix sandbox: the agent writes identity to the memory
-// service (data plane) and PROPOSES host config by writing
-// <workspace>/.pix/onboarding.json (control plane). Here is the schema, its
-// allowlist validation, the applier and the reconcile-on-next-run path. `pix
-// setup` is the only caller, and it reuses provision's own composition
-// (HostBinary, Register, VerifyCatalogMCPReady).
+// (docs/design/onboarding.md). The interactive experience lives INSIDE a pix
+// sandbox: the agent writes identity to the memory service (data plane) and
+// PROPOSES host config by writing <workspace>/.pix/onboarding.json (control
+// plane). Here is the schema, its allowlist validation, the applier and the
+// reconcile-on-next-run path. `pix run` calls ReconcileOnboarding on the
+// workspace it is about to attach to; it reuses this package's own
+// composition (Injected.Register) and VerifyCatalogMCPReady.
 //
 // SECURITY MODEL: the sandbox is network-fenced and non-root and can only PROPOSE
 // config within OnboardingResult's fixed field set. Unmarshalling into a typed
@@ -206,83 +206,28 @@ func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 	fmt.Fprintf(out, "Applied %d onboarding change(s) to %s.\n", len(applied), config.Path())
 }
 
-// Opts is `pix setup`'s host-phase flag set. kong owns the user-facing grammar and
-// hands the host phase the argv its flags COMPOSE TO, so this parser accepts what
-// setup_cmd.go emits and nothing else. Retired spellings are answered by the
-// command layer, never a second time here.
-type Opts struct {
-	Mcp        []string
-	Model      string
-	Apply      bool
-	AssumeYes  bool
-	PullModels bool // `pix setup`'s explicit local-model download consent (S08)
-	Packs      []string
-	WithSetup  []string
+// Composition is the composition ReconcileOnboarding declares but cannot
+// perform itself: registering MCP servers with credentials resolved over
+// secret. The command layer (cmd/pix) fills this in one statement at
+// startup, since provision may not import the sibling workflow that
+// performs the registration.
+type Composition struct {
+	Register func(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
+		servers map[string]config.MCPServer) error
 }
 
-// ParseSetupArgs parses the host phase's argv. --models is ACCEPTED AND
-// DISCARDED: kong still declares it, so refusing it here would turn a no-op
-// into "unknown flag", but nothing reads it (`pix models` owns roster
-// restriction) — so it gets no field to pretend otherwise.
-//
-// --google-workspace and --credentials are gone entirely, along with the kong
-// flags that fed them. They named a vendor transaction that no longer exists in
-// core: Google Workspace is an ordinary pack-declared MCP server now, so a
-// hidden flag promising to "route setup through the Google Workspace
-// transaction" was an offer pix could not honour.
-func ParseSetupArgs(argv []string) (Opts, error) {
-	var o Opts
-	for i := 0; i < len(argv); i++ {
-		a := argv[i]
-		next := func() (string, error) {
-			if i+1 >= len(argv) {
-				return "", fmt.Errorf("%s needs a value", a)
-			}
-			i++
-			return argv[i], nil
-		}
-		var err error
-		switch {
-		case a == "--apply":
-			o.Apply = true
-		case a == "--yes" || a == "-y" || a == "--non-interactive":
-			o.AssumeYes = true
-		case a == "--pull-models":
-			o.PullModels = true
-		case a == "--models":
-			_, err = next()
-		case strings.HasPrefix(a, "--models="):
-		case a == "--mcp":
-			var v string
-			if v, err = next(); err == nil {
-				o.Mcp = append(o.Mcp, v)
-			}
-		case strings.HasPrefix(a, "--mcp="):
-			o.Mcp = append(o.Mcp, strings.TrimPrefix(a, "--mcp="))
-		case a == "--model":
-			o.Model, err = next()
-		case strings.HasPrefix(a, "--model="):
-			o.Model = strings.TrimPrefix(a, "--model=")
-		case a == "--pack":
-			var v string
-			if v, err = next(); err == nil {
-				o.Packs = append(o.Packs, v)
-			}
-		case strings.HasPrefix(a, "--pack="):
-			o.Packs = append(o.Packs, strings.TrimPrefix(a, "--pack="))
-		case a == "--with":
-			var v string
-			if v, err = next(); err == nil {
-				o.WithSetup = append(o.WithSetup, v)
-			}
-		case strings.HasPrefix(a, "--with="):
-			o.WithSetup = append(o.WithSetup, strings.TrimPrefix(a, "--with="))
-		default:
-			return o, fmt.Errorf("unknown flag %q", a)
-		}
-		if err != nil {
-			return o, err
-		}
-	}
-	return o, nil
-}
+// Injected is the one Composition value the command layer fills. A nil
+// Register is reported to the caller, never assumed to have succeeded.
+var Injected = Composition{}
+
+// Description is the prose above setup's GENERATED usage: what `pix setup`
+// guarantees and how a repeat behaves. The flag list is not here — the
+// command struct's tags are the flag list.
+const Description = `Guided setup: initialize PIX_HOME, reconcile the pix-memory container, and
+register its reserved sbx MCP name. Idempotent and safe to rerun — nothing is
+applied that a fresh probe of the same host would not find missing.
+
+It does not install sbx, images, or a strict kit, does not create an
+environment, does not wire a model provider key, and does not launch a
+sandbox: pix doctor reports the rest, and pix run starts a session.
+`

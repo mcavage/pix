@@ -9,7 +9,11 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
+	"pix/host/sys"
 )
+
+func realEnv() hostenv.Env { return hostenv.Env{System: sys.Real{}, Quiet: true} }
 
 // The onboarding half of provision, tested against REAL boundaries like the rest
 // of this package: a real config file on disk and the package's own
@@ -100,19 +104,13 @@ func TestValidateOnboarding_CatalogIsTheAllowlist(t *testing.T) {
 	}
 }
 
-// validateOnboardingShape is the PRE-ADOPTION half, and the reason it exists at
-// all: `pix setup --pack X --mcp Y` must validate its own flags before X is
-// adopted, and at that moment no pack has declared anything. Checking
-// admissibility there would reject exactly the case setup is for. So the shape
-// check accepts a syntactically valid undeclared name, and the admissibility
-// check (validateOnboarding, run once a pack is present) is what refuses it.
+// validateOnboardingShape checks only syntax (version, whitespace), never
+// name admissibility — that is validateOnboarding's job, once the shipped
+// catalog is in view to answer it.
 func TestValidateOnboardingShape_PreAdoptionAcceptsUndeclaredNames(t *testing.T) {
 	r := &OnboardingResult{Version: 1, MCP: []string{"not-yet-declared"}}
 	if err := validateOnboardingShape(r); err != nil {
 		t.Errorf("shape validation must not require a declaration: %v", err)
-	}
-	if err := ValidateSetupSemantics(Opts{Packs: []string{"/some/pack"}, Mcp: []string{"not-yet-declared"}}); err != nil {
-		t.Errorf("`pix setup --pack ... --mcp <undeclared>` must pass pre-adoption validation: %v", err)
 	}
 	// But it is still SHAPE: version and syntax are refused here, not later.
 	for name, bad := range map[string]*OnboardingResult{
@@ -124,13 +122,9 @@ func TestValidateOnboardingShape_PreAdoptionAcceptsUndeclaredNames(t *testing.T)
 			t.Errorf("%s: expected a shape rejection", name)
 		}
 	}
-	// And admissibility still bites once a pack is present to answer.
+	// And admissibility still bites: an undeclared, non-catalog name is refused.
 	if err := validateOnboarding(r, map[string]config.MCPServer{"other": {Command: "x"}}); err == nil {
-		t.Error("post-adoption validation must refuse a name no pack declares")
-	}
-	// --with without --pack is a usage error, not a shape one.
-	if err := ValidateSetupSemantics(Opts{WithSetup: []string{"account"}}); err == nil {
-		t.Error("--with without --pack must be refused")
+		t.Error("post-adoption validation must refuse an undeclared, non-catalog name")
 	}
 }
 
@@ -212,41 +206,5 @@ func TestReconcileOnboarding_LeavesFileWhenNotApplied(t *testing.T) {
 				t.Errorf("nothing may be persisted: mcp=%v err=%v", cfg.MCP, err)
 			}
 		})
-	}
-}
-
-func TestParseSetupArgs(t *testing.T) {
-	o, err := ParseSetupArgs([]string{"--mcp", "notes", "--mcp=notion", "--model", "m",
-		"--pack", "one", "--pack=two", "--with", "optional", "--pull-models", "--yes",
-		// accepted and discarded: kong still declares it, nothing reads it
-		"--models=a,b"})
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if o.Model != "m" || !o.AssumeYes || !o.PullModels {
-		t.Errorf("parsed = %+v", o)
-	}
-	if got := strings.Join(o.Mcp, ","); got != "notes,notion" {
-		t.Errorf("mcp = %q", got)
-	}
-	if got := strings.Join(o.Packs, ","); got != "one,two" {
-		t.Errorf("packs = %q (order is the invocation order)", got)
-	}
-	if got := strings.Join(o.WithSetup, ","); got != "optional" {
-		t.Errorf("with = %q", got)
-	}
-	if _, err := ParseSetupArgs([]string{"--model"}); err == nil {
-		t.Error("a value flag without its value should error")
-	}
-	// The retired vendor flags must now be REJECTED, not silently swallowed.
-	// They named a Google Workspace transaction that no longer exists, and
-	// quietly accepting them would let a stale script look like it worked.
-	for _, retired := range []string{"--google-workspace", "--credentials"} {
-		if _, err := ParseSetupArgs([]string{retired}); err == nil {
-			t.Errorf("%s is retired and must be rejected, not accepted-and-discarded", retired)
-		}
-	}
-	if _, err := ParseSetupArgs([]string{"--bogus"}); err == nil {
-		t.Error("an unknown flag should error")
 	}
 }

@@ -266,62 +266,6 @@ func Path() string {
 	return filepath.Join(dir, "config.toml")
 }
 
-// ServePidPath resolves the absolute path of serve.pid — the pidfile `pix-host
-// serve` writes so `serve stop`/`serve status` can signal the supervisor SAFELY.
-func ServePidPath() string {
-	dir, err := StateDir()
-	if err != nil {
-		return "serve.pid"
-	}
-	return filepath.Join(dir, "serve.pid")
-}
-
-// ServeUnitsPath is <state-dir>/serve.units.json — the supervision-tree snapshot
-// `pix-host serve` publishes and `pix serve status --json` / `pix doctor --json`
-// read back. It lives in the STATE dir with the pidfile, so the same "move the
-// config aside" move can never leave a stale snapshot beside a live daemon.
-func ServeUnitsPath() string {
-	dir, err := StateDir()
-	if err != nil {
-		return "serve.units.json"
-	}
-	return filepath.Join(dir, "serve.units.json")
-}
-
-// ServeSpawnLockPath is the flock file the launcher's lazy auto-start takes around
-// its spawn decision (double-checked locking against a concurrent `pix run`).
-func ServeSpawnLockPath() string {
-	dir, err := StateDir()
-	if err != nil {
-		return "serve.spawn.lock"
-	}
-	return filepath.Join(dir, "serve.spawn.lock")
-}
-
-// ServeLazyMarkerPath is the marker the launcher writes after a successful LAZY
-// detached spawn: a lazy daemon is safe to stop-and-restart, a foreground one not.
-func ServeLazyMarkerPath() string {
-	dir, err := StateDir()
-	if err != nil {
-		return "serve.lazy"
-	}
-	return filepath.Join(dir, "serve.lazy")
-}
-
-// PidFileLockPath is the STABLE sibling flock path for a pid-bearing file
-// (serve.pid, serve.lazy): every writer (the daemon's own writeServePidFile,
-// the launcher's recordSpawnedServePid/markLazy) and the daemon's own
-// compare-and-delete cleanup (removeOwnedPidFile) all serialize on THIS path
-// via sys.Lock/withFlock, never on the guarded file itself. That matters
-// because the guarded file gets REPLACED (removed, then rewritten by a
-// respawned daemon) across its lifetime, and locking a path that can be
-// unlinked out from under an open fd is the TOCTOU lock.go's flockHandle
-// guards against elsewhere in this tree — a fixed, never-removed sibling
-// path sidesteps that class entirely rather than re-solving it here.
-func PidFileLockPath(path string) string {
-	return path + ".lock"
-}
-
 // EnvRegistryLockPath is the flock every `pix env` registry/default
 // mutation (add, use, forget) serializes on around its fresh-load ->
 // mutate -> save of config.toml — Wave C security L1: without one lock
@@ -351,16 +295,6 @@ func StateDir() (string, error) {
 	return filepath.Join(home, ".local", "state", "pix"), nil
 }
 
-// ServeLogPath is <state-dir>/serve.log — where a lazily auto-started
-// `pix-host serve` writes its stdout/stderr.
-func ServeLogPath() string {
-	dir, err := StateDir()
-	if err != nil {
-		return "serve.log"
-	}
-	return filepath.Join(dir, "serve.log")
-}
-
 // DataDir resolves the per-user DATA dir: $XDG_DATA_HOME/pix, else
 // ~/.local/share/pix — the durable root for the memory store, backups, routing.
 func DataDir() (string, error) {
@@ -374,18 +308,9 @@ func DataDir() (string, error) {
 	return filepath.Join(home, ".local", "share", "pix"), nil
 }
 
-// PackDir is the per-user DEFAULT PACK root: $XDG_DATA_HOME/pix/default, else
-// ~/.local/share/pix/default — a proper pack (pack.toml + skills/ + knowledge/).
-func PackDir() string { return filepath.Join(dataDirOr(), "default") }
-
 // ContextDir is the always-on, user-authored context layer: DATA (durable
 // AGENTS.md + skills), personal — team context belongs in a pack.
 func ContextDir() string { return filepath.Join(dataDirOr(), "context") }
-
-// PacksDir is where adopted REMOTE packs are cloned:
-// $XDG_DATA_HOME/pix/packs, else ~/.local/share/pix/packs. Each lives
-// at <PacksDir>/<name>. Distinct from PackDir (the single default pack).
-func PacksDir() string { return filepath.Join(dataDirOr(), "packs") }
 
 // EnvsDir is where a zero-path `pix env add NAME` scaffolds a new native
 // environment: $XDG_DATA_HOME/pix/envs, else ~/.local/share/pix/envs —
@@ -404,22 +329,6 @@ func dataDirOr() string {
 		return "pix"
 	}
 	return d
-}
-
-// MemoryDBPath resolves the live memory sqlite path: $MEMORY_DB if set, else
-// <data-dir>/memory/memory.db. Shared by the daemon and `restore` so both point
-// at the SAME store (and the SAME lock dir, below).
-func MemoryDBPath() string {
-	if p := strings.TrimSpace(os.Getenv("MEMORY_DB")); p != "" {
-		return p
-	}
-	return filepath.Join(dataDirOr(), "memory", "memory.db")
-}
-
-// MemoryLockPath is the advisory flock file the memory daemon and `restore` both
-// take around the sqlite store: .memory.lock beside the db (honoring MEMORY_DB).
-func MemoryLockPath() string {
-	return filepath.Join(filepath.Dir(MemoryDBPath()), ".memory.lock")
 }
 
 // removedServices are service names that no longer exist (e.g. gws, which the

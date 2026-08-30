@@ -23,6 +23,22 @@ import (
 // failure must leave PIX_HOME exactly as it was, so ResetHome never renames
 // anything until both prior steps are DONE, not merely attempted.
 
+// Sweep is the injected sandbox teardown the command layer wires to `pix rm
+// --all` (proof-gated, never a second force-removal seam) — see ResetHome's
+// own doc comment.
+type Sweep func(out, errOut io.Writer) error
+
+// Description is the prose above reset's GENERATED usage: what the verb
+// guarantees and in what order. The flag list is not here — the command
+// struct's tags are the flag list.
+const Description = `Clean slate: remove Pix-owned sandboxes, stop and remove the pix-memory
+container, then rename PIX_HOME (default ~/.pix) aside with a timestamped
+.bak-<unixts> suffix. REVERSIBLE: nothing is deleted, and the order is fixed —
+sandboxes, then the memory container proven absent, then PIX_HOME — so a
+failure at any step leaves everything before it untouched. Never follows a
+symlinked PIX_HOME and never recurses into it.
+`
+
 // HomeDeps is everything ResetHome needs from the outside world, injected so
 // a test drives the whole verb against a temp PIX_HOME with a fake sandbox
 // sweep and a fake Docker runner — no real sbx, no real Docker, no real

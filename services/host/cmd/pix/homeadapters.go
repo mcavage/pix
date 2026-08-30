@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/container"
 	"pix/host/mcp"
 	"pix/host/pixhome"
@@ -143,4 +144,14 @@ func runSbxCapturedOut(args ...string) (stdout, stderr string, err error) {
 	cmd.Stderr = &errBuf
 	err = cmd.Run()
 	return outBuf.String(), errBuf.String(), err
+}
+
+// dispatchRun re-enters the ROOT for a composed `run` invocation (task's
+// launch of a freshly created checkout), so a caller cannot acquire its own
+// copy of run's grammar: it hands `run` an argv as a user would type it.
+func dispatchRun(d *cli.Deps, argv []string) error {
+	if code := dispatch(append([]string{"run"}, argv...), d); code != 0 {
+		return cli.SilentError{Code: code}
+	}
+	return nil
 }

@@ -1,240 +1,46 @@
-// setup_cmd.go — `pix setup` as a typed root child, plus the one thing deliberately NOT
-// part of the provision loop: the agent handoff. It execs another command whose decision
-// matrix is about a sandbox that may already be alive, and a step that cannot be re-probed
-// does not belong in a loop whose contract is that the second check is authoritative. The
-// host phase is handed the argv the flags COMPOSE TO, not the one the user typed: kong
-// alone decides what a flag is. This file also binds the pack authority provision declares.
+// setup_cmd.go — `pix setup` as a typed root child (docs/design/
+// pix-v2-surface.md §3.6, pix-v2-architecture.md §12). It is the whole of
+// the v2 setup surface this launcher owns: idempotently initialize
+// PIX_HOME, record the installed release manifest, reconcile the one named
+// pix-memory container, and register/verify its reserved sbx MCP name —
+// using real adapters (os/exec git, real Docker, a real HTTP prober, a real
+// `sbx mcp` registrar). Nothing else runs here: no pack, no MCP allowlist,
+// no model-provider interview, and no sandbox handoff. `pix doctor` reports
+// the rest, and `pix run` starts a session.
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"os"
 
 	"pix/host/cli"
 	"pix/host/container"
-	"pix/host/hostenv"
 	"pix/host/pixhome"
 	"pix/host/sandbox"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/models"
 	"pix/host/workflow/provision"
 )
 
-func (c *setupCmd) Help() string { return provision.Description }
+// setupOnboardingKickoff is the first message a first-launch handoff would
+// hand the agent: deliberately short and human, because the `onboarding`
+// skill owns the actual flow.
+const setupOnboardingKickoff = "I just ran pix setup. Give me the upfront guide and help me get started."
 
-// setupCmd is the guided host provisioner. Its own flags (--no-agent,
-// --replace, --verbose) never reach the host phase; the rest are recomposed
-// into provision's argv.
-type setupCmd struct {
-	Dir string `arg:"" optional:"" default:"." help:"Workspace to provision and launch in (default: .)."`
-
-	NoAgent bool `help:"Run the HOST phase only: no sandbox, no handoff. The scripted/CI path."`
-	Verbose bool `help:"Show underlying sbx, Git, Docker and setup output, not just actions/results."`
-	Apply   bool `help:"Apply a pending .pix/onboarding.json in DIR, under a confirmation gate."`
-
-	Pack       []string `help:"Activate a pack through the host trust gate, then run its required setup hooks (repeatable)." placeholder:"PATH|URL"`
-	With       []string `help:"Also run a named optional setup hook from --pack (repeatable; invalid without --pack)." placeholder:"ID"`
-	Mcp        []string `help:"Enable an MCP server (repeatable; allowlisted)." placeholder:"NAME"`
-	Model      string   `help:"Set the ollama-bridge model." placeholder:"MODEL"`
-	Models     string   `help:"Restrict agents to these canonical catalog models." placeholder:"ID,ID"`
-	PullModels bool     `help:"Pull any CONFIRMED-missing configured local Ollama model. The only download consent setup honors."`
-	Yes        bool     `short:"y" aliases:"non-interactive" help:"Never prompt (CI)."`
-}
-
-// hostArgs recomposes the host phase's argv. Order is fixed so one invocation
-// always produces the same argv (and receipt), and every value uses `--flag=value`
-// so a value that looks like a flag cannot be re-split.
-func (c *setupCmd) hostArgs() []string {
-	var a []string
-	add := func(flag, v string) {
-		if v != "" {
-			a = append(a, flag+"="+v)
-		}
-	}
-	if c.Apply {
-		a = append(a, "--apply")
-	}
-	if c.Yes {
-		a = append(a, "--yes")
-	}
-	if c.PullModels {
-		a = append(a, "--pull-models")
-	}
-	add("--model", c.Model)
-	add("--models", c.Models)
-	for _, v := range c.Mcp {
-		add("--mcp", v)
-	}
-	for _, v := range c.Pack {
-		add("--pack", v)
-	}
-	for _, v := range c.With {
-		add("--with", v)
-	}
-	return a
-}
-
-func (c *setupCmd) Run(d *cli.Deps) error {
-	// The v2 PIX_HOME phase runs FIRST and unconditionally: idempotently
-	// establish ~/.pix (pixhome.Init), then reconcile the one named
-	// pix-memory container and register/verify its reserved sbx MCP name
-	// (provision.Setup, the pixhome.go path — distinct from the v1 host phase
-	// below, which still owns packs/mcp servers/models). Neither step
-	// depends on the (still-live, v1) workspace config, and a failure here
-	// is reported but does not block the v1 phase: an operator with no
-	// Docker yet should still be able to finish everything else setup does.
-	if err := c.runHomeSetup(d); err != nil {
-		fmt.Fprintf(d.Err, "pix setup: pix home: %v\n", err)
-	}
-
-	hostArgs := c.hostArgs()
-
-	env := defaultShellEnv()
-	env.Quiet = !c.Verbose
-	if c.Verbose {
-		_ = os.Setenv("PIX_SETUP_VERBOSE", "1")
-	}
-	parsed, err := provision.ParseSetupArgs(hostArgs)
-	if err != nil {
-		return cli.UsageError{Err: err}
-	}
-	// Validate every semantic flag/value before pack adoption or any mutation; the
-	// host phase repeats the same pure validator.
-	if err := provision.ValidateSetupSemantics(parsed); err != nil {
-		return cli.UsageError{Err: err}
-	}
-
-	// `--apply` reconciles a pending <DIR>/.pix/onboarding.json and stops: NOT
-	// provisioning, so it touches no pack, model or sandbox.
-	if c.Apply {
-		if err := launch.ValidateRunWorkspace(c.Dir, knownVerb); err != nil {
-			return cli.UsageError{Err: err}
-		}
-		provision.ReconcileOnboarding(c.Dir, env, d.In, d.Out, parsed.AssumeYes, d.Interactive)
-		return nil
-	}
-	// DIR must exist AND be a directory BEFORE the host phase mutates real host
-	// state, so a typo'd DIR fails with nothing touched.
-	if err := launch.ValidateRunWorkspace(c.Dir, knownVerb); err != nil {
-		return cli.UsageError{Err: err}
-	}
-	if err := provision.EnsureSetupSbxSession(env, d.Out, d.Interactive && !parsed.AssumeYes); err != nil {
-		return err
-	}
-	// The published base kit comes from GitHub, but a fresh sbx install trusts only
-	// docker.io: fill that one publisher allowlist entry (and the one-time global
-	// network policy) before the first handoff.
-	if err := provision.EnsureSetupSbxDefaults(env); err != nil {
-		return err
-	}
-	// An unreleased launcher uses its local checkout kit: validate it with the
-	// installed sbx parser before any mutation, so schema skew fails once.
-	if err := launch.ValidateSetupKit(version, launch.ResolveRepoRoot, launch.ValidateSbxKit); err != nil {
-		return err
-	}
-
-	// The host phase: check, apply the verified gaps, check again.
-	if err := provision.RunSetup(env, hostArgs, d.In, d.Out, d.Interactive); err != nil {
-		var usage provision.ErrUsage
-		if errors.As(err, &usage) {
-			// an argument mistake, caught before any probe or mutation
-			return cli.UsageError{Err: err}
-		}
-		return err
-	}
-	// --no-agent stops here: the host phase is the whole command.
-	if c.NoAgent {
-		return nil
-	}
-
-	// Handoff: branch on the POSITIVE state. An existing sandbox is left alone
-	// (never force-removed, never replayed into); an unprobeable sbx FAILS CLOSED.
-	name, nameOK := provision.SetupSandboxName(c.Dir)
-	state := launch.SbxUnknown
-	if nameOK && name != "" {
-		state = launch.ProbeTaskSandbox(env, name)
-	}
-	return runSetupHandoff(c.Dir, name, state, d.Out, func(argv []string) error {
-		return dispatchRun(d, argv)
-	})
-}
-
-// runHomeSetup runs the v2 pixhome phase: pixhome.Init, then
-// provision.Setup's reconcile of the named pix-memory container and its
-// reserved sbx MCP registration, with concrete production adapters (real
-// git/Docker runners, a real HTTP readiness prober, a real `sbx mcp`
-// registrar). It never touches the v1 pack/mcp/models machinery below.
-func (c *setupCmd) runHomeSetup(d *cli.Deps) error {
-	home, err := pixhome.Resolve()
-	if err != nil {
-		return err
-	}
-	spec := homeContainerSpec(home)
-	res, err := provision.Setup(provision.Deps{
-		Home:            home,
-		ContainerRunner: container.DefaultRunner,
-		Prober:          httpProber{},
-		ContainerSpec:   spec,
-		ConfirmReplace:  confirmContainerReplace(d),
-		MCP:             sbxMemoryRegistrar{},
-	})
-	if err != nil {
-		return err
-	}
-	if !c.Verbose {
-		return nil
-	}
-	fmt.Fprintf(d.Err, "pix setup: pix home %s: container %s\n", home.Home, res.Container.Action)
-	return nil
-}
-
-// confirmContainerReplace is the exact prompt architecture §9.1 requires
-// before a mismatched pix-memory container is stopped, removed, and
-// recreated: show the drift, ask, default to declining on anything that
-// cannot ask (non-interactive, no confirmation requested with --yes).
-func confirmContainerReplace(d *cli.Deps) func(current container.Info, want container.Spec) bool {
-	return func(current container.Info, want container.Spec) bool {
-		fmt.Fprintf(d.Err, "pix setup: the running pix-memory container does not match the pinned release:\n")
-		fmt.Fprintf(d.Err, "  running: %s (fingerprint %s)\n", current.Image, current.Fingerprint())
-		fmt.Fprintf(d.Err, "  wanted:  %s (fingerprint %s)\n", want.Image, want.Fingerprint())
-		if !d.Interactive {
-			fmt.Fprintln(d.Err, "pix setup: refusing to replace it on a non-interactive terminal; rerun interactively or remove it yourself: docker rm -f pix-memory")
-			return false
-		}
-		fmt.Fprint(d.Err, "Replace it? Its /data volume is preserved either way. [y/N] ")
-		var line string
-		fmt.Fscanln(d.In, &line)
-		return line == "y" || line == "Y"
-	}
-}
-
-// dispatchRun re-enters the ROOT for the handoff launch, so setup cannot acquire
-// its own copy of run's grammar: it hands `run` an argv as a user would type it.
-func dispatchRun(d *cli.Deps, argv []string) error {
-	if code := dispatch(append([]string{"run"}, argv...), d); code != 0 {
-		return cli.SilentError{Code: code}
-	}
-	return nil
-}
-
-// runSetupHandoff is the pure post-host-phase decision + action, separate from
-// setupCmd.Run so the state matrix is testable without the provisioning loop or an
-// sbx exec. Errors ONLY on the fail-closed unknown state (or a failed launch).
-// setup has no shape that removes a sandbox: an existing one is ALWAYS left alone
-// and the user is handed the two commands (attach, or remove-then-run).
+// runSetupHandoff is the pure, fail-closed decision for whether a caller may
+// launch a sandbox after a host-side step: an unprobeable sbx (launch.SbxUnknown)
+// NEVER launches, since doing so could re-attach a live session and replay a
+// kickoff message into it. It is not wired into `pix setup` (setup performs no
+// handoff — see setupCmd.Run), but the safety property it proves
+// (TestSetupHandoff_HangingSbxFailsClosed) is retained here as the one shared
+// place that decision is made correctly, for a future caller that needs it.
 func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn func([]string) error) error {
-	// kickoffArgs builds the run argv for a launch that gets the tour: [DIR] --
-	// <marker><OnboardingKickoff>; the marker tells memory-capture.ts this was composed,
-	// not typed. DIR is forwarded only when explicit, so setup matches `pix run` there.
 	kickoffArgs := func() []string {
 		args := []string{}
 		if dir != "." {
 			args = append(args, dir)
 		}
-		return append(args, "--", launch.GeneratedInputMarker+provision.OnboardingKickoff)
+		return append(args, "--", launch.GeneratedInputMarker+setupOnboardingKickoff)
 	}
 	dirArg := ""
 	if dir != "." {
@@ -268,22 +74,94 @@ func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn
 	return runFn(kickoffArgs())
 }
 
-// init supplies the composition provisioning declares but cannot perform.
+func (c *setupCmd) Help() string { return provision.Description }
+
+// setupCmd provisions PIX_HOME. It takes no workspace argument and performs
+// no agent handoff: `pix run` is the only thing that starts a sandbox.
+type setupCmd struct {
+	Verbose bool `help:"Show the pix-memory container and MCP registration detail, not just the summary."`
+}
+
+func (c *setupCmd) Run(d *cli.Deps) error {
+	home, err := pixhome.Resolve()
+	if err != nil {
+		return err
+	}
+	spec := homeContainerSpec(home)
+	res, err := provision.Setup(provision.Deps{
+		Home:            home,
+		ContainerRunner: container.DefaultRunner,
+		Prober:          httpProber{},
+		ContainerSpec:   spec,
+		ConfirmReplace:  confirmContainerReplace(d),
+		MCP:             sbxMemoryRegistrar{},
+	})
+	if err != nil {
+		return err
+	}
+	renderSetupResult(d, home, res, c.Verbose)
+	if !res.Ready() {
+		return cli.SilentError{Code: 1}
+	}
+	return nil
+}
+
+// renderSetupResult prints what Setup actually did. Always shown, not only
+// under --verbose: setup is a rerunnable idempotent step and a silent
+// success gives the user nothing to confirm against.
+func renderSetupResult(d *cli.Deps, home pixhome.Paths, res provision.Result, verbose bool) {
+	switch {
+	case res.Init.CreatedHome:
+		fmt.Fprintf(d.Out, "pix setup: initialized PIX_HOME at %s\n", home.Home)
+	default:
+		fmt.Fprintf(d.Out, "pix setup: PIX_HOME already initialized at %s\n", home.Home)
+	}
+	fmt.Fprintf(d.Out, "pix setup: pix-memory container: %s\n", res.Container.Action)
+	switch {
+	case !res.MCPRegistered:
+		fmt.Fprintln(d.Out, "pix setup: pix-memory MCP registration: not attempted (no registrar wired)")
+	case res.MCPMatched:
+		fmt.Fprintln(d.Out, "pix setup: pix-memory MCP registration: ok")
+	default:
+		fmt.Fprintln(d.Out, "pix setup: pix-memory MCP registration: an existing registration under this name could not be verified to match; it was left untouched")
+	}
+	if verbose {
+		fmt.Fprintf(d.Err, "pix setup: pix home %s: container %s\n", home.Home, res.Container.Action)
+	}
+	if res.Ready() {
+		fmt.Fprintln(d.Out, "pix setup: ready. For the full host report: pix doctor")
+		return
+	}
+	fmt.Fprintln(d.Out, "pix setup: not ready. Run `pix doctor` for the exact fix.")
+}
+
+// confirmContainerReplace is the exact prompt architecture §9.1 requires
+// before a mismatched pix-memory container is stopped, removed, and
+// recreated: show the drift, ask, default to declining on anything that
+// cannot ask (non-interactive, no confirmation requested with --yes).
+func confirmContainerReplace(d *cli.Deps) func(current container.Info, want container.Spec) bool {
+	return func(current container.Info, want container.Spec) bool {
+		fmt.Fprintf(d.Err, "pix setup: the running pix-memory container does not match the pinned release:\n")
+		fmt.Fprintf(d.Err, "  running: %s (fingerprint %s)\n", current.Image, current.Fingerprint())
+		fmt.Fprintf(d.Err, "  wanted:  %s (fingerprint %s)\n", want.Image, want.Fingerprint())
+		if !d.Interactive {
+			fmt.Fprintln(d.Err, "pix setup: refusing to replace it on a non-interactive terminal; rerun interactively or remove it yourself: docker rm -f pix-memory")
+			return false
+		}
+		fmt.Fprint(d.Err, "Replace it? Its /data volume is preserved either way. [y/N] ")
+		var line string
+		fmt.Fscanln(d.In, &line)
+		return line == "y" || line == "Y"
+	}
+}
+
+// init supplies the one composition provision declares but cannot perform:
+// registering MCP servers with credentials resolved over secret. This wires
+// unconditionally at process start (not only when `pix setup` runs) because
+// `pix run`'s onboarding reconcile (provision.ReconcileOnboarding) needs the
+// same registrar.
 func init() {
-	provision.DefaultEnv = defaultShellEnv
-	// setupProbeWrap is the third caller of the one op-run grammar, alongside
-	// registration and doctor.
 	provision.Injected = provision.Composition{
 		Register: registerServers,
-		// The SAME interview `pix models add <provider>` runs, reached through the
-		// same Deps shape, so setup cannot grow a second way to ask for a key.
-		AddProvider: func(env hostenv.Env, in io.Reader, out io.Writer, interactive bool, provider string) error {
-			d := &cli.Deps{In: in, Out: out, Err: out, Interactive: interactive}
-			cfg, err := d.Config()
-			if err != nil {
-				return err
-			}
-			return models.AddKeyedProvider(d, cfg, env, provider)
-		},
 	}
 }

@@ -417,31 +417,11 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// TestServePidPath resolves serve.pid under the STATE dir (ephemeral runtime
-// state, a sibling of serve.log), honoring $XDG_STATE_HOME, so the host writer
-// and the launcher reader always agree on the location.
-func TestServePidPath(t *testing.T) {
-	xdg := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", xdg)
-	want := filepath.Join(xdg, "pix", "serve.pid")
-	if got := ServePidPath(); got != want {
-		t.Errorf("ServePidPath() = %q, want %q", got, want)
-	}
-	// It must be a sibling of serve.log (the state dir), NOT the config dir.
-	if filepath.Dir(ServePidPath()) != filepath.Dir(ServeLogPath()) {
-		t.Errorf("ServePidPath dir %q != state dir %q", filepath.Dir(ServePidPath()), filepath.Dir(ServeLogPath()))
-	}
-	if filepath.Dir(ServePidPath()) == filepath.Dir(Path()) {
-		t.Errorf("ServePidPath must NOT live in the config dir %q", filepath.Dir(Path()))
-	}
-}
-
 // TestDataDirLayout locks the XDG data-root resolution: $XDG_DATA_HOME wins,
 // else ~/.local/share/pix, and every durable default derives from it.
 func TestDataDirLayout(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", xdg)
-	t.Setenv("MEMORY_DB", "")
 
 	d, err := DataDir()
 	if err != nil {
@@ -449,15 +429,6 @@ func TestDataDirLayout(t *testing.T) {
 	}
 	if want := filepath.Join(xdg, "pix"); d != want {
 		t.Errorf("DataDir = %q, want %q", d, want)
-	}
-	if got, want := MemoryDBPath(), filepath.Join(xdg, "pix", "memory", "memory.db"); got != want {
-		t.Errorf("MemoryDBPath = %q, want %q", got, want)
-	}
-
-	// Env overrides win over the derived default.
-	t.Setenv("MEMORY_DB", "/custom/mem.db")
-	if got := MemoryDBPath(); got != "/custom/mem.db" {
-		t.Errorf("MemoryDBPath with MEMORY_DB = %q, want /custom/mem.db", got)
 	}
 }
 
