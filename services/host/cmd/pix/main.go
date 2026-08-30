@@ -63,7 +63,7 @@ func bareArgs(interactive bool) []string {
 	if interactive {
 		return []string{"run"}
 	}
-	return []string{"status"}
+	return []string{"ls"}
 }
 
 // looksLikePath reports whether a non-flag token is meant as a filesystem path (so
@@ -124,19 +124,16 @@ New here?   pix setup      one-time guided setup (a few minutes, resumable)
 Workflow
   run [DIR]        launch or re-attach DIR's sandbox (default: .) — plain "pix"
   ls               list your pix sandboxes;  rm <name>  removes one
-  serve            start the host services (memory); ` + "`serve stop|status`" + `
-  status           what is up, what is down, what is next
+  task             parallel task checkouts: new | ls | path | rm
 
 Setup & health
-  setup            guided setup: keys, memory, pack (integrations optional)
+  setup            guided setup: PIX_HOME, images, the memory container
   doctor           diagnose problems and print the exact fix commands
+  reset            clean slate: remove sandboxes + memory container, back up ~/.pix
 
-Data, models & observability
-  memory           recall | remember | forget | stats
-  models           which models pix can use, and which are wired up
-  agent            the subagent roster: each agent's resolved model, and why
+Environments & credentials
+  env              named environments under ~/.pix/envs: list | show | default | trust
+  secret           1Password references: list | set | rm | check
 
-More             config, pack, mcp, secret, task, reset, version   (see ` + "`pix help --all`" + `)
-
-Learn a command:  pix help run     ·     pix <command> -h
+Learn a command:  pix help run     ·     pix <command> -h     ·     pix help --all
 `
