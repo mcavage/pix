@@ -58,10 +58,18 @@ lifecycle (matches sbx's own re-attach model):
                                  later. --model is NOT create-only: it is a pi
                                  runtime arg, so it still reaches the pi
                                  session on an attach too.
-                                 An attach whose create-time MCP set or image
-                                 no longer matches is REFUSED, not silently
+                                 An attach whose create-time declaration no
+                                 longer matches is REFUSED, not silently
                                  attached; to recreate, remove it first:
-                                 pix rm <box> && pix run.
+                                 pix rm <box> && pix run. The ONE exception is
+                                 a drift that is only Pix's own pinned build
+                                 (image, pull policy, kits) — an ordinary Pix
+                                 upgrade — which is removed and recreated
+                                 automatically when the sandbox is provably
+                                 idle: fresh listing, zero holders, no keep,
+                                 the recorded instance, a direct host mount,
+                                 and a still-reviewed environment. Any missing
+                                 proof refuses and names it.
 
   the last shell to leave a sandbox tears it down (pix run -k keeps it).
 
@@ -254,7 +262,34 @@ func unloadedLocalImage(d *cli.Deps, what string) error {
 // for --dev), composes the sbx argv, and execs it with stdio inherited. It
 // forwards NO credential bearer into the sandbox: host MCP servers authenticate on
 // the host, so there is nothing to inject.
-func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
+// runLaunch is the entry point every caller uses. It keeps one pristine copy
+// of the resolved options so that a SAFE AUTOMATIC RECREATE (a drift whose
+// every facet is a Pix-owned construction pin, behind a full proof set) can
+// re-enter the ordinary create path with exactly the options the user asked
+// for, rather than with the half-resolved attach-path values of the first
+// attempt. Exactly one recreate is allowed per invocation: the second attempt
+// finds no sandbox at all, so it creates, and a drift refusal there would be
+// a real refusal rather than a loop.
+func runLaunch(d *cli.Deps, o launch.RunOpts) error {
+	return runLaunchAttempt(d, cloneRunOpts(o), cloneRunOpts(o))
+}
+
+// cloneRunOpts copies the option struct AND its slices, so an attempt that
+// appends to StaticMCP/PackKits cannot reach the retry's copy through a
+// shared backing array.
+func cloneRunOpts(o launch.RunOpts) launch.RunOpts {
+	cp := func(s []string) []string {
+		if s == nil {
+			return nil
+		}
+		return append([]string(nil), s...)
+	}
+	o.Skills, o.Kits, o.MCP = cp(o.Skills), cp(o.Kits), cp(o.MCP)
+	o.StaticMCP, o.PackKits, o.Passthrough = cp(o.StaticMCP), cp(o.PackKits), cp(o.Passthrough)
+	return o
+}
+
+func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err error) {
 	// Fail closed before anything else: an sbx that cannot run native
 	// environments must not get far enough to attempt a create or attach.
 	if verr := gateSbxVersion(d, "sbx"); verr != nil {
@@ -531,7 +566,34 @@ func runLaunch(d *cli.Deps, o launch.RunOpts) (err error) {
 			ResetInvalidated:   resetInvalidated && storedFound,
 			Reviewed:           !selection.Selected() || selection.Reviewed,
 			Tree:               selection.Tree,
+			// The proof an AUTOMATIC recreation needs, read here because
+			// only this layer knows the listing above was taken on THIS
+			// launch. Its zero value authorizes nothing, so leaving it out
+			// (as the first cutover commit did) is what kept every pinned
+			// image upgrade a manual `pix rm && pix run`.
+			Proof: launch.RecreateProofFor(sessionKey, o.Workspace, entry != nil),
 		}, o.Name, rec.Name)
+		// A recreation-safe drift with a complete proof set: remove the
+		// sandbox through the ordinary proof-gated teardown, then re-enter
+		// the ordinary create path with the user's original options. No
+		// forced removal, no second create path, and one attempt only.
+		if decision.Recreate != nil {
+			if retry.Recreated {
+				return runFail(d, 1, "%q still drifts after one automatic recreate; %s",
+					o.Name, launch.EnvRecreateGuidance(o.Name, rec.Name))
+			}
+			fmt.Fprintf(d.Err, "pix run: %s\n", decision.Recreate.Reason)
+			if rerr := launch.ExecuteRecreate(defaultShellEnv(), decision.Recreate, sessionKey, launch.TeardownOptions{
+				Planner: launch.EnvTeardownPlanner(o.Name),
+			}); rerr != nil {
+				fmt.Fprintf(d.Err, "pix run: %v\n", rerr)
+				fmt.Fprintf(d.Err, "pix run: recreate it yourself: %s\n", launch.EnvRecreateGuidance(o.Name, rec.Name))
+				return cli.SilentError{Code: 1}
+			}
+			fmt.Fprintf(d.Err, "pix run: removed %q; recreating it\n", o.Name)
+			retry.Recreated = true
+			return runLaunchAttempt(d, cloneRunOpts(retry), cloneRunOpts(retry))
+		}
 		if !decision.Attach {
 			// E1.6/E2.6's I4 diagnostic: a creation-fingerprint drift refusal
 			// appends one bounded recreatelog record; every other refusal

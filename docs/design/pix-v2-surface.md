@@ -743,10 +743,31 @@ Only environment variables and MCP declarations reconcile on an existing sbx
 environment. Changes to kits, workspaces, resources, ports, secrets, bindings,
 or sandbox options require recreation.
 
-Pix takes the conservative position: creation-time declaration drift refuses
-attach and prints the exact `pix rm ... && pix run ...` sequence. It does not
-recreate a sandbox automatically. Automatic recreation could destroy unpushed
-work in clone mode and bypass holder intent.
+Creation-time declaration drift refuses attach and prints the exact
+`pix rm ... && pix run ...` sequence. Automatic recreation could destroy
+unpushed work in clone mode and bypass holder intent, so refusal is the default
+for every drift a user authored or a host could not classify.
+
+One bounded exception exists, because the blanket rule made every ordinary Pix
+upgrade a manual removal loop. A drift set whose every facet is a Pix-owned
+construction pin — the pinned agent image and pull policy, the pinned kit
+references — is recreation-safe: the user changed nothing, Pix did. Pix removes
+and recreates that sandbox automatically, and only behind the complete proof set
+ordinary teardown already demands:
+
+1. a listing re-read on this launch;
+2. a positively zero holder census, never an unreadable one;
+3. no keep marker;
+4. a direct host-mounted workspace, never a sandbox-side clone or an
+   undetermined mode;
+5. an exact match against the recorded sbx instance; and
+6. a still-reviewed environment, so an unreviewed kit change cannot ride in.
+
+Removal uses the ordinary name-scoped, instance-checked path with no authority
+override, and at most one recreate happens per invocation. Any missing proof
+refuses, names the blocker, and prints the manual sequence. Every other drift —
+an environment variable, a mount, a secret, a binding, an MCP server, a port —
+still refuses.
 
 Failed native environment creation may leave sandbox-scoped secrets and
 host-global MCP or binding state. Pix records create intent before mutation and

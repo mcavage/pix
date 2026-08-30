@@ -45,6 +45,11 @@ type RunOpts struct {
 	PackKits    []string
 	Passthrough []string // args after `--`, handed straight to pi
 	Token       string
+	// Recreated marks the retry of a launch whose sandbox was removed by a
+	// SAFE AUTOMATIC RECREATE on this invocation. It exists so exactly one
+	// recreate can happen per `pix run`: a second recreation-safe drift on
+	// the retry is a refusal with the manual sequence, never a loop.
+	Recreated bool
 }
 
 func gitKitURLRef(ref, version string) string {

@@ -2,9 +2,13 @@ package launch
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"pix/host/envinfo"
+	"pix/host/hostenv"
+	"pix/host/lease"
 	"pix/host/sandbox"
 )
 
@@ -171,6 +175,92 @@ func (p *RecreatePlan) RemoveArgvFor(effectivePath string) (EnvRemovalPlan, erro
 func scopedName(name string) error {
 	if !strings.HasPrefix(name, sandbox.Prefix) {
 		return fmt.Errorf("pix: refusing to recreate %q: not a pix-owned sandbox name", name)
+	}
+	return nil
+}
+
+// WorkspaceModeFor answers how workspace reaches the host for THIS
+// launcher. Pix composes exactly one workspace shape — the host's own
+// directory, bind-mounted (envinfo.WorkspaceFact over an absolute host
+// path); it has no clone-mode launch flag and never asks sbx for one. So
+// the mode is DIRECT when, and only when, that host directory positively
+// exists as a real directory right now, and UNKNOWN otherwise. Unknown
+// blocks automatic recreation, which is the fail-closed direction.
+func WorkspaceModeFor(workspace string) WorkspaceMode {
+	path := strings.TrimSpace(workspace)
+	if path == "" {
+		return WorkspaceUnknown
+	}
+	if !filepath.IsAbs(path) {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return WorkspaceUnknown
+		}
+		path = abs
+	}
+	fi, err := os.Stat(path)
+	if err != nil || !fi.IsDir() {
+		return WorkspaceUnknown
+	}
+	return WorkspaceDirect
+}
+
+// RecreateProofFor gathers the non-drift evidence for key's sandbox from
+// the SAME lease state proof-gated teardown reads: the shared reference
+// lock (a positive zero-holder answer only when the exclusive side can be
+// taken), the identity-bound keep marker, and the workspace mode. Every
+// unreadable answer stays UNKNOWN and therefore blocks.
+//
+// freshListing is the caller's assertion that the sbx row behind the
+// attach gate was read on THIS launch. It is an argument rather than a
+// probe because only the caller knows whether its listing came from the
+// runtime or from a record.
+func RecreateProofFor(key, workspace string, freshListing bool) RecreateProof {
+	proof := RecreateProof{
+		FreshListing: freshListing,
+		Holders:      UnknownHolders(),
+		// An unreadable keep is treated as a keep: fail closed.
+		Keep:      true,
+		Workspace: WorkspaceModeFor(workspace),
+	}
+	dir, err := existingLeaseDir(key)
+	if err != nil {
+		return proof
+	}
+	state, set, kerr := lease.ReadKeep(dir)
+	switch {
+	case kerr != nil:
+		return proof
+	case set && strings.TrimSpace(state.Identity) != "":
+		return proof
+	}
+	proof.Keep = false
+	held, herr := lease.ReferencesHeld(dir)
+	switch {
+	case herr != nil:
+		proof.Holders = UnknownHolders()
+	case held:
+		proof.Holders = KnownHolders(1)
+	default:
+		proof.Holders = KnownHolders(0)
+	}
+	return proof
+}
+
+// ExecuteRecreate performs the REMOVAL half of a decided plan. It runs the
+// ordinary session-trigger teardown — the strictest one, which demands
+// this host's own creation record, honors a keep marker, re-probes the
+// listing under the reference proof, and matches the recorded instance id
+// — and reports an error unless the sandbox is positively gone afterward.
+// It never composes a forced removal and never creates anything: the
+// caller re-enters its ordinary create path once this returns nil.
+func ExecuteRecreate(env hostenv.Env, plan *RecreatePlan, key string, opts TeardownOptions) error {
+	if err := plan.Validate(); err != nil {
+		return err
+	}
+	res := TeardownSandbox(env, key, plan.SandboxName, TriggerSession, opts)
+	if !res.Removed() {
+		return fmt.Errorf("pix: could not recreate %q: %s", plan.SandboxName, res.Detail)
 	}
 	return nil
 }
