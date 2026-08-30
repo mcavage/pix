@@ -4,8 +4,14 @@
 // unconditionally true (services/host/health/probes.go). A missing sbx alone
 // is ALSO enough to fail doctor (pinned by
 // workflow/doctor/doctor_test.go's TestDoctor_SbxAloneIsARequiredGap), so the
-// doc must name it among the required checks, and must not claim launchd/pack
-// are required (they never are).
+// doc must name it among the required checks.
+//
+// LaunchdProbe and PackProbe (both asserted never-required here originally)
+// were deleted along with `pix-host serve`'s Suture supervision and the pack
+// system in the Pix v2 deletion sweep (docs/design/pix-v2-architecture.md
+// §14, AC-16): doctor's probe set is now sbx, providers and github only
+// (workflow/doctor/probes.go), so there is nothing left to assert never-
+// required about either.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -21,8 +27,6 @@ const probes = fs.readFileSync(
 
 test("probes.go's Required() set matches what this test expects to guard (fitness function pins itself against drift)", () => {
 	assert.match(probes, /func \(SbxProbe\) Required\(\) bool\s*\{\s*return true/);
-	assert.match(probes, /func \(LaunchdProbe\) Required\(\) bool\s*\{\s*return false/);
-	assert.match(probes, /func \(PackProbe\) Required\(\) bool\s*\{\s*return false/);
 	assert.match(probes, /func \(ProviderKeyProbe\) Required\(\) bool\s*\{\s*return true/);
 });
 
@@ -35,5 +39,6 @@ test("docs/reference.md's doctor exit-code section names sbx among the required 
 
 test("docs/reference.md does not claim launchd or pack are required", () => {
 	const section = reference.slice(reference.indexOf("## 9. Status and doctor"));
-	assert.match(section, /Never required:\s*\n?\*\*launchd\*\* and \*\*pack\*\*/i);
+	assert.doesNotMatch(section, /\*\*launchd\*\*/i);
+	assert.doesNotMatch(section, /\*\*pack\*\*/i);
 });

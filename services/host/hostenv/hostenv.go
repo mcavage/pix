@@ -11,15 +11,7 @@ package hostenv
 import (
 	"time"
 
-	"pix/host/rpc"
 	"pix/host/sys"
-)
-
-// ServiceIdentity and IdentityProber live in rpc, which is where the call they
-// describe lives. Aliased here because Env carries the prober as a field.
-type (
-	ServiceIdentity = rpc.ServiceIdentity
-	IdentityProber  = rpc.IdentityProber
 )
 
 // Env is the bundle. The embedded System is never nil in production (sys.Real
@@ -29,10 +21,6 @@ type Env struct {
 
 	// Quiet suppresses progress chatter on machine-readable paths.
 	Quiet bool
-
-	// HostBinary resolves the canonical pix-host path. Late-bound so tests that
-	// swap the resolver stay effective.
-	HostBinary func() (string, error)
 
 	// DirectInference makes one bounded, model-specific provider call. The key
 	// is held only in memory and must never appear in a returned error.

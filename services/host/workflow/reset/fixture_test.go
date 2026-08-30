@@ -12,7 +12,6 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/service"
 	"pix/host/sys"
 )
 
@@ -29,9 +28,7 @@ import (
 //
 // Individual tests override these to model the state they are about.
 func TestMain(m *testing.M) {
-	probeServeUp = func(pidPath string, settle time.Duration) (bool, int) {
-		return service.ServeIdentityUp(nil, pidPath, settle)
-	}
+	probeServeUp = func(pidPath string, settle time.Duration) (bool, int) { return false, 0 }
 	stopServeForReset = func(io.Writer) (bool, error) { return false, nil }
 	restartServeForReset = func(io.Writer) error { return nil }
 	os.Exit(m.Run())

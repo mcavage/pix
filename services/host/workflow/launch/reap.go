@@ -55,7 +55,6 @@ import (
 	"pix/host/hostenv"
 	"pix/host/lease"
 	"pix/host/sandbox"
-	"pix/host/uat"
 )
 
 // The teardown budget, as three bounds that compose to one ceiling:
@@ -210,16 +209,6 @@ func TeardownSandbox(env hostenv.Env, key, name string, trigger TeardownTrigger,
 	o := opts.withDefaults()
 	res := decideTeardown(env, key, name, trigger, o)
 	res.Sandbox, res.Key, res.Trigger = name, key, trigger
-
-	if res.Removed() {
-		if uatRec, err := uat.ReadRegistration(env, name); err == nil && uatRec != nil {
-			if uerr := uat.UnregisterMCP(env, uatRec.MCPName); uerr == nil {
-				_ = uat.DeleteRegistration(env, name)
-			} else {
-				// Cleanup failure retains state, visible for retry.
-			}
-		}
-	}
 
 	if err := appendTeardownJournal(o, res); err != nil {
 		// A journal that cannot be written must not change what happened to the
@@ -499,25 +488,6 @@ func sweepOrphans(env hostenv.Env, out io.Writer, opts TeardownOptions) ([]Teard
 		res := TeardownSandbox(env, key, key, TriggerOrphanSweep, opts)
 		results = append(results, res)
 		fmt.Fprintf(out, "%s\n", res)
-	}
-
-	// Retry UAT registration cleanup
-	if dir, err := uat.StateDir(env); err == nil {
-		if entries, err := os.ReadDir(dir); err == nil {
-			for _, e := range entries {
-				if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
-					name := strings.TrimSuffix(e.Name(), ".json")
-					// If lease dir is gone, we should cleanup UAT
-					if _, lerr := existingLeaseDir(name); lerr != nil {
-						if uatRec, err := uat.ReadRegistration(env, name); err == nil && uatRec != nil {
-							if uerr := uat.UnregisterMCP(env, uatRec.MCPName); uerr == nil {
-								_ = uat.DeleteRegistration(env, name)
-							}
-						}
-					}
-				}
-			}
-		}
 	}
 
 	if len(results) == 0 {

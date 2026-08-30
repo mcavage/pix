@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"pix/host/packinfo"
 	"slices"
 	"strings"
 	"testing"
@@ -16,7 +15,6 @@ import (
 	"pix/host/hostenv"
 	"pix/host/secret"
 	"pix/host/sys"
-	"pix/host/workflow/pack"
 )
 
 // Setup's safety scenarios, every one against REAL executables and REAL files:
@@ -73,32 +71,6 @@ func TestSetupSteps_NoEnvironmentStep(t *testing.T) {
 	}
 }
 
-// neutralHostSteps pins the two probes a pack-focused test does not mean to
-// exercise — sbx and launchd — to a deterministic, always-ready fixture PATH,
-// and traps the real launchd installer behind a recorder that fails the test
-// if it is EVER invoked. Without this seam, setupSteps' sbx/launchd probes run
-// against whatever the test process's REAL PATH and REAL launchd happen to
-// hold: a laptop with both present classifies the two steps differently than a
-// CI box with neither, and — the actual incident this closes — a laptop where
-// the pix LaunchAgent simply is not loaded yet turns the launchd row into a
-// VERIFIED gap, so Run() calls the real installLaunchd (service.Install) and
-// installs a REAL LaunchAgent on the developer's machine as a side effect of a
-// test that is only supposed to be about pack adoption. Wiring this explicit
-// fixture/seam, rather than relying on whatever PATH the test happened to
-// inherit, is what makes a pack-only test's outcome depend on packs and
-// nothing else.
-func neutralHostSteps(t *testing.T) {
-	t.Helper()
-	fixtureBin(t, "sbx", "echo 'sbx version 9.9.9'")
-	fixtureBin(t, "launchctl", "echo 'state = running'")
-	prev := installLaunchd
-	installLaunchd = func(io.Writer) error {
-		t.Fatal("a pack-only test must never install the real launchd agent")
-		return nil
-	}
-	t.Cleanup(func() { installLaunchd = prev })
-}
-
 // --- what setup may and may not do ------------------------------------------
 
 // Scope is a property of the step table, not of prose: with every consent given
@@ -112,13 +84,13 @@ func neutralHostSteps(t *testing.T) {
 // setup may ask, and may never answer for you.
 func TestSetupSteps_EveryConsentedCapabilityApplies(t *testing.T) {
 	cfg := &config.Config{}
-	steps := setupSteps(cfg, realEnv(), Opts{Packs: []string{"acme/pack"}, PullModels: true},
+	steps := setupSteps(cfg, realEnv(), Opts{PullModels: true},
 		strings.NewReader(""), os.Stderr, true)
 	got := map[string]bool{}
 	for _, s := range steps {
 		got[s.Name] = s.Apply != nil
 	}
-	want := map[string]bool{"sbx": false, "launchd": true, "pack": true, "models": true, "providers": true}
+	want := map[string]bool{"sbx": false, "models": true, "providers": true}
 	if len(got) != len(want) {
 		t.Fatalf("step set = %v, want exactly %v", got, want)
 	}
@@ -184,184 +156,6 @@ func TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt(t *testing.T) {
 	}
 }
 
-// A pack RunPackUse refuses (Tier-1, non-TTY, no --yes) must abort the ENTIRE
-// setup. The discarded error this guards against let a refused pack fall through
-// to "setup complete": PackProbe is not required (a host with no pack is fine),
-// so the second check alone never caught it. Real pack, real gate, real config.
-func TestPackApply_RefusedPackAbortsAndConfigUnchanged(t *testing.T) {
-	dir := t.TempDir()
-	// This test is about pack adoption ONLY: neutralize sbx/launchd so its
-	// outcome cannot depend on this host's real PATH or real launchd state.
-	neutralHostSteps(t)
-	// The composition root binds pack adoption; this test is the REAL one, so it
-	// wires the same adopter cmd/pix does rather than a stand-in.
-	Injected.PackApply = pack.SetupAdopter(nil, nil)
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-
-	root := filepath.Join(dir, "work-pack")
-	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// The wrapper must actually exist to fingerprint (else the gate fails on a
-	// missing file, not on the TTY refusal this test is about).
-	if err := os.WriteFile(filepath.Join(root, "bin", "warehouse"), []byte("#!/bin/sh\necho warehouse\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// A host=true proxy is a Tier-1 host-exec facet on its own: no MCP, no
-	// classifier wiring needed to force the gate.
-	if err := pack.WriteManifest(root, packinfo.Manifest{Name: "work", Schema: 1,
-		Proxies: []packinfo.PackProxy{{Name: "warehouse", Host: true}}}); err != nil {
-		t.Fatal(err)
-	}
-
-	// --- unit level: packApply itself must surface RunPackUse's error -------
-	apply := packApply(realEnv(), Opts{Packs: []string{root}}, io.Discard)
-	if apply == nil {
-		t.Fatal("--pack must produce an apply")
-	}
-	if err := apply(context.Background()); err == nil {
-		t.Fatal("a Tier-1 pack refused non-interactively must fail the apply, not swallow the error")
-	} else if !strings.Contains(err.Error(), "--yes") {
-		t.Errorf("the propagated refusal must name --yes, got: %v", err)
-	}
-
-	// --- provision-loop level: Failed, never Applied -------------------------
-	o := Run(context.Background(), Options{Budget: setupBudget},
-		setupSteps(&config.Config{}, realEnv(), Opts{Packs: []string{root}}, strings.NewReader(""), io.Discard, false)...)
-	if len(o.Failed) != 1 || o.Failed[0].Name != "pack" {
-		t.Fatalf("outcome.Failed = %+v, want exactly one failure named pack", o.Failed)
-	}
-	for _, applied := range o.Applied {
-		if applied == "pack" {
-			t.Fatal("a refused pack must never be recorded as applied")
-		}
-	}
-
-	// --- RunSetup level: the whole command aborts, never reports success ----
-	if err := RunSetup(realEnv(), []string{"--pack", root}, strings.NewReader(""), io.Discard, false); err == nil {
-		t.Fatal("RunSetup must abort on a refused pack, not report success")
-	} else if !strings.Contains(err.Error(), "--yes") {
-		t.Errorf("RunSetup's error must carry the pack's own refusal, got: %v", err)
-	}
-
-	// --- and nothing committed: no later apply, config still has no pack ----
-	cfg, lerr := config.Load()
-	if lerr != nil {
-		t.Fatalf("config.Load: %v", lerr)
-	}
-	if cfg.Pack != "" {
-		t.Errorf("a refused pack must never be adopted; cfg.Pack = %q", cfg.Pack)
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, "pack-trust.json")); !os.IsNotExist(statErr) {
-		t.Error("no Tier-1 acceptance may be recorded on refusal")
-	}
-}
-
-// The mirror of the refusal test above: a pack apply that SUCCEEDS must be
-// verified against the root it just wrote, not the root setupSteps captured
-// into the pack probe BEFORE the apply ran. setupSteps builds the whole step
-// table — including the pack probe — from one cfg loaded at the top of
-// RunSetup; PackApply (SetupAdopter -> RunPackUse) loads and mutates its OWN
-// config.Load(), a different *Config, and saves it to disk. A probe that
-// captured cfg.Pack at construction time never sees that write, so the second
-// check re-probes the pre-adoption (empty) root and reports the just-adopted
-// pack as still absent even though `pix pack use` succeeded — exactly the
-// false-negative this regression pins.
-func TestPackApply_SuccessIsVerifiedAgainstTheRootApplyJustWrote(t *testing.T) {
-	dir := t.TempDir()
-	// This test is about pack adoption ONLY: neutralize sbx/launchd so its
-	// outcome cannot depend on this host's real PATH or real launchd state.
-	neutralHostSteps(t)
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	Injected.PackApply = pack.SetupAdopter(nil, nil)
-
-	root := filepath.Join(dir, "quiet-pack")
-	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// A host=true proxy makes this Tier-1 (same shape as the refusal test
-	// above), but here setup carries --yes, so the trust gate auto-accepts
-	// instead of refusing — this test is about the SUCCESS path.
-	if err := os.WriteFile(filepath.Join(root, "bin", "warehouse"), []byte("#!/bin/sh\necho warehouse\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := pack.WriteManifest(root, packinfo.Manifest{Name: "quiet", Schema: 1,
-		Proxies: []packinfo.PackProxy{{Name: "warehouse", Host: true}}}); err != nil {
-		t.Fatal(err)
-	}
-
-	// The cfg setupSteps sees has NO pack configured — the exact stale snapshot
-	// the bug froze into the probe.
-	cfg := &config.Config{}
-	steps := setupSteps(cfg, realEnv(), Opts{Packs: []string{root}, AssumeYes: true}, strings.NewReader(""), io.Discard, false)
-	o := Run(context.Background(), Options{Budget: setupBudget}, steps...)
-
-	if len(o.Failed) != 0 {
-		t.Fatalf("pack apply failed: %+v", o.Failed)
-	}
-	if !slices.Contains(o.Applied, "pack") {
-		t.Fatalf("pack was not recorded as applied: %+v", o.Applied)
-	}
-	if !o.Verified("pack") {
-		after, _ := o.After.Find("pack")
-		t.Fatalf("second check did not verify the adopted pack: %+v", after)
-	}
-	after, ok := o.After.Find("pack")
-	if !ok {
-		t.Fatal("no second-check result for pack")
-	}
-	if wantBase := filepath.Base(root); after.Detail != wantBase {
-		t.Errorf("second check reports %q, want %q — it must probe the root PackApply just wrote, not the pre-apply snapshot",
-			after.Detail, wantBase)
-	}
-
-	// The config ON DISK — never the stale in-memory cfg setupSteps captured —
-	// now names this pack.
-	got, lerr := config.Load()
-	if lerr != nil {
-		t.Fatalf("config.Load: %v", lerr)
-	}
-	if packinfo.CanonicalizePackRoot(got.Pack) != packinfo.CanonicalizePackRoot(root) {
-		t.Fatalf("cfg.Pack = %q, want %q", got.Pack, root)
-	}
-}
-
-// TestNeutralHostSteps_LaunchdGapNeverReachesTheRealInstaller is the seam's own
-// self-test: it puts the OTHER real incident in front of the loop — a launchd
-// fixture that answers "not loaded" (a verified gap, on ANY host) alongside a
-// pack request — and proves the loop still calls installLaunchd (the step
-// really runs; this is not a test that merely skips the row) while the call
-// lands on the recorder, never on service.Install. This is the property
-// TestPackApply_RefusedPackAbortsAndConfigUnchanged and
-// TestPackApply_SuccessIsVerifiedAgainstTheRootApplyJustWrote rely on
-// neutralHostSteps for: their own launchd fixture reports "already loaded" so
-// the row is never even a gap, so THIS test is what proves the recorder
-// actually intercepts the dangerous path rather than merely never being
-// exercised.
-func TestNeutralHostSteps_LaunchdGapNeverReachesTheRealInstaller(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	fixtureBin(t, "sbx", "echo 'sbx version 9.9.9'")
-	// notLoaded's own vocabulary: this is what launchctl says for a genuinely
-	// absent agent, so the probe classifies this a VERIFIED gap, not unknown.
-	fixtureBin(t, "launchctl", "echo 'Could not find service' >&2; exit 1")
-	prev := installLaunchd
-	var recorded int
-	installLaunchd = func(io.Writer) error { recorded++; return nil }
-	t.Cleanup(func() { installLaunchd = prev })
-
-	o := Run(context.Background(), Options{Budget: setupBudget}, setupSteps(&config.Config{}, realEnv(), Opts{}, strings.NewReader(""), io.Discard, false)...)
-
-	if recorded != 1 {
-		t.Fatalf("installLaunchd (the recorder) was called %d times, want exactly 1 — a verified launchd gap must still drive the loop", recorded)
-	}
-	if !slices.Contains(o.Applied, "launchd") {
-		t.Fatalf("launchd was not recorded as applied: %+v", o.Applied)
-	}
-}
-
-// --- the provider key probe stays tri-state ---------------------------------
-
 // providersProbe pulls the providers step out of the REAL step table, built the
 // way a script runs it (no terminal), and asserts on the way past that setup
 // still cannot repair a key it was never allowed to ask about.
@@ -379,9 +173,6 @@ func providersProbe(t *testing.T) health.Probe {
 	return nil
 }
 
-// A host whose backends carry their own credential has no key to add, so setup
-// must not open a row against it — and must read that from the config as it is
-// AT THE CHECK, since the pack step's own apply is what writes those backends.
 func TestSetupSteps_KeylessInferenceNeedsNoProviderKey(t *testing.T) {
 	fixtureBin(t, "sbx", "echo GITHUB_TOKEN") // answers, lists no model key
 	path := filepath.Join(t.TempDir(), "config.toml")

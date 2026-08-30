@@ -17,10 +17,16 @@ import (
 
 	"pix/host/cli"
 	"pix/host/mcp"
-	"pix/host/rpc"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
 )
+
+// exitServiceDown is the distinct exit code a verb returns when a resource it
+// shells out to (sbx) is unreachable, so scripts can tell "service down" (3)
+// apart from a usage error (2) or a generic failure (1). It was rpc.ExitServiceDown
+// before the Pix v2 cutover deleted the custom memory JSON-RPC package that
+// constant lived in for no reason but proximity (AC-16).
+const exitServiceDown = 3
 
 // sbxAwareFail is the shared exit mapping for every launcher verb that shells
 // to sbx directly (ls, rm): mcp.ErrSbxUnavailable prints in the verb's own
@@ -32,7 +38,7 @@ func sbxAwareFail(d *cli.Deps, err error) error {
 	}
 	if errors.Is(err, mcp.ErrSbxUnavailable) {
 		fmt.Fprintf(d.Err, "pix: %v\n", err)
-		return cli.SilentError{Code: rpc.ExitServiceDown}
+		return cli.SilentError{Code: exitServiceDown}
 	}
 	return err
 }

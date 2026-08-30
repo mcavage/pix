@@ -25,7 +25,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -34,11 +33,8 @@ import (
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/launcher"
-	"pix/host/packinfo"
 	"pix/host/sandbox"
 	"pix/host/secret"
-	"pix/host/service"
 )
 
 // OnboardingKickoff is the first message `setup` hands the agent: DELIBERATELY
@@ -50,24 +46,19 @@ const OnboardingKickoff = "I just ran pix setup. Give me the upfront guide and h
 // ErrUsage marks an argument error, which exits 2 rather than 1.
 type ErrUsage struct{ error }
 
-// DefaultEnv, HostBinary and Register are the composition this package declares
-// but cannot perform: building a real env, resolving the paired pix-host, and
-// registering MCP servers with credentials resolved over secret. Both the setup
-// loop and the onboarding reconcile use these — one wiring, one place the
-// composition root fills it. The env default PANICS rather than returning a
-// half-wired one: a setup that silently probes nothing is the failure mode this
-// whole design exists to delete.
+// DefaultEnv and Register are the composition this package declares but
+// cannot perform: building a real env, and registering MCP servers with
+// credentials resolved over secret. Both the setup loop and the onboarding
+// reconcile use these — one wiring, one place the composition root fills it.
+// The env default PANICS rather than returning a half-wired one: a setup
+// that silently probes nothing is the failure mode this whole design exists
+// to delete.
 var (
 	DefaultEnv = func() hostenv.Env {
 		panic("provision: DefaultEnv not wired — the composition root must set it")
 	}
-	HostBinary = launcher.FindHostBinary
 	// Injected is the rest of that composition, as ONE value the command layer
-	// fills in one statement. Register is MCP registration; PackApply is pack
-	// adoption, which is a TRUST decision (Tier-1 bill of materials, fingerprint,
-	// rollback) that belongs to workflow/pack — provision declares the step and
-	// may not import the sibling workflow that can perform it. Unwired, PackApply
-	// FAILS rather than silently turning setup's pack row green.
+	// fills in one statement. Register is MCP registration.
 	Injected = Composition{}
 )
 
@@ -77,17 +68,12 @@ var (
 type Composition struct {
 	Register func(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
 		servers map[string]config.MCPServer) error
-	PackApply func(env hostenv.Env, out io.Writer, packs, with []string, assumeYes bool) error
-	// AddProvider is `pix models add <provider>`, injected for the same reason
-	// PackApply is: provision may not import the sibling workflow that performs
-	// the step. Unwired, the providers step FAILS rather than quietly going back
-	// to printing a command it could have run.
+	// AddProvider is `pix models add <provider>`, injected because provision may
+	// not import the sibling workflow that performs the step. Unwired, the
+	// providers step FAILS rather than quietly going back to printing a
+	// command it could have run.
 	AddProvider func(env hostenv.Env, in io.Reader, out io.Writer, interactive bool, provider string) error
 }
-
-// installLaunchd is the launchd apply. It is a variable so a test can point it
-// at a recorder instead of the real LaunchAgent.
-var installLaunchd = service.Install
 
 // setupBudget bounds ONE probe in EACH of the two checks. Setup is allowed to
 // be slower than `pix status`: it is the command a user runs once and watches.
@@ -157,11 +143,14 @@ func RunSetup(env hostenv.Env, flags []string, in io.Reader, out io.Writer, inte
 	return nil
 }
 
-// setupSteps is the whole of what `pix setup` provisions, as data. Four steps
-// carry an Apply (launchd, packs, models, providers); sbx is probe-only and the
-// report names its exact command. Being data rather than control flow is what
-// makes the scope auditable: setup cannot register an MCP server, because there
-// is no step here that could.
+// setupSteps is the whole of what `pix setup` provisions, as data. Steps
+// carry an Apply (models, providers); sbx is probe-only and the report names
+// its exact command. Being data rather than control flow is what makes the
+// scope auditable: setup cannot register an MCP server, because there is no
+// step here that could. The launchd and pack steps this once ran were deleted
+// with the Suture supervisor and the pack system
+// (docs/design/pix-v2-architecture.md §14); the launchd-managed autostart and
+// pack adoption/trust review they applied no longer exist to configure.
 func setupSteps(cfg *config.Config, env hostenv.Env, opts Opts, in io.Reader, out io.Writer, interactive bool) []Step {
 	return []Step{{
 		// sbx is required and setup does NOT install it: a package manager
@@ -169,27 +158,6 @@ func setupSteps(cfg *config.Config, env hostenv.Env, opts Opts, in io.Reader, ou
 		// probe already knows the exact brew line.
 		Name:  "sbx",
 		Probe: health.SbxProbe{},
-	}, {
-		Name:  "launchd",
-		Probe: health.LaunchdProbe{Label: service.LaunchdLabel, UID: os.Getuid()},
-		Apply: func(context.Context) error { return installLaunchd(out) },
-	}, {
-		Name: "pack",
-		// Resolve, not a static Root: the pack step's own Apply (packApply, below)
-		// mutates the config on disk through a SEPARATE config.Load() (pack
-		// adoption is a trust decision this package may not perform, so it hands
-		// off to the injected adopter, which loads and saves its own *Config).
-		// That write never reaches the cfg pointer captured here, so a probe that
-		// resolved the root once at THIS call would still see the pre-adoption
-		// root on the second check even though the pack was adopted. Reloading
-		// fresh on every Check is what makes the second check see what the apply
-		// actually wrote.
-		Probe: health.PackProbe{Resolve: func() string { return currentPackRoot() }},
-		Apply: packApply(env, opts, out),
-		// PackProbe proves the pack is active; the apply also runs the pack's
-		// required setup hooks, which the probe never looks at. See
-		// Step.ProbeProvesSubset.
-		ProbeProvesSubset: true,
 	}, {
 		Name:  "models",
 		Probe: ollamaModelsProbe{Env: env, Tags: localModelTags(cfg)},
@@ -226,44 +194,18 @@ func setupSteps(cfg *config.Config, env hostenv.Env, opts Opts, in io.Reader, ou
 	}}
 }
 
-// currentPackRoot re-derives the active pack root from a FRESH config.Load(),
-// never the cfg loaded once at the top of RunSetup: PackApply's own adoption
-// saves a different *Config to disk, so only a reload sees it. An unreadable
-// config resolves to "" (no active pack) rather than panicking a probe.
-func currentPackRoot() string {
-	c, err := config.Load()
-	if err != nil {
-		return ""
-	}
-	return packinfo.Resolve(c, "").Path
-}
-
-// currentKeylessBackends is currentPackRoot's twin for the providers row, and
-// reloads for the same reason: an adopted pack's inference backends land on
-// disk, not in the cfg captured when the steps were built. An unreadable config
-// resolves to "" — no claim of keylessness — so the key store still answers.
+// currentKeylessBackends re-derives keyless inference backends from a FRESH
+// config.Load(), never the cfg captured when the steps were built, so a
+// config write earlier in the same run (e.g. --mcp/--model applied at the top
+// of RunSetup) is what the second check actually grades. An unreadable
+// config resolves to "" — no claim of keylessness — so the key store still
+// answers.
 func currentKeylessBackends() string {
 	c, err := config.Load()
 	if err != nil {
 		return ""
 	}
 	return inference.KeylessBackends(c)
-}
-
-// packApply is the `--pack` step, and it is deliberately thin: with no --pack it
-// is nil, so setup can never manufacture a pack to turn a row green; with one it
-// defers to the injected adoption authority, which runs the same BoM review,
-// fingerprint and rollback as `pix pack use`.
-func packApply(env hostenv.Env, opts Opts, out io.Writer) func(context.Context) error {
-	if len(opts.Packs) == 0 {
-		return nil
-	}
-	return func(context.Context) error {
-		if Injected.PackApply == nil {
-			return fmt.Errorf("pack adoption is not wired — the composition root must set provision.Injected")
-		}
-		return Injected.PackApply(env, out, opts.Packs, opts.WithSetup, opts.AssumeYes)
-	}
 }
 
 // providerKeyApply is the step that turns "none of ANTHROPIC_API_KEY,

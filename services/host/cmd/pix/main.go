@@ -110,11 +110,6 @@ func classifyBareArg(a string) (msg string, launch bool) {
 	return msg, false
 }
 
-// hostBinaryResolver locates pix-host. "Which pix-host am I paired with" is an
-// identity question the launcher package answers; the var exists so a test can
-// inject a fake `pix-host mcp --list` responder for setup's MCP partition.
-var hostBinaryResolver = launcher.FindHostBinary
-
 const helpText = `pix: a personal, multi-model pi coding agent in a Docker sandbox.
 
 Usage:  pix <command> [args]

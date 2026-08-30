@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"pix/host/packinfo"
 	"reflect"
 	"slices"
 	"strings"
@@ -15,10 +14,11 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/rpc"
 	"pix/host/sys/systest"
 	"pix/host/workflow/launch"
 )
+
+const testMemoryPortDefault = 11435
 
 func TestBuildHostState(t *testing.T) {
 	cfg := &config.Config{
@@ -31,10 +31,7 @@ func TestBuildHostState(t *testing.T) {
 	sbxOut := "anthropic\ngithub\n"
 	up := func(int) bool { return true }
 
-	hs := launch.BuildHostState(cfg, sbxOut, true, up, "1password", packinfo.State{Active: true, Path: "/kb/acme", GitInitialized: true, Skills: true}, false)
-	if !hs.Pack.Active || !hs.Pack.GitInitialized {
-		t.Errorf("pack facts not carried: %+v", hs.Pack)
-	}
+	hs := launch.BuildHostState(cfg, sbxOut, true, up, "1password", false)
 	if hs.Keys.Source != "1password" {
 		t.Errorf("keys source = %q, want 1password", hs.Keys.Source)
 	}
@@ -45,16 +42,16 @@ func TestBuildHostState(t *testing.T) {
 	if hs.Keys.OpenAI || hs.Keys.Google {
 		t.Errorf("openai/google should be absent: %+v", hs.Keys)
 	}
-	if !hs.Memory.Up || hs.Memory.Port != rpc.MemoryPortDefault {
+	if !hs.Memory.Up || hs.Memory.Port != testMemoryPortDefault {
 		t.Errorf("memory up/port wrong: %+v", hs.Memory)
 	}
 	if !hs.MCP.Enabled || len(hs.MCP.Servers) != 1 || hs.MCP.Servers[0] != testMCPServer {
 		t.Errorf("mcp wrong: %+v", hs.MCP)
 	}
 	// The model-visible payload is a CLOSED set of facts, not a config dump:
-	// whatever a pack or a future config key adds, only the reviewed keys reach
-	// the agent. (This replaces the old "must not leak the configured Google
-	// account email" check — no config field carries an account any more.)
+	// whatever a future config key adds, only the reviewed keys reach the
+	// agent. The pack system (and its `pack` key here) was deleted in the
+	// Pix v2 cutover (AC-16).
 	if b, err := json.Marshal(hs); err != nil {
 		t.Fatalf("marshal launch.HostState: %v", err)
 	} else {
@@ -62,7 +59,7 @@ func TestBuildHostState(t *testing.T) {
 		if err := json.Unmarshal(b, &keyed); err != nil {
 			t.Fatalf("host-state JSON is not an object: %v", err)
 		}
-		want := []string{"provisioned", "keys", "memory", "mcp", "models", "pack", "identity"}
+		want := []string{"provisioned", "keys", "memory", "mcp", "models", "identity"}
 		if len(keyed) != len(want) {
 			t.Errorf("host-state JSON keys = %v, want exactly %v", slices.Sorted(maps.Keys(keyed)), want)
 		}
@@ -73,7 +70,7 @@ func TestBuildHostState(t *testing.T) {
 		}
 	}
 	if !hs.Provisioned {
-		t.Error("keys resolved + active pack present => provisioned")
+		t.Error("keys resolved => provisioned")
 	}
 	if hs.Models.Watcher != "gemma4:e4b-mlx" {
 		t.Errorf("watcher model wrong: %q", hs.Models.Watcher)
@@ -82,7 +79,7 @@ func TestBuildHostState(t *testing.T) {
 
 func TestBuildHostState_NotProvisioned(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
-	hs := launch.BuildHostState(cfg, "", false, func(int) bool { return false }, "", packinfo.State{}, false)
+	hs := launch.BuildHostState(cfg, "", false, func(int) bool { return false }, "", false)
 	if hs.Keys.Source != "sbx" {
 		t.Errorf("default keys source = %q, want sbx", hs.Keys.Source)
 	}
@@ -106,7 +103,7 @@ func TestBuildHostState_KeylessGatewayCountsAsResolvedInference(t *testing.T) {
 		Backends: map[string]config.InferenceBackend{"gateway": {Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "https://models.example.test/v1"}},
 		Models:   []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
 	}}
-	hs := launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", packinfo.State{}, false)
+	hs := launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", false)
 	if !hs.Keys.Resolved || hs.Keys.OpenAI || hs.Keys.Anthropic || hs.Keys.Google {
 		t.Fatalf("gateway inference should resolve without pretending direct keys exist: %+v", hs.Keys)
 	}
@@ -114,7 +111,7 @@ func TestBuildHostState_KeylessGatewayCountsAsResolvedInference(t *testing.T) {
 		t.Fatal("memory must not be reported enabled merely because its port is part of Pix")
 	}
 	cfg.Services = []string{"memory"}
-	hs = launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", packinfo.State{}, false)
+	hs = launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", false)
 	if !hs.Memory.Enabled || hs.Memory.Up {
 		t.Fatalf("enabled-but-stopped memory state is wrong: %+v", hs.Memory)
 	}
@@ -217,7 +214,7 @@ func trustedHostStateTestCfg() *config.Config {
 func TestInjectTrustedHostState_GeneratedPromptGetsJSON(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
 	args := []string{"run", "pix", ".", "--", launch.GeneratedInputMarker + "hello there"}
-	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
+	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env)
 	if err != nil {
 		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
@@ -253,7 +250,7 @@ func TestInjectTrustedHostState_GeneratedPromptGetsJSON(t *testing.T) {
 func TestInjectTrustedHostState_UserPromptUntouched(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
 	args := []string{"run", "pix", ".", "--", "fix the flaky test please"}
-	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
+	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env)
 	if err != nil {
 		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
@@ -269,7 +266,7 @@ func TestInjectTrustedHostState_NoGeneratedArg_NoProbe(t *testing.T) {
 	probed := false
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { probed = true; return "", fmt.Errorf("no sbx") }, RunFn: func(string, ...string) (string, error) { probed = true; return "", nil }}}
 	args := []string{"run", "pix", "."}
-	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
+	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env)
 	if err != nil {
 		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
@@ -287,7 +284,7 @@ func TestInjectTrustedHostState_ReturnsCopy(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
 	args := []string{"run", "pix", ".", "--", launch.GeneratedInputMarker + "hi"}
 	orig := append([]string(nil), args...)
-	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
+	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env)
 	if err != nil {
 		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
@@ -324,7 +321,7 @@ func TestEncodeTrustedHostState_EncodingFailureReturnsError(t *testing.T) {
 func TestBuildTrustedHostState_MatchesBuildHostStateShape(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{testMCPServer}}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }, DialLocalFn: func(int) bool { return true }}}
-	hs := launch.BuildTrustedHostState(cfg, env, "")
+	hs := launch.BuildTrustedHostState(cfg, env)
 	if !hs.Memory.Up {
 		t.Error("dial stub says up; launch.BuildTrustedHostState must reflect it")
 	}
@@ -345,7 +342,7 @@ func TestInjectTrustedHostState_ReportsMCPNamesOnly(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{testMCPServer}}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
 	args := []string{"run", "pix", ".", "--", launch.GeneratedInputMarker + "hi"}
-	out, err := launch.InjectTrustedHostState(args, cfg, env, "")
+	out, err := launch.InjectTrustedHostState(args, cfg, env)
 	if err != nil {
 		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
@@ -370,7 +367,7 @@ func TestInjectTrustedHostState_IgnoresStaleWorkspaceFile(t *testing.T) {
 	}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
 	args := []string{"run", "pix", dir, "--", launch.GeneratedInputMarker + "hi"}
-	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
+	out, err := launch.InjectTrustedHostState(args, trustedHostStateTestCfg(), env)
 	if err != nil {
 		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
@@ -385,88 +382,5 @@ func TestInjectTrustedHostState_IgnoresStaleWorkspaceFile(t *testing.T) {
 	}
 	if string(b) != malicious {
 		t.Error("the stale workspace file must be left untouched (never read, never written)")
-	}
-}
-
-// --- packinfo.Resolve: Active means ACTUALLY active (item 3) -----------
-
-func packStateTestEnv(t *testing.T) (dataDir string) {
-	t.Helper()
-	data := t.TempDir()
-	cfgDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", data)
-	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
-	return data
-}
-
-func writeTestPack(t *testing.T, root, name string) {
-	t.Helper()
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte("name = \""+name+"\"\nschema = 1\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// cfg.Pack empty + no override: even when the default pack EXISTS on disk, it
-// is NOT active — Active must be false, with Exists/Default/Path still
-// reporting the default pack's facts so onboarding can point at `pack use
-// default`.
-func TestResolveHostStatePack_DefaultExistsButInactive(t *testing.T) {
-	data := packStateTestEnv(t)
-	def := filepath.Join(data, "pix", "default")
-	writeTestPack(t, def, "default")
-
-	p := packinfo.Resolve(&config.Config{}, "")
-	if p.Active {
-		t.Error("Active must be false when no pack is configured, even if the default exists")
-	}
-	if !p.Exists || !p.Default {
-		t.Errorf("Exists/Default must report the default pack's presence, got %+v", p)
-	}
-	if p.Path != def {
-		t.Errorf("Path = %q, want the default root %q", p.Path, def)
-	}
-}
-
-// cfg.Pack empty + nothing on disk: everything false, no invented pack.
-func TestResolveHostStatePack_NothingConfiguredNothingOnDisk(t *testing.T) {
-	packStateTestEnv(t)
-	p := packinfo.Resolve(&config.Config{}, "")
-	if p.Active || p.Exists || p.Default || p.Path != "" {
-		t.Errorf("want the zero value when nothing exists, got %+v", p)
-	}
-}
-
-// cfg.Pack names an ALTERNATE pack: Active true, Default false, and Path is
-// the actual pack's root (never silently swapped for the default).
-func TestResolveHostStatePack_ActiveAlternate(t *testing.T) {
-	packStateTestEnv(t)
-	alt := filepath.Join(t.TempDir(), "work-pack")
-	writeTestPack(t, alt, "work")
-
-	p := packinfo.Resolve(&config.Config{Pack: alt}, "")
-	if !p.Active || !p.Exists {
-		t.Errorf("an alternate configured pack must be Active+Exists, got %+v", p)
-	}
-	if p.Default {
-		t.Errorf("an alternate pack must not be reported as the default, got %+v", p)
-	}
-	if p.Path != alt {
-		t.Errorf("Path = %q, want the alternate root %q", p.Path, alt)
-	}
-}
-
-// cfg.Pack IS the default root: Active true AND Default true.
-func TestResolveHostStatePack_ActiveDefault(t *testing.T) {
-	data := packStateTestEnv(t)
-	def := filepath.Join(data, "pix", "default")
-	writeTestPack(t, def, "default")
-
-	p := packinfo.Resolve(&config.Config{Pack: def}, "")
-	if !p.Active || !p.Exists || !p.Default {
-		t.Errorf("the configured default pack must be Active+Exists+Default, got %+v", p)
 	}
 }

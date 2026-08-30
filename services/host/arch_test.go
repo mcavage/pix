@@ -57,7 +57,6 @@ var pkgLayer = map[string]int{
 	// caller.
 	"sys/systest": layerFoundation,
 	"config":      layerFoundation,
-	"rpc":         layerFoundation,
 	"cli":         layerFoundation,
 	// hostenv, unlike sys/systest, is genuinely production L0: pack, provision,
 	// launch, doctor, models, secret, inference and mcp all import it from
@@ -76,30 +75,22 @@ var pkgLayer = map[string]int{
 	// mis-read that made two legitimate users (memory, knowledge) look like
 	// sibling violations.
 	"workspace": layerFoundation,
-	// unitreport is the SERIALIZED supervision snapshot and nothing else: no
-	// process, no lifecycle, no imports outside the stdlib. It is L0 because
-	// supervise (L2) writes it while service (L1) and workflow/doctor (L3) read
-	// it — a shape shared by three layers cannot live in any one of them.
-	"unitreport": layerFoundation,
-	// unitreport/unitreporttest is placed and layer-checked like sys/systest: a
-	// shared table of supervision-snapshot scenarios that `service` and
-	// `workflow/doctor` both classify (see its doc comment). Its every importer
-	// is a _test.go file; it stays production-shaped for the same reason
-	// sys/systest does — a package built only from _test.go files cannot be
-	// imported by another package's tests.
-	"unitreport/unitreporttest": layerFoundation,
 
 	// L1 — capability. One domain each, siblings invisible to each other.
 	//
-	// okf and knowledge (the built-in OKF knowledge service, :11436) are
-	// deliberately ABSENT from this map: W2/U03A deleted the package outright,
-	// not merely its callers. A placement entry for a package that no longer
-	// exists on disk is a GHOST — see TestArchitecture_NoGhostPlacements below,
-	// which fails the day one lingers instead of relying on someone noticing.
+	// okf and knowledge (the built-in OKF knowledge service, :11436), and
+	// `unitreport`/`unitreport/unitreporttest`, `service`, `supervise`, `plugin`,
+	// `memory` (the pre-v2 host memory CLI + custom JSON-RPC), `rpc`,
+	// `packinfo`, `uat`/`uatmatrix`/`uatenvmatrix`, `workflow/pack` and
+	// `workflow/uat` are deliberately ABSENT from this map: the Pix v2 deletion
+	// sweep (docs/design/pix-v2-architecture.md §14, AC-16) removed
+	// `pix-host serve`'s Suture supervision tree, the pack system, the
+	// self-development UAT candidate harness, and the custom memory JSON-RPC
+	// daemon outright, not merely their callers. A placement entry for a
+	// package that no longer exists on disk is a GHOST — see
+	// TestArchitecture_NoGhostPlacements below, which fails the day one lingers
+	// instead of relying on someone noticing.
 	"inference": layerCapability,
-	"plugin":    layerCapability,
-	"service":   layerCapability,
-	"memory":    layerCapability,
 	"secret":    layerCapability,
 	"mcp":       layerCapability,
 	// sandbox is U04b's focused L1 sandbox domain: naming, the tolerant sbx-
@@ -115,24 +106,14 @@ var pkgLayer = map[string]int{
 	// dependency down into a capability.
 	"session": layerCapability,
 	// hosttrust is E1.4's launcher-owned host-exec trust mechanism, extracted
-	// from workflow/pack: canonical identity, the fingerprint engine, the one
-	// Record/AcceptanceStore shape keyed by an opaque Subject{Kind,Root} (so a
-	// pack record and a future environment record never collide), the
-	// flock-serialized fresh-load->mutate->save shape, symlink-refused atomic
-	// document I/O, and content hashing. Pure mechanism only — it has no
-	// knowledge of packs, environments, or anything else that HAS a host-exec
-	// surface — so, like every other L1 capability, it imports no sibling
-	// (packinfo included: CanonicalRoot/IsSymlink duplicate a few of
-	// packinfo's lines rather than import it, exactly as sandbox and
-	// uatenvmatrix already duplicate rather than import across this boundary).
+	// from the (now-deleted) pack system: canonical identity, the fingerprint
+	// engine, the one Record/AcceptanceStore shape keyed by an opaque
+	// Subject{Kind,Root}, the flock-serialized fresh-load->mutate->save shape,
+	// symlink-refused atomic document I/O, and content hashing. Pure mechanism
+	// only — it has no knowledge of environments or anything else that HAS a
+	// host-exec surface — so, like every other L1 capability, it imports no
+	// sibling.
 	"hosttrust": layerCapability,
-	// packinfo is the READ-ONLY pack model — pack.toml's schema, the fail-closed
-	// loader, active-root resolution and the facts derived from them. It exists
-	// because launch, doctor and provision all need "what pack is active and what
-	// does it declare" and NONE of them may import workflow/pack to ask: that was
-	// the L3-to-L3 web this file now forbids outright. Trust and adoption stay at
-	// L3; this package reads, validates, and decides nothing.
-	"packinfo": layerCapability,
 	// workflow/task is Story06's L1 task-checkout capability: naming, metadata,
 	// the clone/worktree mechanism, and the git-hygiene removal guard, with NO
 	// import of workflow/launch, any sandbox runner, or lease (see its doc
@@ -140,20 +121,6 @@ var pkgLayer = map[string]int{
 	// surface it backs, but it is a leaf capability, not a workflow: it composes
 	// nothing below it and orchestrates no other capability.
 	"workflow/task": layerCapability,
-	"uat":           layerCapability,
-	// uatmatrix is the host-backed candidate-memory probe: subprocess, RPC and
-	// fixture mechanics only. workflow/uat supplies run-local paths and invokes
-	// it; the probe imports no capability sibling and owns no orchestration.
-	"uatmatrix": layerCapability,
-	// uatenvmatrix is Story 0's host-backed native-environment probe
-	// (docs/design/environments.md): the named checks candidate_smoke runs
-	// after the memory matrix, mirroring uatmatrix's shape exactly. It owns
-	// its own literal `.sbxenv.yaml` fixture bytes and MUST NOT import the
-	// future `envinfo` capability (see
-	// TestArchitecture_UatenvmatrixNeverImportsEnvinfo below) — envinfo does
-	// not exist on disk yet, so the general down-only scan cannot catch that
-	// import by itself.
-	"uatenvmatrix": layerCapability,
 	// envinfo is Story 1's L1 native-environment capability (docs/design/
 	// environments.md §5.1): strict `.sbxenv.yaml` v1 parsing, upstream's
 	// documented multi-file merge semantics, local relative kit-path
@@ -195,6 +162,9 @@ var pkgLayer = map[string]int{
 	// the REST of the launcher's paths onto PIX_HOME is a later cutover step
 	// (architecture §13 step 4), not U1.
 	"pixhome": layerFoundation,
+	// unitreport, unitreport/unitreporttest, plugin, service, memory (the
+	// pre-v2 host memory CLI), and the custom memory JSON-RPC package rpc are
+	// deleted — see the L1 comment above.
 	// release is Pix v2 U1's release-manifest schema (docs/design/
 	// pix-v2-architecture.md §3, §12): the one document binding a Pix version
 	// to the pix-agent digest, pix-memory digest, runtime archive digest, and
@@ -203,14 +173,10 @@ var pkgLayer = map[string]int{
 	// importing pixhome, so it has no intra-module imports either.
 	"release": layerFoundation,
 
-	// supervise sits ABOVE the capabilities on purpose: it is the process
-	// lifecycle that RUNS one (plugin), not a domain of its own. Filing it at L1
-	// would make its plugin import a sideways call; filing it at L2 states the
-	// truth — it composes the plugin capability into supervised units, and only
-	// the daemon entry point (package main) consumes it.
-	"supervise": layerReadiness,
-
 	// L2 — the shared model of "is this working".
+	//
+	// supervise (the Suture process supervisor that ran `plugin` capability
+	// units) is deleted with `pix-host serve` — see the L1 comment above.
 	//
 	// The readiness/axis pair that used to live here is GONE (W5/U11r): a
 	// Requirement × Verdict matrix, a lazy axis registry, four exit codes and two
@@ -262,7 +228,6 @@ var pkgLayer = map[string]int{
 	// its headless-spawn probing) was externalized the same way in W2/U02B — see
 	// docs/design/gworkspace-externalization.md — so that package is gone too;
 	// gog is registered generically through `pix mcp register`.
-	"workflow/pack":   layerWorkflow,
 	"workflow/doctor": layerWorkflow,
 	// workflow/env is E1.7's new L3 workflow (native-environment registry,
 	// exact-name resolution, location/symlink refusals — docs/design/
@@ -284,8 +249,7 @@ var pkgLayer = map[string]int{
 	// health (L2) and the applies for the three things setup installs, and owns
 	// no domain knowledge of its own.
 	"workflow/provision": layerWorkflow,
-	"workflow/reset":     layerWorkflow,
-	"workflow/uat":       layerWorkflow,
+	"workflow/reset": layerWorkflow,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,
@@ -296,15 +260,13 @@ var pkgLayer = map[string]int{
 	// skips packages with no production .go files for exactly this reason —
 	// a package that is entirely tests has no layer to place, the same way it
 	// has no budget to track in scripts/arch-metrics/budgets.json.
-
-	// "." is the pix-host daemon binary's own root package — a separate program
-	// from cmd/pix, but the same shape: argv/RPC in, dispatch out. It was
-	// exempted (-1) as a placeholder; it earns L4 honestly — its production
-	// imports (config, cli, inference, plugin, supervise,
-	// workflow/pack) are all L0-L3, so it satisfies the down-only rule without
-	// help. Its examples/ tree is gone with the MCP plugin transport it
-	// demonstrated (U11j).
-	".": layerCommand,
+	//
+	// "." (the pix-host daemon binary's own root package) is gone the same
+	// way: the Pix v2 cutover deleted pix-host outright (AC-16), so services/
+	// host's root directory carries no production .go file any more — only
+	// this file and arch_effective_test.go, which scanPackages already
+	// excludes. A ghost "." entry here would fail
+	// TestArchitecture_NoGhostPlacements the same as any other deleted package.
 }
 
 // l0Order breaks ties inside L0, which is the one layer with internal
@@ -316,14 +278,11 @@ var pkgLayer = map[string]int{
 // to config, which is correct — the OS seam should not re-derive the launcher's
 // data layout.
 var l0Order = map[string]int{
-	"config": 0, "unitreport": 0,
-	"sys": 1, "rpc": 1, "launcher": 1,
+	"config": 0,
+	"sys": 1, "launcher": 1,
 	"workspace":   2,
 	"sys/systest": 2, "hostenv": 3,
 	"cli": 4,
-	// unitreporttest imports only unitreport (rank 0), so any rank above that
-	// satisfies the strictly-lower-rank rule; parked alongside cli.
-	"unitreport/unitreporttest": 4,
 }
 
 // drainingPackages was the ONLY exemption, and it is now EMPTY: cmd/pix was
@@ -439,28 +398,13 @@ func TestArchitecture_SiblingWorkflowRuleIsEnforced(t *testing.T) {
 	}
 }
 
-// TestArchitecture_UatenvmatrixNeverImportsEnvinfo is the explicit guard
-// TestArchitecture_ImportsPointDown cannot provide by itself: even now that
-// envinfo (Story 1's L1 `.sbxenv.yaml` capability) is placed in pkgLayer
-// beside it, the general down-only + sibling rule only forbids an edge
-// BETWEEN two capabilities — it has no opinion on WHY. Story 0's whole point
-// (docs/design/environments.md section 11, ADR-ENV-003) is that uatenvmatrix
-// proves the upstream contract from its OWN literal fixture bytes, never from
-// envinfo's renderer — otherwise an agreement between the two would be a
-// tautology, not evidence. This test scans uatenvmatrix's real import graph
-// (via the same scanPackages helper) for that one forbidden import path.
-func TestArchitecture_UatenvmatrixNeverImportsEnvinfo(t *testing.T) {
-	pkgs := scanPackages(t)
-	imports, ok := pkgs["uatenvmatrix"]
-	if !ok {
-		t.Fatal("uatenvmatrix package not found on disk")
-	}
-	for _, imp := range imports {
-		if imp == "envinfo" || strings.HasPrefix(imp, "envinfo/") {
-			t.Fatalf("uatenvmatrix imports %q; it must prove the upstream contract from its own literal fixtures, never from envinfo's renderer (ADR-ENV-003)", imp)
-		}
-	}
-}
+// TestArchitecture_UatenvmatrixNeverImportsEnvinfo (the uatenvmatrix host-
+// backed native-environment probe never importing envinfo's own renderer,
+// ADR-ENV-003) was deleted along with the uatenvmatrix package itself: the
+// self-development UAT candidate-testing harness it backed went with
+// `pix-host` in the Pix v2 cutover (AC-16). There is no longer a second
+// prover of the upstream `.sbxenv.yaml` contract to keep independent of
+// envinfo's own renderer.
 
 // TestOnlyEnvinfoDecodesNativeEnvYAML (F3) is the import-graph guard the
 // implementation plan asks for: envinfo/document.go is the ONE place in

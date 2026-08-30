@@ -34,7 +34,7 @@
       "exitCode": 0,
       "stream": "stdout",
       "contains": [
-        "schema_version 5"
+        "schema_version 6"
       ]
     },
     {
@@ -46,7 +46,7 @@
       "exitCode": 1,
       "stream": "stdout",
       "contains": [
-        "\"schema_version\": 5"
+        "\"schema_version\": 6"
       ],
       "jsonKeys": [
         "schema_version",
@@ -58,8 +58,7 @@
         "checks",
         "fixes",
         "exit",
-        "elapsed_ms",
-        "supervisor"
+        "elapsed_ms"
       ]
     }
   ]

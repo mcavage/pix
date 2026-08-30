@@ -42,7 +42,6 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
-	"pix/host/service"
 	"pix/host/sys"
 )
 
@@ -405,38 +404,25 @@ func resettableStateDir(dir string) bool {
 	return filepath.IsAbs(clean) && filepath.Base(clean) == "pix"
 }
 
-// probeServeUp answers "is a `pix-host serve` daemon running right now" from the
-// daemon's IDENTITY: a loaded managed unit, or the pidfile — the one resolved from
-// the INJECTED env, never config's globals — naming a live process that is not
-// provably a stranger's. It is deliberately NOT a MEMORY_PORT health probe, which
-// gets this wrong in both directions: silent for a memory-crashed daemon (reset
-// would stop it and never bring it back) and answering for any stranger holding
-// :11435 (reset would "restart" a daemon that never ran, and would trust a
-// stranger's silence to mean our data is safe to move). settle > 0 waits,
-// bounded, for a just-stopped daemon to actually exit. Indirected through a
-// package var so tests drive both answers without a daemon on the machine.
+// probeServeUp, stopServeForReset and restartServeForReset guarded reset's
+// destructive steps against a live `pix-host serve` daemon holding the
+// memory db open. `pix-host serve` and its Suture supervision tree were
+// deleted outright in the Pix v2 cutover (docs/design/pix-v2-architecture.md
+// §14, AC-16): there is no daemon left to be up, so the guard is always
+// satisfied and there is nothing to restart. The three seams stay as
+// package vars (rather than being inlined at each call site) so a future
+// reset step that needs an equivalent guard — the pix-memory CONTAINER, say
+// — has one obvious place to look for the pattern.
 var probeServeUp = func(pidPath string, settle time.Duration) (up bool, pid int) {
-	return service.ServeIdentityUp(service.ManagedActive, pidPath, settle)
+	return false, 0
 }
 
-// stopServeForReset is the serve-stop the executor uses, indirected through a
-// package var so a test can stub it (and so the real path never signals a live
-// serve during unit tests). It is MODE-AWARE: a managed service (launchd) is
-// stopped THROUGH its supervisor, never by a bare SIGTERM KeepAlive would undo
-// (AGENTS.md invariant #3).
 var stopServeForReset = func(out io.Writer) (bool, error) {
-	return service.StopAnyMode(service.ManagedActive, service.StopManaged, service.DefaultCtl(), out)
+	return false, nil
 }
 
-// restartServeForReset brings a fresh daemon up after a reset, indirected
-// through a package var so tests can stub it. It loads the (now-default) config
-// and lazy-starts serve; service.Ensure is flock-guarded and health-waited.
 var restartServeForReset = func(out io.Writer) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	return service.Ensure(service.DefaultStarter(out), cfg, service.EnsureOpts{})
+	return nil
 }
 
 // execute performs the plan, in the one order the dependencies allow:
@@ -705,21 +691,11 @@ func unregisterMCP(a actions, env sys.System, out io.Writer) {
 	}
 }
 
-// stopHostServices best-effort stops any running `pix-host serve` so it releases
-// the db files before they move, verifying the pid is ours before signalling. It
-// RETURNS its outcome instead of only printing it: a failed stop gates every
-// destructive step below, and printing it while carrying on is exactly how a live
-// daemon's data got moved out from under it. The bool means "we signalled
-// something of ours and it exited" (evidence a daemon WAS running); whether one
-// SURVIVED is the identity probe's question, never stop's — "nothing of ours to
-// stop" is the normal answer on a clean machine.
+// stopHostServices is the last remnant of the v1 launchd-supervised
+// `pix-host serve` stop-before-move guard; there is no such daemon in v2
+// (see probeServeUp above), so this always reports "nothing was running".
 func stopHostServices(out io.Writer) (bool, error) {
-	fmt.Fprintln(out, "Stopping host services:")
-	stopped, err := stopServeForReset(out)
-	if err != nil {
-		fmt.Fprintf(out, "  . could not stop 'pix-host serve' (%v); stop it yourself if it is running\n", err)
-	}
-	return stopped, err
+	return stopServeForReset(out)
 }
 
 // printPlan shows EXACTLY what will be moved, cleared and removed before any

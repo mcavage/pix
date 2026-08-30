@@ -3,22 +3,15 @@ package health
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
-	"pix/host/launcher"
-	"pix/host/rpc"
 	"pix/host/sys"
 )
 
@@ -34,34 +27,12 @@ import (
 // different repair commands for the same gap is how a user learns to ignore
 // both.
 const (
-	SbxInstallFix   = "brew install docker/tap/sbx"
-	ServeInstallFix = "pix serve install"
-	ServeStartFix   = "pix serve"
-	// ServeRestartFix composes two real, existing verbs — `serve stop` is
-	// mode-aware (goes through the managed supervisor when there is one) and
-	// `serve start` is the (re)start alias — rather than naming a bare
-	// `restart` subcommand kong has never answered to.
-	ServeRestartFix = "pix serve stop && pix serve start"
-	// ServeVersionMismatchFix repairs a daemon that answers its port AND its
-	// identity, but as a version other than this binary's — the read-side
-	// analogue of verifyServeIdentity (service/install.go), detected here
-	// without ever restarting anything. `pix serve start` is the SAME alias
-	// serve_start.go binds to `serve install`, so this is the one command
-	// that both brings a down unit up AND reconciles a stale one, verifying
-	// the new version actually came up before it reports success.
-	ServeVersionMismatchFix = "pix serve start"
-	PackUseFix              = "pix pack use <path|owner/repo>"
-	// ServiceEnableFix repairs "the host has not enabled this service". `pix
-	// serve start` cannot: serve starts only what `services` names, so telling
-	// someone to run it for a service their config leaves out is a fix that
-	// provably does nothing. This is the command serve itself names when it
-	// finds nothing enabled.
-	ServiceEnableFix = "pix config set services %s"
-	SecretSetFix     = "pix secret set %s op://vault/item/field"
+	SbxInstallFix = "brew install docker/tap/sbx"
+	SecretSetFix  = "pix secret set %s op://vault/item/field"
 	// ModelKeyFix repairs the ANY-OF gap: pix launches a model with one
-	// provider key, so the repair names one provider rather than listing three
-	// commands a user must choose between.
-	ModelKeyFix = "pix models add anthropic"
+	// provider key, and `pix setup` is the one place that key interview still
+	// runs (the standalone `pix models add` verb was cut from the v2 surface).
+	ModelKeyFix = "pix setup"
 	// SbxUpgradeFix repairs a too-old or unparsable sbx version — a different
 	// problem from a missing binary (SbxInstallFix), so it gets its own exact
 	// command rather than reusing that one.
@@ -420,293 +391,6 @@ func SbxVersionGate(r Result) (blocked bool, found string) {
 func SbxVersionGateMessage(found string) string {
 	return fmt.Sprintf("pix: native environments require sbx %s or later.\n     found: %s\n     upgrade it: %s\n",
 		SbxMinVersion, found, SbxUpgradeFix)
-}
-
-// --- launchd ----------------------------------------------------------------
-
-// notLoaded is what launchctl says when the label is genuinely not in the
-// domain. It is the ONLY launchctl failure that proves the agent is unloaded;
-// everything else (a permission error, a wedged launchd, a bad domain) is
-// unknown.
-var notLoaded = []string{"could not find service", "no such process", "not find service"}
-
-// LaunchdProbe proves the pix LaunchAgent is loaded in the user's gui domain.
-type LaunchdProbe struct {
-	Bin   string
-	Label string
-	UID   int
-	Args  []string // overrides the launchctl argv (tests point this at a fixture)
-	// Exists reports whether the program launchd would spawn is on disk. A
-	// FIELD, not a package var: this is a seam a test fills, and a leaf may not
-	// hold a function-valued global.
-	Exists func(string) bool
-}
-
-// programOnDisk answers whether launchd's configured executable is still there.
-func (p LaunchdProbe) programOnDisk(path string) bool {
-	if p.Exists != nil {
-		return p.Exists(path)
-	}
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-// launchdProgram reads the executable out of `launchctl print`, which reports it
-// as `program = <path>`. Empty when launchctl said nothing about it — an answer
-// that must never be read as "missing".
-func launchdProgram(out string) string {
-	for _, line := range strings.Split(out, "\n") {
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "program = "); ok {
-			return strings.TrimSpace(rest)
-		}
-	}
-	return ""
-}
-
-func (LaunchdProbe) Name() string   { return "launchd" }
-func (LaunchdProbe) Required() bool { return false }
-
-func (p LaunchdProbe) argv() []string {
-	if len(p.Args) > 0 {
-		return p.Args
-	}
-	return []string{"print", fmt.Sprintf("gui/%d/%s", p.UID, p.Label)}
-}
-
-func (p LaunchdProbe) Check(ctx context.Context) Result {
-	bin := p.Bin
-	if strings.TrimSpace(bin) == "" {
-		bin = "launchctl"
-	}
-	o := runBounded(ctx, bin, p.argv()...)
-	low := strings.ToLower(o.out)
-	switch {
-	case o.notFound:
-		return Result{Name: p.Name(), Status: StatusUnknown, Detail: "launchctl not available",
-			Evidence: "launchctl is not on PATH"}
-	case o.denied:
-		return Result{Name: p.Name(), Status: StatusDenied, Detail: "launchd refused the query",
-			Fix: ServeInstallFix, Evidence: "launchctl print was refused"}
-	case (o.failed || o.timedOut) && containsAny(low, notLoaded):
-		return Result{Name: p.Name(), Status: StatusAbsent, Detail: "agent not loaded", Fix: ServeInstallFix,
-			Evidence: "launchctl print: " + p.Label + " not in domain"}
-	case o.timedOut || o.failed:
-		return unknownExec(p.Name(), o, "launchctl print")
-	}
-	// LOADED IS NOT THE SAME AS ABLE TO START. `pix serve install` used to
-	// resolve the binary through its symlink, so a Homebrew install wrote a
-	// versioned Cellar path into the plist and the next `brew upgrade` deleted
-	// it. launchd keeps such a job, reports it perfectly happily, and can never
-	// spawn it — so this row said `✓ agent loaded` across three days of a user
-	// chasing "pix setup hangs" whose actual cause was that every `launchctl
-	// kickstart -k` was blocking on a job with no executable.
-	//
-	// The row now says what it can prove: the agent is loaded AND the program it
-	// would run is on disk.
-	if prog := launchdProgram(o.out); prog != "" && !p.programOnDisk(prog) {
-		return Result{Name: p.Name(), Status: StatusAbsent,
-			Detail: "agent loaded but its program is missing", Fix: ServeInstallFix,
-			Evidence: "launchctl print: program = " + prog + " (not on disk — likely a package upgrade removed it)"}
-	}
-	return Result{Name: p.Name(), Status: StatusReady, Detail: "agent loaded", Evidence: "launchctl print: " + p.Label}
-}
-
-func containsAny(s string, needles []string) bool {
-	for _, n := range needles {
-		if strings.Contains(s, n) {
-			return true
-		}
-	}
-	return false
-}
-
-// --- memory unit ------------------------------------------------------------
-
-// MemoryUnitProbe reports the memory unit as the SUPERVISOR sees it: it asks
-// the unit's own identity method, so the answer carries the Suture unit state
-// (running/backoff/failed, and the reason) rather than "something holds the
-// port". A dial alone is not evidence — a surviving daemon from an older
-// install answers a dial perfectly well.
-type MemoryUnitProbe struct {
-	Port    int
-	Enabled bool // in the configured services set
-}
-
-func (MemoryUnitProbe) Name() string     { return "memory" }
-func (p MemoryUnitProbe) Required() bool { return p.Enabled }
-
-func (p MemoryUnitProbe) Check(ctx context.Context) Result {
-	// A service the host has not enabled is not a service that is DOWN, and it
-	// is not a gap either — the ELIGIBLE case StatusOff exists for: the user's
-	// own `services` config is what makes memory absent, and running without it
-	// is a supported end state. Dialing it anyway used to report "unit down
-	// (:11435 refused)" with `pix serve start` as the fix — a command that
-	// would not start it, because `serve` starts only what `services` names.
-	// That row could never be cleared by the fix it printed, which is exactly
-	// the trap the retired monitor row sat in. It carries a Hint instead of a
-	// Fix: turning memory on is an invitation, not a repair.
-	if !p.Enabled {
-		return Result{Name: p.Name(), Status: StatusOff, Required: false,
-			Detail:   "not enabled",
-			Hint:     fmt.Sprintf("memory gives the agent durable, cross-session recall — turn it on with `%s`", fmt.Sprintf(ServiceEnableFix, p.Name())),
-			Evidence: "not in the configured `services` set; nothing was dialed"}
-	}
-	id, err := identityAt(ctx, p.Port)
-	if err != nil {
-		if refused(err) {
-			return Result{Name: p.Name(), Status: StatusAbsent, Required: p.Enabled,
-				Detail: fmt.Sprintf("unit down (:%d refused)", p.Port), Fix: ServeStartFix,
-				Evidence: fmt.Sprintf("connection refused on :%d", p.Port)}
-		}
-		return Result{Name: p.Name(), Status: StatusUnknown, Required: p.Enabled,
-			Detail: "unit did not answer", Evidence: fmt.Sprintf("identity on :%d: %s", p.Port, classifyNetErr(ctx, err))}
-	}
-	want := launcher.Version
-	switch {
-	case id.Name != rpc.MemoryName:
-		return Result{Name: p.Name(), Status: StatusAbsent, Required: p.Enabled,
-			Detail: fmt.Sprintf("port held by %q, not the memory unit", id.Name), Fix: ServeRestartFix,
-			Evidence: fmt.Sprintf(":%d identity name = %q", p.Port, id.Name)}
-	case !id.Ready:
-		detail := "unit not ready"
-		if id.DegradedReason != "" {
-			detail = "unit not ready: " + id.DegradedReason
-		}
-		return Result{Name: p.Name(), Status: StatusAbsent, Required: p.Enabled, Detail: detail,
-			Fix: ServeRestartFix, Evidence: fmt.Sprintf(":%d identity ready=false", p.Port)}
-	// A unit that answers ready, on our own name, can STILL be the wrong
-	// build: a listening port (and even a ready unit) is not evidence the
-	// RIGHT binary is behind it, the same gap verifyServeIdentity closes on
-	// the explicit start path. Detected here READ-ONLY — this probe reports,
-	// it never restarts — and the fix is the one command that both starts a
-	// down unit and reconciles a stale one (verifying convergence before it
-	// claims success), never a bare restart hint that could not close a
-	// version gap on its own.
-	case id.Version != "" && id.Version != want:
-		return Result{Name: p.Name(), Status: StatusAbsent, Required: p.Enabled,
-			Detail:   fmt.Sprintf("degraded: running version %s, host expects %s", id.Version, want),
-			Fix:      ServeVersionMismatchFix,
-			Evidence: fmt.Sprintf(":%d identity version = %q, want %q", p.Port, id.Version, want)}
-	}
-	return Result{Name: p.Name(), Status: StatusReady, Required: p.Enabled,
-		Detail: fmt.Sprintf("unit running (:%d)", p.Port), Evidence: fmt.Sprintf(":%d identity = %s", p.Port, id.Name)}
-}
-
-// identityAt makes the real identity JSON-RPC call, bounded by ctx. A body we
-// cannot parse is an error, never a zero-valued "not ready": inventing a
-// verdict out of an unreadable answer is the exact failure this model bans.
-func identityAt(ctx context.Context, port int) (rpc.ServiceIdentity, error) {
-	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"identity","params":{}}`)
-	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return rpc.ServiceIdentity{}, err
-	}
-	req.Header.Set("content-type", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return rpc.ServiceIdentity{}, err
-	}
-	defer res.Body.Close()
-	var parsed struct {
-		Result struct {
-			Name           string `json:"name"`
-			Version        string `json:"version"`
-			Port           int    `json:"port"`
-			Ready          bool   `json:"ready"`
-			DegradedReason string `json:"degraded_reason"`
-		} `json:"result"`
-	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<16)).Decode(&parsed); err != nil {
-		return rpc.ServiceIdentity{}, fmt.Errorf("unreadable identity payload: %w", err)
-	}
-	if parsed.Result.Name == "" {
-		return rpc.ServiceIdentity{}, errors.New("identity payload named nothing")
-	}
-	return rpc.ServiceIdentity{Name: parsed.Result.Name, Version: parsed.Result.Version, Port: parsed.Result.Port,
-		Ready: parsed.Result.Ready, DegradedReason: parsed.Result.DegradedReason}, nil
-}
-
-// refused reports a connection REFUSED — positive evidence that nothing is
-// listening, as opposed to a timeout, which is evidence of nothing.
-func refused(err error) bool {
-	return errors.Is(err, syscall.ECONNREFUSED)
-}
-
-func classifyNetErr(ctx context.Context, err error) string {
-	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
-		return "timed out"
-	}
-	if strings.Contains(err.Error(), "unreadable identity payload") {
-		return "unreadable answer"
-	}
-	return "no usable answer"
-}
-
-// --- pack -------------------------------------------------------------------
-
-// PackProbe reports the active pack. A host with no pack is a perfectly good
-// host, so this axis is optional — but "you configured a pack and it is not
-// there" is a verified gap with an exact fix.
-type PackProbe struct {
-	Root string
-	// Resolve, when set, WINS over Root and is called fresh on every Check —
-	// so a probe built once (before an apply mutates the config that decides
-	// the pack root) still reports the CURRENT root on a later check, rather
-	// than the one resolved at construction. Callers with nothing mutating
-	// underneath them (doctor, tests) can keep using the plain Root field.
-	Resolve func() string
-}
-
-func (PackProbe) Name() string   { return "pack" }
-func (PackProbe) Required() bool { return false }
-
-func (p PackProbe) Check(context.Context) Result {
-	root := p.Root
-	if p.Resolve != nil {
-		root = p.Resolve()
-	}
-	p.Root = root
-	if strings.TrimSpace(p.Root) == "" {
-		// No pack CONFIGURED at all is ELIGIBLE for off: the user never named one,
-		// a pack-less host is a fully supported end state, and "you are missing
-		// this" was always false here — there was never anything to be missing. A
-		// pack that WAS configured and then went missing (below) stays a real,
-		// fixable gap: that absence is not something the user chose.
-		return Result{Name: p.Name(), Status: StatusOff, Detail: "no active pack",
-			Hint:     "a pack carries skills, knowledge, MCP servers and config — " + PackUseFix,
-			Evidence: "no pack root configured"}
-	}
-	info, err := os.Stat(p.Root)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return Result{Name: p.Name(), Status: StatusAbsent, Detail: "active pack is missing from disk",
-			Fix: PackUseFix, Evidence: p.Root + " does not exist"}
-	case err != nil:
-		return Result{Name: p.Name(), Status: StatusUnknown, Detail: "pack root unreadable",
-			Evidence: p.Root + ": " + classifyStatErr(err)}
-	case !info.IsDir():
-		return Result{Name: p.Name(), Status: StatusAbsent, Detail: "active pack is not a directory",
-			Fix: PackUseFix, Evidence: p.Root + " is not a directory"}
-	}
-	manifest := filepath.Join(p.Root, "pack.toml")
-	if _, err := os.Stat(manifest); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Result{Name: p.Name(), Status: StatusAbsent, Detail: "active pack has no pack.toml",
-				Fix: PackUseFix, Evidence: manifest + " does not exist"}
-		}
-		return Result{Name: p.Name(), Status: StatusUnknown, Detail: "pack manifest unreadable",
-			Evidence: manifest + ": " + classifyStatErr(err)}
-	}
-	return Result{Name: p.Name(), Status: StatusReady, Detail: filepath.Base(p.Root),
-		Evidence: "active pack at " + p.Root}
-}
-
-func classifyStatErr(err error) string {
-	if errors.Is(err, os.ErrPermission) {
-		return "permission denied"
-	}
-	return "unreadable"
 }
 
 // --- providers / model keys -------------------------------------------------

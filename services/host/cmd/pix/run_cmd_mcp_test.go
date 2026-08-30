@@ -5,51 +5,41 @@ import (
 	"testing"
 
 	"pix/host/config"
-	"pix/host/packinfo"
 	"pix/host/workflow/launch"
 )
 
-// TestComposeStaticMCP_IncludesPackContributionWithoutMutatingCfg is the
-// regression for the composition defect in runLaunch: the create-time
-// --static-mcp line used to be built from cfg.MCP + o.MCP alone, discarding
-// whatever a verified pack had already folded into o.StaticMCP via
-// ApplyPackContribution. A pack-contributed server must survive that fold, and
-// composeStaticMCP must never mutate or alias cfg.MCP, o.MCP, or the pack's own
-// slice while doing it.
-func TestComposeStaticMCP_IncludesPackContributionWithoutMutatingCfg(t *testing.T) {
+// TestComposeStaticMCP_DedupesConfigAndFlagServersWithoutMutatingCfg proves
+// composeStaticMCP folds the configured (cfg.MCP) and flag-requested (o.MCP)
+// servers into one create-time --static-mcp set without mutating or aliasing
+// either input's backing array. The pack-contributed third input this test
+// used to prove was deleted with the pack system in the Pix v2 cutover
+// (AC-16): there is no more pack to fold in.
+func TestComposeStaticMCP_DedupesConfigAndFlagServersWithoutMutatingCfg(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"slack"}}
 	cfgMCPBefore := append([]string(nil), cfg.MCP...)
 	cfgMCPBacking := cfg.MCP[:1] // same backing array as cfg.MCP, to catch aliasing
 
-	packMCPNames := []string{"notion"}
-	packMCPNamesBefore := append([]string(nil), packMCPNames...)
+	oMCP := []string{"notion"}
+	oMCPBefore := append([]string(nil), oMCP...)
 
-	o := launch.RunOpts{Workspace: "."}
-	o.ApplyPackContribution(packinfo.LaunchContribution{MCPNames: packMCPNames})
-	if !slices.Equal(o.StaticMCP, []string{"notion"}) {
-		t.Fatalf("pack contribution not folded in: o.StaticMCP = %v", o.StaticMCP)
-	}
+	got := composeStaticMCP(nil, cfg.MCP, oMCP)
 
-	got := composeStaticMCP(o.StaticMCP, cfg.MCP, o.MCP)
-
-	// The pack's contribution must be present exactly once alongside the
-	// configured server, in the merged create-time set.
-	want := []string{"notion", "slack"}
+	want := []string{"slack", "notion"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("composeStaticMCP = %v, want %v", got, want)
 	}
 
-	// None of the inputs may have been mutated or aliased: cfg.MCP, the pack's
-	// own MCPNames slice, and the backing array cfg.MCP shares with itself must
-	// all still hold their original values after the fold.
+	// Neither input may have been mutated or aliased: cfg.MCP, the flag's own
+	// slice, and the backing array cfg.MCP shares with itself must all still
+	// hold their original values after the fold.
 	if !slices.Equal(cfg.MCP, cfgMCPBefore) {
 		t.Fatalf("cfg.MCP mutated: got %v, want %v", cfg.MCP, cfgMCPBefore)
 	}
 	if !slices.Equal(cfgMCPBacking, cfgMCPBefore) {
 		t.Fatalf("cfg.MCP backing array aliased/overwritten: got %v, want %v", cfgMCPBacking, cfgMCPBefore)
 	}
-	if !slices.Equal(packMCPNames, packMCPNamesBefore) {
-		t.Fatalf("pack's MCPNames slice mutated: got %v, want %v", packMCPNames, packMCPNamesBefore)
+	if !slices.Equal(oMCP, oMCPBefore) {
+		t.Fatalf("flag MCP slice mutated: got %v, want %v", oMCP, oMCPBefore)
 	}
 
 	// Mutating the returned slice must not reach back into any input's backing
@@ -57,15 +47,15 @@ func TestComposeStaticMCP_IncludesPackContributionWithoutMutatingCfg(t *testing.
 	if len(got) > 0 {
 		got[0] = "clobbered"
 	}
-	if !slices.Equal(cfg.MCP, cfgMCPBefore) || !slices.Equal(packMCPNames, packMCPNamesBefore) {
+	if !slices.Equal(cfg.MCP, cfgMCPBefore) || !slices.Equal(oMCP, oMCPBefore) {
 		t.Fatalf("mutating composeStaticMCP's result aliased back into an input")
 	}
 
-	// End-to-end: the actual sbx create argv must carry the pack-contributed
-	// server exactly once, same as any configured one.
-	o.StaticMCP = composeStaticMCP(o.StaticMCP, cfg.MCP, o.MCP)
+	// End-to-end: the actual sbx create argv must carry each server exactly once.
+	o := launch.RunOpts{Workspace: "."}
+	o.StaticMCP = composeStaticMCP(o.StaticMCP, cfg.MCP, oMCP)
 	args := launch.BuildSbxArgs(cfg, o, "0.0.99")
-	for _, name := range []string{"notion", "slack"} {
+	for _, name := range []string{"slack", "notion"} {
 		if n := countStaticMCPFlag(args, name); n != 1 {
 			t.Errorf("--static-mcp %s occurs %d times in create args, want exactly 1: %v", name, n, args)
 		}

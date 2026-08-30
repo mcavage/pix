@@ -11,11 +11,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"time"
 
 	"pix/host/config"
 	"pix/host/health"
-	"pix/host/rpc"
 	"pix/host/secret"
 )
 
@@ -52,14 +52,44 @@ func ProbeModelKeysBudget(ctx context.Context, budget time.Duration, bin string,
 // could not be asked) are not that answer and never stop a launch.
 func RefusesLaunch(r health.Result) bool { return r.Effective() == health.StatusAbsent }
 
+// memoryLivenessProbe is a plain TCP dial to the pix-memory container's
+// published loopback port — evidence that SOMETHING is listening, not a
+// version- or identity-verified answer. `pix doctor`'s
+// health.MemoryContainerProbe is the thorough, Docker-state-verified check;
+// this one only needs to be fast and cheap enough to run on every `pix run`.
+// The custom memory JSON-RPC identity call this used to make was deleted in
+// the Pix v2 cutover along with the daemon that answered it (AC-16).
+type memoryLivenessProbe struct {
+	Port    int
+	Enabled bool
+}
+
+func (memoryLivenessProbe) Name() string     { return "memory" }
+func (p memoryLivenessProbe) Required() bool { return false }
+
+func (p memoryLivenessProbe) Check(ctx context.Context) health.Result {
+	if !p.Enabled {
+		return health.Result{Name: p.Name(), Status: health.StatusOff, Detail: "not enabled"}
+	}
+	d := net.Dialer{Timeout: 500 * time.Millisecond}
+	conn, err := d.DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", p.Port))
+	if err != nil {
+		return health.Result{Name: p.Name(), Status: health.StatusAbsent, Required: false,
+			Detail: fmt.Sprintf("not reachable on :%d", p.Port), Fix: "pix doctor",
+			Evidence: fmt.Sprintf("dialing 127.0.0.1:%d: %v", p.Port, err)}
+	}
+	_ = conn.Close()
+	return health.Result{Name: p.Name(), Status: health.StatusReady, Detail: fmt.Sprintf("listening on :%d", p.Port)}
+}
+
 // FastSnapshot is the small snapshot the daily path renders: the key evidence
 // `run` already paid for, plus the one host service whose absence silently
 // degrades a session (recall). Everything else belongs to `pix doctor`, whose
 // job is to be thorough. A zero-value keys Result (the gate did not run) is
 // omitted rather than rendered: absence of evidence is not a row.
 func FastSnapshot(ctx context.Context, cfg *config.Config, keys health.Result) health.Snapshot {
-	snap := health.Run(ctx, health.StatusBudget, health.MemoryUnitProbe{
-		Port:    rpc.PortFromEnv("MEMORY_PORT", rpc.MemoryPortDefault),
+	snap := health.Run(ctx, health.StatusBudget, memoryLivenessProbe{
+		Port:    memoryPortDefault,
 		Enabled: config.ServiceEnabled(cfg, "memory"),
 	})
 	if keys.Name != "" {

@@ -14,10 +14,14 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/packinfo"
-	"pix/host/rpc"
 	"pix/host/secret"
 )
+
+// memoryPortDefault is the pix-memory container's default published port
+// (container.Spec's own default; duplicated here as a literal rather than an
+// import because this is a LIVENESS DIAL, not a call through the custom
+// memory JSON-RPC protocol the Pix v2 cutover deleted — see AC-16).
+const memoryPortDefault = 11435
 
 type hostStateKeys struct {
 	Anthropic bool   `json:"anthropic"`
@@ -54,7 +58,6 @@ type HostState struct {
 	Memory      hostStateSvc      `json:"memory"`
 	MCP         hostStateMCP      `json:"mcp"`
 	Models      hostStateModels   `json:"models"`
-	Pack        packinfo.State    `json:"pack"`
 	Identity    hostStateIdentity `json:"identity"`
 }
 
@@ -86,7 +89,7 @@ func SanitizeIdentity(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, keysSource string, pack packinfo.State, githubGlobal bool) HostState {
+func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, keysSource string, githubGlobal bool) HostState {
 	dialer := func(p int) bool { return dial != nil && dial(p) }
 	// A key is OK only when the probe ANSWERED and named it. An unreadable
 	// `sbx secret ls` reports every key as not-set rather than inventing a
@@ -121,14 +124,13 @@ func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 
 	hs := HostState{
 		Keys:   keys,
-		Memory: hostStateSvc{Enabled: slices.Contains(cfg.Services, "memory"), Up: dialer(rpc.MemoryPortDefault), Port: rpc.MemoryPortDefault},
+		Memory: hostStateSvc{Enabled: slices.Contains(cfg.Services, "memory"), Up: dialer(memoryPortDefault), Port: memoryPortDefault},
 		MCP:    hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
 		Models: hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
-		Pack:   pack,
 	}
 	// Provisioned: an inherited, fully set-up environment that must NOT be
-	// re-onboarded — keys resolved AND a pack actually active.
-	hs.Provisioned = keys.Resolved && hs.Pack.Active
+	// re-onboarded — keys resolved.
+	hs.Provisioned = keys.Resolved
 	return hs
 }
 
@@ -148,7 +150,7 @@ func hasConfiguredKeylessModel(cfg *config.Config) bool {
 	return false
 }
 
-func BuildTrustedHostState(cfg *config.Config, env hostenv.Env, packOverride string) HostState {
+func BuildTrustedHostState(cfg *config.Config, env hostenv.Env) HostState {
 	sbxOut, sbxOK := "", false
 	if _, err := env.LookPath("sbx"); err == nil {
 		// BOUNDED: a hung `sbx secret ls` leaves sbxOK=false — keys stay
@@ -167,8 +169,7 @@ func BuildTrustedHostState(cfg *config.Config, env hostenv.Env, packOverride str
 	// not push. A credential one box can use is not one this payload may promise
 	// to every box.
 	ghState, _ := secret.ProbeGitHubSecret(env)
-	hs := BuildHostState(cfg, sbxOut, sbxOK, env.DialLocal, source, packinfo.Resolve(cfg, packOverride),
-		ghState == secret.GitHubSecretGlobal)
+	hs := BuildHostState(cfg, sbxOut, sbxOK, env.DialLocal, source, ghState == secret.GitHubSecretGlobal)
 	hs.Identity = ReadGitIdentity(env)
 	return hs
 }
@@ -191,13 +192,13 @@ const (
 // GeneratedInputMarker), and ONLY that arg, returning a COPY of args. This is
 // the ENTIRE mechanism by which trusted host facts reach the fenced in-VM
 // agent; an ordinary user-typed prompt never carries the marker.
-func InjectTrustedHostState(args []string, cfg *config.Config, env hostenv.Env, packOverride string) ([]string, error) {
+func InjectTrustedHostState(args []string, cfg *config.Config, env hostenv.Env) ([]string, error) {
 	out := append([]string(nil), args...)
 	idx := slices.IndexFunc(out, func(a string) bool { return strings.HasPrefix(a, GeneratedInputMarker) })
 	if idx < 0 {
 		return out, nil
 	}
-	b, err := EncodeTrustedHostState(BuildTrustedHostState(cfg, env, packOverride))
+	b, err := EncodeTrustedHostState(BuildTrustedHostState(cfg, env))
 	if err != nil {
 		return nil, err
 	}

@@ -506,12 +506,14 @@ positively verified failure, **0** otherwise, including every optional or
 unverifiable gap. Required, always: the **sbx CLI** being installed and at
 least one resolved **provider key** (a single key for any one of Anthropic,
 OpenAI, or Google satisfies it; you don't need all three): either one
-failing alone is enough to fail doctor. Required only when configured:
-**memory**, once listed in `services`. Never required:
-**launchd** and **pack** (a host with neither configured is a perfectly good
-host). A config file that fails to load entirely is its own separate
-required gap: nothing else can be probed without one, so it is reported
-alone.
+failing alone is enough to fail doctor. A config file that fails to load
+entirely is its own separate required gap: nothing else can be probed
+without one, so it is reported alone. `pix-host serve`'s Suture-supervised
+launchd unit and the pack system were both deleted in the Pix v2 cutover
+(docs/design/pix-v2-architecture.md §14): there is no launchd/pack row left
+to ever be required OR optional. The PIX_HOME-scoped `pix-memory` container's
+health is a separate, always-run probe set (`CheckHome`), not part of this
+required/optional model at all.
 
 **sbx-missing exit codes are unified across every surface that shells to
 sbx.** `pix ls`, `pix rm`, and every `pix mcp` verb that promises an operation
@@ -521,10 +523,13 @@ drifting into four different "sbx is missing" stories:
 
 | surface | sbx absent -> exit | message names |
 | --- | --- | --- |
-| `pix ls` | 3 (`rpc.ExitServiceDown`) | the exact install fix (`brew install docker/tap/sbx`) |
-| `pix rm` | 3 (`rpc.ExitServiceDown`) | the exact install fix |
-| `pix mcp ls/add/auth` | 3 (`rpc.ExitServiceDown`) | `would run: sbx ...` on **stderr**, so a script piping stdout never sees it |
+| `pix ls` | 3 (`exitServiceDown`) | the exact install fix (`brew install docker/tap/sbx`) |
+| `pix rm` | 3 (`exitServiceDown`) | the exact install fix |
 | `pix doctor` | 1 (`ExitNotReady`) only if a REQUIRED check is a verified gap; sbx's own gap is `todo` with the exact install fix as its `Fix` | the exact install fix (`health.SbxInstallFix`) |
+
+`pix mcp` is not part of the v2 CLI surface (Pix's own MCP registration/
+administration was deleted, AC-16); the sbx Gateway is the only
+sandbox-facing integration path.
 
 The shared plumbing: `mcp.ErrSbxUnavailable` is the one sentinel every mutating
 mcp verb and `ls`/`rm` wrap (`errors.Is`-detectable); the command layer maps it

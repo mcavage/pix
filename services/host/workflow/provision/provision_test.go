@@ -14,6 +14,24 @@ import (
 	"pix/host/health"
 )
 
+// dirMarkerProbe is a real-filesystem probe standing in for the pack root
+// probe these tests were written against (health.PackProbe, deleted with the
+// pack system in the Pix v2 cutover — AC-16): is Root a directory containing
+// a marker file. What these tests actually exercise is the generic
+// check-apply-check provision loop (Run/Options/Step), not anything
+// pack-specific, so any real, two-state filesystem probe proves the same
+// thing.
+type dirMarkerProbe struct{ Root string }
+
+func (dirMarkerProbe) Name() string     { return "pack" }
+func (dirMarkerProbe) Required() bool   { return false }
+func (p dirMarkerProbe) Check(context.Context) health.Result {
+	if _, err := os.Stat(filepath.Join(p.Root, "pack.toml")); err != nil {
+		return health.Result{Name: p.Name(), Status: health.StatusAbsent, Detail: "not present", Fix: "create it"}
+	}
+	return health.Result{Name: p.Name(), Status: health.StatusReady, Detail: "present"}
+}
+
 // These tests provision REAL state: each step's probe reads the filesystem and
 // each apply writes it (one by exec'ing a real script), so "check, apply, check
 // again" runs end to end. Nothing fakes a probe's answer — the only way a step
@@ -26,7 +44,7 @@ func packStep(root string) Step { return namedPackStep("pack", root) }
 func namedPackStep(name, root string) Step {
 	return Step{
 		Name:  name,
-		Probe: health.PackProbe{Root: root},
+		Probe: dirMarkerProbe{Root: root},
 		Apply: func(context.Context) error {
 			if err := os.MkdirAll(root, 0o755); err != nil {
 				return err
@@ -39,7 +57,7 @@ func namedPackStep(name, root string) Step {
 // namedLyingStep claims success without doing anything — the failure mode the
 // second check exists to catch.
 func namedLyingStep(name, root string) Step {
-	return Step{Name: name, Probe: health.PackProbe{Root: root}, Apply: func(context.Context) error { return nil }}
+	return Step{Name: name, Probe: dirMarkerProbe{Root: root}, Apply: func(context.Context) error { return nil }}
 }
 
 func TestApplyThenSecondCheckIsTheOnlySuccess(t *testing.T) {
@@ -85,7 +103,7 @@ func TestAlreadyReadyIsNeverMutated(t *testing.T) {
 		t.Fatal(err)
 	}
 	applied := false
-	step := Step{Name: "pack", Probe: health.PackProbe{Root: root}, Apply: func(context.Context) error {
+	step := Step{Name: "pack", Probe: dirMarkerProbe{Root: root}, Apply: func(context.Context) error {
 		applied = true
 		return nil
 	}}
@@ -250,7 +268,7 @@ func TestDeniedIsReportedNotApplied(t *testing.T) {
 func TestApplyErrorIsRecordedAndOtherStepsStillRun(t *testing.T) {
 	dir := t.TempDir()
 	good := filepath.Join(dir, "good")
-	bad := Step{Name: "bad", Probe: health.PackProbe{Root: filepath.Join(dir, "bad")},
+	bad := Step{Name: "bad", Probe: dirMarkerProbe{Root: filepath.Join(dir, "bad")},
 		Apply: func(context.Context) error { return errors.New("no permission to write") }}
 	o := Run(context.Background(), Options{}, bad, namedPackStep("good", good))
 
@@ -278,7 +296,7 @@ func TestApplyRunsRealCommandAndSecondCheckSeesIt(t *testing.T) {
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	step := Step{Name: "pack", Probe: health.PackProbe{Root: root}, Apply: func(ctx context.Context) error {
+	step := Step{Name: "pack", Probe: dirMarkerProbe{Root: root}, Apply: func(ctx context.Context) error {
 		return exec.CommandContext(ctx, script, root).Run()
 	}}
 	o := Run(context.Background(), Options{}, step)

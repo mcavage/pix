@@ -12,36 +12,14 @@ import (
 )
 
 // The onboarding half of provision, tested against REAL boundaries like the rest
-// of this package: a real config file on disk, a real pack.toml the allowlist is
-// read from, and the package's own composition (Register/VerifyCatalogMCPReady)
-// rather than a Deps struct built for the test. Nothing here stubs an answer.
+// of this package: a real config file on disk and the package's own
+// composition (Register/VerifyCatalogMCPReady) rather than a Deps struct built
+// for the test. Nothing here stubs an answer.
 //
-// The allowlist has exactly two members now — a name the ACTIVE PACK declares
-// and a curated catalog endpoint pix knows the URL for — so there is no local
-// stdio probe to fake and no vendor with a standing exemption.
-
-// declaredPack writes a real pack declaring one command-transport MCP server,
-// points cfg.Pack at it, and returns the declared server name. It is the
-// boundary the allowlist is read through: packinfo.ActiveServerMCP loads this
-// very file.
-func declaredPack(t *testing.T, mcpName string) string {
-	t.Helper()
-	root := t.TempDir()
-	manifest := "name = \"work\"\nschema = 1\n\n[[integrations]]\nname = \"Notes\"\nmcp = \"" +
-		mcpName + "\"\ncommand = \"notes-mcp\"\n"
-	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte(manifest), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Pack = root
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	return mcpName
-}
+// The allowlist has exactly one member now that packs are gone (Pix v2
+// cutover, AC-16): a curated catalog endpoint pix knows the URL for
+// (mcp.McpCatalogNames). An onboarding proposal naming anything else is
+// refused.
 
 // writeProposal writes <ws>/.pix/onboarding.json against a temp config file.
 func writeProposal(t *testing.T, ws, body string) string {
@@ -84,17 +62,13 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 	}
 }
 
-// The pack declaration IS the allowlist, read from a REAL pack.toml on disk
-// through the same ReconcileOnboarding path production uses: a name the active
-// pack declares is accepted, and one it does not is refused with a message
-// naming the two ways to fix it. This replaces the old `pix-host mcp --list`
-// probe — nothing is asked of a subprocess any more, because the answer is pure
-// manifest data.
-func TestValidateOnboarding_PackDeclarationIsTheAllowlist(t *testing.T) {
+// The shipped catalog IS the allowlist now that packs are gone: a name
+// mcp.McpCatalogNames recognizes is accepted, and one it does not is refused
+// with a message naming the fix.
+func TestValidateOnboarding_CatalogIsTheAllowlist(t *testing.T) {
 	ws := t.TempDir()
-	name := "notes"
+	name := "notion"
 	writeProposal(t, ws, `{"version":1,"mcp":["`+name+`"]}`)
-	declaredPack(t, name)
 
 	var out bytes.Buffer
 	ReconcileOnboarding(ws, realEnv(), strings.NewReader(""), &out, true, false)
@@ -103,17 +77,16 @@ func TestValidateOnboarding_PackDeclarationIsTheAllowlist(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !slices.Contains(cfg.MCP, name) {
-		t.Errorf("a server the active pack declares must be accepted; mcp=%v out:\n%s", cfg.MCP, out.String())
+		t.Errorf("a shipped catalog server must be accepted; mcp=%v out:\n%s", cfg.MCP, out.String())
 	}
 
-	// The same host, a name the pack does NOT declare: refused, nothing applied.
+	// The same host, a name the catalog does NOT know: refused, nothing applied.
 	ws2 := t.TempDir()
 	path := writeProposal(t, ws2, `{"version":1,"mcp":["warehouse"]}`)
-	declaredPack(t, name)
 	out.Reset()
 	ReconcileOnboarding(ws2, realEnv(), strings.NewReader(""), &out, true, false)
-	if !strings.Contains(out.String(), "not declared by the active pack") {
-		t.Errorf("refusal must say the pack does not declare it, got:\n%s", out.String())
+	if !strings.Contains(out.String(), "not a known catalog server") {
+		t.Errorf("refusal must say the catalog does not know it, got:\n%s", out.String())
 	}
 	if _, serr := os.Stat(path); serr != nil {
 		t.Errorf("a refused proposal must be left for review: %v", serr)
@@ -191,23 +164,7 @@ func TestApplyOnboarding_FieldsThenIdempotent(t *testing.T) {
 // command layer supplies, unwired here).
 func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
 	ws := t.TempDir()
-	// `pack` is a field OnboardingResult deliberately does not have: an
-	// in-sandbox agent must not be able to propose adopting a pack (that is a
-	// Tier-1 trust decision), so the typed unmarshal must drop it silently.
-	path := writeProposal(t, ws, `{"version":1,"pack":"/evil/pack","packs":["/evil/pack"],"mcp":["notes"]}`)
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "pack.toml"),
-		[]byte("name = \"work\"\nschema = 1\n\n[[integrations]]\nname = \"Notes\"\nmcp = \"notes\"\ncommand = \"notes-mcp\"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	seed, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	seed.Pack = root
-	if err := seed.Save(); err != nil {
-		t.Fatal(err)
-	}
+	path := writeProposal(t, ws, `{"version":1,"mcp":["notion"]}`)
 
 	var out bytes.Buffer
 	ReconcileOnboarding(ws, realEnv(), strings.NewReader(""), &out, true, false)
@@ -219,10 +176,7 @@ func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Pack != root {
-		t.Errorf("onboarding must never repoint the active pack, got %q", cfg.Pack)
-	}
-	if !slices.Contains(cfg.MCP, "notes") {
+	if !slices.Contains(cfg.MCP, "notion") {
 		t.Errorf("config not applied: mcp=%v", cfg.MCP)
 	}
 	if !strings.Contains(out.String(), "mcp add skipped") {
@@ -240,15 +194,12 @@ func TestReconcileOnboarding_LeavesFileWhenNotApplied(t *testing.T) {
 		declare    bool
 		want       string
 	}{
-		{"no consent", `{"version":1,"mcp":["notes"]}`, false, true, "Not a terminal"},
+		{"no consent", `{"version":1,"mcp":["notion"]}`, false, true, "Not a terminal"},
 		{"refused name", `{"version":1,"mcp":["evil-server"]}`, true, false, "refusing onboarding proposal"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ws := t.TempDir()
 			path := writeProposal(t, ws, tc.body)
-			if tc.declare {
-				declaredPack(t, "notes")
-			}
 			var out bytes.Buffer
 			ReconcileOnboarding(ws, realEnv(), strings.NewReader(""), &out, tc.assumeYes, false)
 			if _, err := os.Stat(path); err != nil {

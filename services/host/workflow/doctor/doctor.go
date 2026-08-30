@@ -84,7 +84,7 @@ const Description = `Diagnose host health: the sbx CLI, the active pack, provide
 unit and the LaunchAgent. Every check reports what it PROVED,
 with the exact command that repairs a verified gap.
 
---json emits the machine-readable snapshot (schema_version 5).
+--json emits the machine-readable snapshot (schema_version 6).
 
 exit codes:
   0  nothing required is verifiably broken — including checks that could not

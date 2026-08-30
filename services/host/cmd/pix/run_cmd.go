@@ -24,15 +24,11 @@ import (
 	"pix/host/inference"
 	"pix/host/launcher"
 	"pix/host/mcp"
-	"pix/host/packinfo"
 	"pix/host/sandbox"
 	"pix/host/secret"
-	"pix/host/service"
-	"pix/host/uat"
 	"pix/host/workflow/doctor"
 	nativeenv "pix/host/workflow/env"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/pack"
 	"pix/host/workflow/provision"
 	"pix/host/workspace"
 )
@@ -379,10 +375,6 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// selection, the pack stack, the local-image preflight, the MCP set — is even
 	// RESOLVED on an attach. ONE predicate answers it, for this gate and the plan.
 	creating := launch.WillCreate(state)
-	// effectivePack is the pack that ACTUALLY loaded, which keeps the sandbox.pack
-	// marker and the memory scope from disagreeing. --pack applies at create only,
-	// since a re-attach keeps what it was made with.
-	effectivePack := packinfo.ActivePackRoot(cfg.Pack, o.Pack)
 	if creating {
 		// Kit selection. A CLEAN released version pins the matching git tag; anything
 		// else (unstamped "dev", "0.0.16+local", non-semver) is UNRELEASED and its tag
@@ -427,16 +419,9 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			}
 		}
 
-		// The active pack's skills/ + knowledge/ mount into this sandbox: workflow/pack
-		// verifies the trust surface and fails closed; launch folds the verified value in.
-		contributed, perr := pack.ResolveLaunchContribution(cfg, o.Pack, defaultShellEnv(), d.Err)
-		if perr != nil {
-			return runFail(d, 1, "%v", perr)
-		}
-		effectivePack = o.ApplyPackContribution(contributed)
-		// Inference is a generated create-time facet like pack wrappers: probed models,
-		// compiled routes, public endpoint metadata. No credential value enters it.
-		// The selected environment's authored roster (E3.1) travels into the
+		// Inference is a generated create-time facet: probed models, compiled
+		// routes, public endpoint metadata. No credential value enters it. The
+		// selected environment's authored roster (E3.1) travels into the
 		// generated mixin kit, and is validated (E3.3) against the SAME model
 		// set the manifest ships before anything is created.
 		shipped, _, _ := listAgents()
@@ -483,52 +468,8 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			}
 		}
 
-		// Every configured MCP server attaches at create (--static-mcp), on top of
-		// whatever a verified pack already contributed above (ApplyPackContribution) —
-		// composeStaticMCP folds all three in without discarding or aliasing any of them.
+		// Every configured MCP server attaches at create (--static-mcp).
 		o.StaticMCP = composeStaticMCP(o.StaticMCP, cfg.MCP, o.MCP)
-	}
-
-	var uatRec *uat.Registration
-	if creating && o.Dev {
-		id, err := uat.GenerateSessionID()
-		if err != nil {
-			return err
-		}
-		// Make MCPName strictly pix-uat-ID to avoid length issues if o.Name is long
-		uatRec = &uat.Registration{
-			SessionID: id,
-			MCPName:   "pix-uat-" + id,
-		}
-		o.StaticMCP = composeStaticMCP(o.StaticMCP, nil, []string{uatRec.MCPName})
-	} else {
-		// Attach reconstructs without mutation. An explicit --dev request is a
-		// hard requirement, not a hint: without this create-time record the
-		// sandbox cannot have the ephemeral static MCP, and attaching anyway is
-		// exactly how a session claimed dev mode while uat_capabilities was absent.
-		rec, err := uat.ResolveAttachRegistration(defaultShellEnv(), o.Name, o.Dev)
-		if err != nil {
-			return runFail(d, 1, "%v", err)
-		}
-		if rec != nil {
-			o.StaticMCP = composeStaticMCP(o.StaticMCP, nil, []string{rec.MCPName})
-			uatRec = rec
-			if o.Dev {
-				// A kept sandbox reattached after its original launcher exited may
-				// have no live uat-worker at all (the owner stopped it on its own
-				// exit) or a stale one; EnsureWorker dials first so a worker that
-				// IS still live (another concurrent attach) is adopted, never
-				// unlinked or replaced. Must happen before session attach below.
-				repoRoot, rerr := launch.ResolveRepoRoot()
-				if rerr != nil {
-					return runFail(d, 1, "--dev attach: %v", rerr)
-				}
-				uatState, _ := defaultShellEnv().StateDir()
-				if werr := ensureUatWorkerOrFail(defaultShellEnv(), repoRoot, filepath.Join(uatState, "uat"), rec); werr != nil {
-					return runFail(d, 1, "failed to start UAT worker: %v", werr)
-				}
-			}
-		}
 	}
 
 	plan := launch.PlanSandboxLaunch(state, cfg, o, version)
@@ -618,64 +559,24 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	case plan.Reattach:
 		fmt.Fprintf(d.Err, "pix run: starting + attaching existing sandbox %q\n", o.Name)
 	}
-	// Lazy auto-start of the configured host services under ONE short deadline
-	// (spawn lock + health poll). The launch proceeds regardless; recall degrades
-	// in-VM. service.Ensure prints its own lines.
-	service.EnsureUp(d.Err, nil, service.EnsureRunTimeout)
-
 	// Readiness, reusing the key evidence the launch gate already paid for. AT
 	// MOST launch.WarningLimit rows, and it NEVER blocks: the missing provider
 	// key handled above is the only launch-stopping gap.
 	launch.RenderWarnings(d.Err, launch.FastSnapshot(context.Background(), cfg, keyResult), launch.WarningLimit)
 
-	// Local model + memory scope for the in-VM ollama-bridge and recall/capture
-	// extensions. Best-effort: an unloadable pack degrades to unscoped.
-	launch.WritePackContextFiles(cfg, o, effectivePack, d.Err)
+	// Local model for the in-VM ollama-bridge and recall/capture extensions.
+	launch.WriteWorkspaceContextFiles(cfg, o, d.Err)
 
-	// Trusted host state travels ONLY inside the launcher-generated initial prompt,
-	// never as a workspace file a cloned repo could plant. --pack applies on CREATE
-	// only, so a re-attach must not claim it.
-	packForState := ""
-	if creating {
-		packForState = o.Pack
-	}
 	// A HARD contract: a generated prompt is the fenced agent's ONLY trusted host
 	// truth, so a launch that cannot build it ABORTS before exec. After the
 	// cutover the payload is injected into the pi INVOCATION this launch
 	// actually execs (`sbx exec -it <name> -- pi <invocation>`), not into an
 	// `sbx run` argv that is no longer spawned.
 	invocation := launch.BuildPiInvocation(launch.LiveSkillDirs(cfg, o), o)
-	invocation, perr := launch.InjectTrustedHostState(invocation, cfg, defaultShellEnv(), packForState)
+	invocation, perr := launch.InjectTrustedHostState(invocation, cfg, defaultShellEnv())
 	if perr != nil {
 		return runFail(d, 1, "could not build trusted host state: %v", perr)
 	}
-
-	if creating && o.Dev && uatRec != nil {
-		if err := uat.WriteRegistration(defaultShellEnv(), o.Name, uatRec); err != nil {
-			return runFail(d, 1, "failed to record UAT session: %v", err)
-		}
-		uatState, _ := defaultShellEnv().StateDir()
-		if err := uat.RegisterMCP(defaultShellEnv(), uatRec, o.DevRoot, filepath.Join(uatState, "uat")); err != nil {
-			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
-			return runFail(d, 1, "failed to register UAT MCP: %v", err)
-		}
-		// Started AFTER the secure per-session runner state directory exists
-		// (RegisterMCP just created it) and BEFORE anything execs sbx below, so
-		// the gateway relay can never need it before it is listening.
-		if werr := ensureUatWorkerOrFail(defaultShellEnv(), o.DevRoot, filepath.Join(uatState, "uat"), uatRec); werr != nil {
-			_ = uat.UnregisterMCP(defaultShellEnv(), uatRec.MCPName)
-			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
-			return runFail(d, 1, "failed to start UAT worker: %v", werr)
-		}
-	}
-
-	launched := false
-	defer func() {
-		if !launched && creating && o.Dev && uatRec != nil {
-			_ = uat.UnregisterMCP(defaultShellEnv(), uatRec.MCPName)
-			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
-		}
-	}()
 
 	if os.Getenv("PIX_DEBUG") != "" {
 		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(plan.Args, " "))
@@ -756,10 +657,6 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		},
 	}
 	if xerr := launch.RunSession(spec, deps); xerr != nil {
-		if creating && o.Dev && uatRec != nil {
-			_ = uat.UnregisterMCP(defaultShellEnv(), uatRec.MCPName)
-			_ = uat.DeleteRegistration(defaultShellEnv(), o.Name)
-		}
 		var refused *launch.SessionRefused
 		if errors.As(xerr, &refused) {
 			// Decided under the lifecycle lock, before anything started: no create, no
@@ -790,9 +687,6 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		}
 		return cli.SilentError{Code: code}
 	}
-	// RunSession now owns the sandbox lifecycle. A normal last-shell teardown
-	// already removed the registration; a kept sandbox must retain it for the
-	// next attachment. The fallback defer is only for failures before handoff.
-	launched = true
+	// RunSession now owns the sandbox lifecycle from here.
 	return nil
 }

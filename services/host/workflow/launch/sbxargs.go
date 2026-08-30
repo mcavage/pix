@@ -39,7 +39,6 @@ type RunOpts struct {
 	Model   string   // --model M: active pi model (passed through to pi)
 	Resume  string   // --resume SESSION: resume this pi session, on every path (create or attach)
 	Models  []string // create-time callable model cycle, derived from probed bindings
-	Pack    string   // --pack PATH: active pack for this run (overrides config.Pack)
 	// Keep is -k/--keep: bind a sticky, identity-bound keep marker to this
 	// session — what the teardown and the orphan sweep refuse on.
 	Keep        bool

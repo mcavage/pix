@@ -778,27 +778,22 @@ test("the three formerly-staged Story04 pins now HOLD against this repo (the beh
 	assert.ok(!reap.includes('"rm", "-f"'), "the reaper must never compose a forced removal");
 });
 
-// U03B regression sentinel: BROKER_PORT/PIX_BROKER_PORT were pinned here
-// while the broker was still dormant infrastructure; W2/U03B (commit
-// cfd4522) deleted the CredentialBroker plugin seam entirely (see
-// services/host/cmd/pix/hostmode_gone_test.go's Go-side sentinel for the
-// execution-symbol half of this same deletion). A pin that still expected a
-// deleted literal was exactly the U03B gate failure this task fixed — assert
-// the ports domain never re-pins the retired broker port so a future patch
-// can't silently resurrect the requirement without this test noticing.
-test("the ports domain no longer pins the retired broker port (W2/U03B deleted it)", async () => {
+// The `ports` domain (memory-rpc.rules.mjs/ports.rules.mjs's whole subject:
+// the :11435 JSON-RPC memory daemon's reserved-port wiring in identity.go,
+// serve.go, memory.go and serve_plugin.go) was deleted OUTRIGHT in the Pix
+// v2 cutover, not merely its BROKER_PORT literal (docs/design/
+// pix-v2-architecture.md §14, AC-16; see
+// scripts/semantic-diff/intended-changes.json's
+// pix-v2-deletion-sweep.memory-rpc-and-ports-pins-removed entry and
+// services/host/deletion_sentinel_test.go's Go-side sentinel for the
+// execution-symbol half of this same deletion). There is no reserved-port
+// surface left for a `ports` domain to pin at all, so the U03B regression
+// this test used to guard (a stale BROKER_PORT literal surviving in an
+// otherwise-live domain) no longer has a domain to occur in.
+test("the ports domain was removed along with the daemon it pinned (Pix v2 cutover, not merely its retired broker port)", async () => {
 	const pins = await loadRules(REAL_RULES_DIR);
 	const portsPins = pins.filter((p) => p.domain === "ports");
-	assert.ok(portsPins.length > 0, "ports domain must still ship pins");
-	for (const pin of portsPins) {
-		for (const check of pin.checks) {
-			const values = check.values ?? check.expected ?? [];
-			const flat = Array.isArray(values) ? values : [values];
-			for (const v of flat) {
-				assert.ok(!String(v).includes("BROKER_PORT"), `${pin.id} (${check.file}) still pins a broker port literal: ${v}`);
-			}
-		}
-	}
+	assert.equal(portsPins.length, 0, "the ports domain's whole subject (the custom memory JSON-RPC daemon) is deleted; a pin reappearing here would describe a resurrected daemon");
 });
 
 // The U04f-era `lifecycle.teardown.journal-bounded-0600` entry documented a

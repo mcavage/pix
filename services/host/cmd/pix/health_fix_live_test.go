@@ -64,7 +64,14 @@ func eachPixCommand(t *testing.T, fix string) []string {
 // to remember.
 func TestEveryHealthFix_IsALiveCommand(t *testing.T) {
 	fixes := healthFixConstants(t)
-	if len(fixes) < 4 {
+	// The threshold dropped from 4 to 2 in the Pix v2 deletion sweep
+	// (docs/design/pix-v2-architecture.md §14, AC-16): ServeInstallFix,
+	// ServeStartFix, ServeRestartFix and ServiceEnableFix named `pix serve`/
+	// `pix config set`, both deleted verbs, and PackUseFix named the deleted
+	// `pix pack use`. What survives (SecretSetFix, ModelKeyFix) is the whole
+	// v2 `pix ...`-shaped fix surface, not a drifted extractor — lowering this
+	// on purpose, not to hide growth.
+	if len(fixes) < 2 {
 		t.Fatalf("found only %d Fix constants in health/probes.go (%v); the extractor has drifted from the source", len(fixes), fixes)
 	}
 	for name, fix := range fixes {

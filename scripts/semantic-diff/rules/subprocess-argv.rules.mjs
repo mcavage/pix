@@ -7,20 +7,13 @@
 export default [
 	{
 		id: "argv.op-run-wrapper.exact-grammar",
-		description: 'mcp.OpRunWrap is the ONE op-run wrapper grammar the launcher ever generates: `<op> run --no-masking --env-file=<refs> --`. Widening this (extra flags, different ordering, a different env-file form) changes what credentials the sbx gateway resolves at spawn, so it must stay exactly this shape. It is a shared function rather than an inline string because TWO callers must produce byte-identical commands — registration (what the gateway spawns) and doctor\'s health probe (what we claim to have verified). A probe that does not go through this wrapper proves nothing about the thing it checks.',
+		description: 'mcp.OpRunWrap is the ONE op-run wrapper grammar the launcher ever generates: `<op> run --no-masking --env-file=<refs> --`. Widening this (extra flags, different ordering, a different env-file form) changes what credentials the sbx gateway resolves at spawn, so it must stay exactly this shape. The second caller this pin used to require — workflow/doctor/mcp.go\'s pack-declared-MCP-server health probe wrapping its own exec through the SAME grammar — was deleted with the pack system in the Pix v2 cutover (docs/design/pix-v2-architecture.md §14, AC-16): there is no more pack-declared MCP classification for doctor to probe. registerServers (cmd/pix) is now the wrapper\'s only caller.',
 		checks: [
 			{
 				file: "services/host/mcp/mcp.go",
 				kind: "contains",
 				region: { start: "func OpRunWrap(opPath, opRefs string, argv []string) []string {", end: "\n// RegisterServers" },
 				values: ['return append([]string{opPath, "run", "--no-masking", "--env-file=" + opRefs, "--"}, argv...)'],
-			},
-			{
-				// The probe path must go through the shared wrapper, not rebuild
-				// its own. This is the check that keeps "verified" honest.
-				file: "services/host/workflow/doctor/mcp.go",
-				kind: "contains",
-				values: ["mcp.OpRunWrap(creds.OpPath, creds.OpRefsPath, s.Probe)"],
 			},
 		],
 	},

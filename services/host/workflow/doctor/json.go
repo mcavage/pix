@@ -10,10 +10,12 @@ import (
 // disagree about the same host. A consumer reads one shape from either command
 // and gets the same rows.
 //
-// SchemaVersion 5 ADDS the `supervisor` object (the Suture tree serve
-// publishes) as a required top-level key. That is a key-set change, and the
-// contract test below refuses a key-set change without a version bump — so it
-// is a bump, with a migration note, rather than a field smuggled into v4.
+// SchemaVersion 6 DROPS the v5 `supervisor` object: `pix-host serve` and its
+// Suture tree are gone (Pix v2 deletion sweep, docs/design/pix-v2-architecture.md
+// §14), so there is nothing left to publish a snapshot of. That is a key-set
+// change, and the contract test below refuses a key-set change without a
+// version bump — so it is a bump, with a migration note, rather than quietly
+// dropping a field v5 promised was always present.
 //
 // SchemaVersion 4 was a BREAK, not an extension: v1-v3 described the
 // requirement/verdict matrix this wave deleted, and there is no honest
@@ -21,7 +23,7 @@ import (
 // say "unknown". The version number is the contract that says so out loud,
 // and RetiredSchemas below is the migration note that says what a consumer
 // must do about it.
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 // RetiredSchemas is the MIGRATION CONTRACT for the versions this one
 // replaces, keyed by version. Each value states what that shape was and what
@@ -47,13 +49,15 @@ var RetiredSchemas = map[int]string{
 	2: "as v1 plus per-axis requirement rollups; same break, same migration",
 	4: "the v5 shape minus the `supervisor` object; a v4 consumer keeps reading every field it knows and gains supervision state by reading `supervisor`",
 	3: "`groups` plus a flat `checks` array, and a separate `dashboard` object from `pix status`; both verbs now emit one shape — read `checks`",
+	5: "the v6 shape plus a `supervisor` object describing pix-host serve's Suture tree; pix-host serve was deleted outright in the Pix v2 cutover, so there is no replacement field — a v5 consumer simply stops reading `supervisor`",
 }
 
-// RetiredSchemaKeys are the top-level field names v1-v3 published that v4
-// does NOT. They are listed so the break is testable in both directions: a v4
-// payload must carry none of them, which is what makes a stale parser fail on
-// a missing field instead of silently reading a subset it recognizes.
-var RetiredSchemaKeys = []string{"groups", "dashboard", "axes", "ok"}
+// RetiredSchemaKeys are the top-level field names a prior schema published
+// that v6 does NOT. They are listed so the break is testable in both
+// directions: a v6 payload must carry none of them, which is what makes a
+// stale parser fail on a missing field instead of silently reading a subset
+// it recognizes.
+var RetiredSchemaKeys = []string{"groups", "dashboard", "axes", "ok", "supervisor"}
 
 // ReportJSONView is the machine-readable snapshot behind `--json`.
 type ReportJSONView struct {
@@ -75,9 +79,6 @@ type ReportJSONView struct {
 	// cannot tell a reader different things.
 	Exit      int   `json:"exit"`
 	ElapsedMS int64 `json:"elapsed_ms"`
-	// Supervisor is the Suture tree `pix-host serve` published, or the reason
-	// this process could not see it. Always present.
-	Supervisor SupervisorJSON `json:"supervisor"`
 }
 
 // CheckJSON is one probe's answer.
@@ -108,7 +109,6 @@ func ReportJSON(s health.Snapshot, profile string, exit int) ReportJSONView {
 		Fixes:         s.Fixes(),
 		Exit:          exit,
 		ElapsedMS:     s.Elapsed.Milliseconds(),
-		Supervisor:    supervisorSnapshot(),
 	}
 	if v.Fixes == nil {
 		v.Fixes = []string{}

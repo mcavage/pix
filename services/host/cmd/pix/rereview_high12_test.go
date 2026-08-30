@@ -155,7 +155,7 @@ func TestBuildTrustedHostState_HangingSbxBounded(t *testing.T) {
 		return "", fmt.Errorf("no fake output")
 	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
-	hs := launch.BuildTrustedHostState(defaultCfg(), env, "")
+	hs := launch.BuildTrustedHostState(defaultCfg(), env)
 	if el := time.Since(start); el > 10*time.Second {
 		t.Fatalf("launch.BuildTrustedHostState took %s — unbounded", el)
 	}
