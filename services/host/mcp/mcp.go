@@ -911,18 +911,6 @@ func McpAuthStatus(out string) mcpAuthResult {
 	return mcpAuthUnknown
 }
 
-// McpAuthExpired reports whether a FAILED auth status is specifically an
-// EXPIRED grant rather than one that was never established. Both are repaired
-// by the same command, but they are different user stories: "expired" says this
-// worked and needs renewing, which is routine; "not authenticated" reads as a
-// setup that failed, which during onboarding sends someone hunting a problem
-// they do not have. sbx already draws the distinction; this stops us discarding
-// it. Kept as a predicate over the raw output rather than a fourth tri-state
-// value, so no existing caller's exhaustive switch changes meaning.
-func McpAuthExpired(out string) bool {
-	return strings.Contains(strings.ToLower(out), "expired")
-}
-
 const (
 	mcpAuthUnknown mcpAuthResult = iota
 	McpAuthOK

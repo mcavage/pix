@@ -142,40 +142,6 @@ func OfferOnePasswordKeys(env hostenv.Env, in io.Reader, out io.Writer, tty bool
 	syncProviderKeys(env, out) // force-overwrite sbx from the new refs
 }
 
-// ProviderKeyNames lists the provider sbx-names (anthropic/openai/google)
-// that have a FILLED op:// ref in op-refs.env — i.e. the cloud providers a
-// key is actually configured for. Sorted and DEDUPED BY NAME (not merely by
-// input line): a duplicate/aliased env-var line for the same provider must
-// never inflate the count past the real distinct-provider set.
-//
-// TRI-STATE via the returned error: op-refs.env genuinely ABSENT (ENOENT) is
-// not an error — it means "no refs configured yet", the same as an empty
-// file, so callers get (nil, nil). Any OTHER read error (EACCES, a symlink
-// loop, a real I/O failure) is a credential-state-UNREADABLE condition and is
-// returned as a non-nil error wrapping the path — callers MUST report that
-// honestly, never silently treat it as "local-only" or "configured", both of
-// which would be a confident guess about state we could not actually read.
-func ProviderKeyNames(env hostenv.Env) ([]string, error) {
-	path := DefaultOpRefsPath(env)
-	content, err := env.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading %s: %w", path, err)
-	}
-	var names []string
-	seen := map[string]bool{}
-	for _, r := range ParseOpRefs(content, nil) {
-		if name, ok := providerKeyRefs[r.Key]; ok && r.IsRef && !r.Placeholder && !seen[name] {
-			seen[name] = true
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	return names, nil
-}
-
 // WriteOpRefQuiet upserts KEY=op://ref into op-refs.env without the CLI
 // wrapper's rejection contract, so the interactive offer can loop. It VALIDATES
 // the key as a shell env var name (so a malicious pack.toml integration name
@@ -487,24 +453,3 @@ func FirstLine(s string) string {
 	return ""
 }
 
-// RunSecretSync is the `pix secret sync` entry: resolve provider-key op:// refs
-// -> sbx secrets. Its scripting exit codes are RETURNED (3 = nothing to resolve
-// from, 1 = a key failed to sync), already worded on out.
-func RunSecretSync(env hostenv.Env, out io.Writer) error {
-	synced, failed, fatal := syncProviderKeys(env, out)
-	if fatal != nil {
-		fmt.Fprintf(out, "pix secret sync: %v\n", fatal)
-		fmt.Fprintln(out, "Add a provider key with: pix models add anthropic")
-		return exitCode(3)
-	}
-	if synced == 0 && failed == 0 {
-		fmt.Fprintln(out, "no provider-key refs in op-refs.env (add e.g. ANTHROPIC_API_KEY=op://vault/item/field)")
-		return nil
-	}
-	if failed > 0 {
-		fmt.Fprintf(out, "%d synced, %d failed.\n", synced, failed)
-		return exitCode(1)
-	}
-	fmt.Fprintf(out, "%d provider key(s) synced from 1Password into sbx.\n", synced)
-	return nil
-}

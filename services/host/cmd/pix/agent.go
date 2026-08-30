@@ -1,8 +1,8 @@
 // agent.go resolves the subagent roster directory (agents/*.md) so `pix run`
 // can fold it into the inference roster's SHIPPED model set (E3.1/E3.3). The
-// roster's own read-only status screen (`pix agent ls`) and `pix models` were
-// both cut from the v2 verb table (docs/design/pix-v2-surface.md §3): neither
-// is reachable from root.go, so only what run still calls survives here.
+// roster's own read-only status screen and the model-roster verb were both
+// cut from the v2 verb table (docs/design/pix-v2-surface.md §3): neither is
+// reachable from root.go, so only what run still calls survives here.
 package main
 
 import (

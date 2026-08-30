@@ -1,8 +1,8 @@
-// pix — the user-facing launcher for the pix sandbox: a standalone binary a
-// consumer installs without cloning the repo. It reads ~/.config/pix config and
-// shells out to `sbx run pix`, pinning the git-hosted kit to this build's stamped
-// version, and shares pix-host's config package so the two agree on config
-// location.
+// pix — the only host binary and the only user-facing CLI (there is no
+// separate pix-host binary in v2). A consumer installs it without cloning
+// the repo; it resolves PIX_HOME (default ~/.pix, no XDG split) and shells
+// out to `sbx run` against the pinned pix-agent image and kit
+// (pi-kit/spec.yaml), stamped to this build's version.
 //
 // The verb tree is root.go's rootCmd — the one parser, the one dispatcher, and (via
 // `pix help --all`) the one listing. main owns only what comes BEFORE a parse: what
@@ -52,13 +52,13 @@ func main() {
 // what is up, and then having to type a second command to actually work, is a
 // toll on every single session.
 //
-// It stays STATUS when stdin is not a terminal, and that half is load-bearing: an
-// implicit launch is only ever safe when a human is sitting there to have meant
-// it. `pix` in a script, a pipe, a CI step, or an editor task must never create or
-// attach a sandbox as a side effect of someone asking for a status line, so the
-// non-interactive answer stays the read-only one. This mirrors the identical rule
-// on a bare positional (`pix DIR`, see dispatch): bare launches need a TTY, the
-// explicit `pix run` never does.
+// It stays the read-only `ls` when stdin is not a terminal, and that half is
+// load-bearing: an implicit launch is only ever safe when a human is sitting
+// there to have meant it. `pix` in a script, a pipe, a CI step, or an editor
+// task must never create or attach a sandbox as a side effect of someone
+// asking what is up, so the non-interactive answer stays read-only. This
+// mirrors the identical rule on a bare positional (`pix DIR`, see dispatch):
+// bare launches need a TTY, the explicit `pix run` never does.
 func bareArgs(interactive bool) []string {
 	if interactive {
 		return []string{"run"}
@@ -116,7 +116,7 @@ Usage:  pix <command> [args]
 
 New here?   pix setup      one-time guided setup (a few minutes, resumable)
 
-Workflow
+Workflow & parallel work
   run [DIR]        launch or re-attach DIR's sandbox (default: .) — plain "pix"
   ls               list your pix sandboxes;  rm <name>  removes one
   task             parallel task checkouts: new | ls | path | rm

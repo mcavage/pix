@@ -105,7 +105,8 @@ func (e *httpStatusError) Error() string {
 
 // sbxMemoryRegistrar is the production workflow/provision.MCPRegistrar for
 // the reserved pix-memory remote: it shells to the real `sbx mcp` surface
-// (the same commands `pix mcp` itself would run), never a second client.
+// directly (the same sbx commands a human would run by hand), never a
+// second client.
 // See this file's own doc comment for the URL-visibility limitation that
 // keeps this a register-once-if-absent adapter rather than a drift check.
 type sbxMemoryRegistrar struct{}

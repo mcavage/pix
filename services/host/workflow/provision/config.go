@@ -48,14 +48,15 @@ const ConfigKeysHelp = `keys:
                             Turning it OFF (explicit) takes effect at once, the
                             host refuses capture for running sandboxes too;
                             turning it ON reaches NEW sandboxes only
-  pack <path>               active pack dir (run mounts its skills + knowledge);
-                            usually set via 'pix pack use'
+  pack <path>               active pack dir (run mounts its skills + knowledge)
   host.autoserve true|false lazy auto-start of the services daemon on run/
                             memory (default true; PIX_NO_AUTOSERVE env also
                             disables it)
   environment / environments.*  NOT settable here — the default environment
-                            is managed by 'pix env use', the registry by
-                            'pix env add'/'pix env forget' (see pix env --help)
+                            is managed by 'pix env default NAME'; an
+                            environment itself is a plain directory under
+                            ~/.pix/envs, created and removed with ordinary
+                            filesystem tools (see pix env --help)
 `
 
 // memoryCaptureSummary reports what the new memory_capture value actually
@@ -74,7 +75,7 @@ const ConfigKeysHelp = `keys:
 func memoryCaptureSummary(mode string) string {
 	if mode == config.MemoryCaptureExperimentalAuto {
 		return fmt.Sprintf("memory_capture = %q (reaches NEW sandboxes only; an already-running one keeps the mode it launched with)\n"+
-			"  capture also requires a reachable Ollama watcher model, not checked here: verify with `ollama list` (the model `pix config get memory_watcher_model` names)", mode)
+			"  capture also requires a reachable Ollama watcher model, not checked here: verify with `ollama list` (the model this config's memory_watcher_model key names)", mode)
 	}
 	return fmt.Sprintf("memory_capture = %q (effective immediately: the host refuses automatic capture for already-running sandboxes too)", mode)
 }
@@ -200,22 +201,25 @@ func ApplyConfigChange(cfg *config.Config, unset bool, key string, args []string
 // environmentKeyRefusal is the fixed refusal for `environment`, the exact
 // `environments` key, and every `environments.<name>` key (Story 1, native
 // sandbox environments, docs/design/environments.md §5.3): all ARE real
-// config-schema fields (config.Config.Environment / .Environments), so
-// falling through to the generic "unknown key" error would hide that they
-// exist. But they have no hand-edit path — `pix env use` is the only writer
-// of the default, and `pix env add`/`pix env forget` (Wave C) are the only
-// writers of the registry (`pix env rm` names no working command; it is
-// reserved as a future pointer error, never guidance) — so `pix config
-// set/unset` refuses every shape outright and names the command that
-// actually writes them, rather than silently no-op'ing (the failure mode
-// host.enabled's removal already guards against elsewhere in this file).
+// config-schema fields (config.Config.Environment / .Environments) from the
+// v1 registry design, so falling through to the generic "unknown key" error
+// would hide that they exist. But they have no hand-edit path in v2 either
+// — `pix env default NAME` is the one verb that writes the machine default,
+// through pixhome.SetDefaultEnvironment rather than this schema; there is no
+// registration verb at all any more (an environment is a plain directory
+// under ~/.pix/envs, created and removed with ordinary filesystem tools) —
+// so this refuses every shape outright and names the real verb, rather than
+// silently no-op'ing (the failure mode host.enabled's removal already
+// guards against elsewhere in this file). v2 has no generic config-mutation
+// verb that could reach this function at all; it survives only as a
+// schema-level guard exercised directly by this package's own tests.
 func environmentKeyRefusal(unset bool, key string) error {
 	verb := "set"
 	if unset {
 		verb = "unset"
 	}
 	if key == "environment" {
-		return fmt.Errorf("config %s environment: the default environment is managed by `pix env use <name>`, never `pix config %s` (see `pix env --help`)", verb, verb)
+		return fmt.Errorf("config %s environment: the default environment is managed by `pix env default <name>`, never a config-key %s (see `pix env --help`)", verb, verb)
 	}
 	// Exactness is decided by the KEY STRING itself (`key == "environments"`),
 	// never inferred from the trimmed suffix: `environments.environments` (the
@@ -225,13 +229,13 @@ func environmentKeyRefusal(unset bool, key string) error {
 	// env name from the guidance.
 	if key == "environments" {
 		if unset {
-			return fmt.Errorf("config unset environments: the environment registry is managed by `pix env forget <name>`, never `pix config unset` (see `pix env --help`)")
+			return fmt.Errorf("config unset environments: an environment is a plain directory under ~/.pix/envs, removed with ordinary filesystem tools, never a config-key unset (see `pix env --help`)")
 		}
-		return fmt.Errorf("config set environments: the environment registry is managed by `pix env add <name> [path]`, never `pix config set` (see `pix env --help`)")
+		return fmt.Errorf("config set environments: an environment is a plain directory under ~/.pix/envs, created with ordinary filesystem tools, never a config-key set (see `pix env --help`)")
 	}
 	name := strings.TrimPrefix(key, "environments.")
 	if unset {
-		return fmt.Errorf("config unset environments.%s: the environment registry is managed by `pix env forget %s`, never `pix config unset` (see `pix env --help`)", name, name)
+		return fmt.Errorf("config unset environments.%s: remove ~/.pix/envs/%s with ordinary filesystem tools, never a config-key unset (see `pix env --help`)", name, name)
 	}
-	return fmt.Errorf("config set environments.%s: the environment registry is managed by `pix env add %s [path]`, never `pix config set` (see `pix env --help`)", name, name)
+	return fmt.Errorf("config set environments.%s: create ~/.pix/envs/%s with ordinary filesystem tools, never a config-key set (see `pix env --help`)", name, name)
 }

@@ -101,13 +101,19 @@ type Config struct {
 
 	// Environment is the machine default environment NAME (Story 1, native
 	// sandbox environments — docs/design/environments.md §5.3), resolved
-	// against Environments. Empty = no registered default. `pix env use` is
-	// the ONLY writer; `pix config set/unset` refuses this key outright (see
-	// provision.environmentKeyRefusal).
+	// against Environments. Empty = no registered default. This is the v1
+	// registry field: v2's `pix env default NAME` writes the machine default
+	// through pixhome.SetDefaultEnvironment instead (a plain directory under
+	// ~/.pix/envs, no registration database — AGENTS.md's command-surface
+	// invariants), so nothing in the current CLI writes this field any more.
+	// There is no generic config-mutation verb that could reach it either
+	// (see provision.environmentKeyRefusal).
 	Environment string `toml:"environment,omitempty"`
 
 	// Environments is the registered name -> CANONICAL ABSOLUTE local
-	// directory path index. `pix env add`/`pix env forget` are the only writers;
+	// directory path index from the same v1 registry. Nothing writes it any
+	// more (v2 has no add/forget mutation path — an environment is created,
+	// moved, and removed with ordinary filesystem and Git tools instead);
 	// AddEnvironment validates the name (validEnvironmentName) and canonicalizes
 	// the path (expanding a leading ~, then making the result absolute and
 	// clean) before either is ever assigned here, so Save() never persists
@@ -266,22 +272,6 @@ func Path() string {
 	return filepath.Join(dir, "config.toml")
 }
 
-// EnvRegistryLockPath is the flock every `pix env` registry/default
-// mutation (add, use, forget) serializes on around its fresh-load ->
-// mutate -> save of config.toml — Wave C security L1: without one lock
-// shared by every env writer, two processes interleaving across a review
-// prompt lost-update each other's registrations. It lives in the STATE
-// dir with the other launcher-owned locks (ServeSpawnLockPath,
-// environmentTrustLockPath's reasoning): moving or renaming the CONFIG dir
-// aside (pix reset's .bak-<ts> rename) must never strand a held lock.
-func EnvRegistryLockPath() string {
-	dir, err := StateDir()
-	if err != nil {
-		return "env-registry.lock"
-	}
-	return filepath.Join(dir, "env-registry.lock")
-}
-
 // StateDir resolves the per-user state dir: $XDG_STATE_HOME/pix, else
 // ~/.local/state/pix. Runtime state and serve.log live here, never config.
 func StateDir() (string, error) {
@@ -311,15 +301,6 @@ func DataDir() (string, error) {
 // ContextDir is the always-on, user-authored context layer: DATA (durable
 // AGENTS.md + skills), personal — team context belongs in a pack.
 func ContextDir() string { return filepath.Join(dataDirOr(), "context") }
-
-// EnvsDir is where a zero-path `pix env add NAME` scaffolds a new native
-// environment: $XDG_DATA_HOME/pix/envs, else ~/.local/share/pix/envs —
-// docs/design/environments.md §1's own directory listing
-// (`~/.local/share/pix/envs/home/`). Each scaffolded environment lives at
-// <EnvsDir>/<name>; an externally registered environment (`pix env add
-// NAME PATH`) never lives here unless the caller happened to point PATH at
-// this same tree themselves.
-func EnvsDir() string { return filepath.Join(dataDirOr(), "envs") }
 
 // dataDirOr returns DataDir() or, if HOME cannot be resolved, a relative
 // "pix" so path builders never panic on an empty base.
@@ -493,8 +474,9 @@ func (c *Config) Plugin(slot string) PluginSpec {
 }
 
 // Save writes the config back to Path() as TOML. It is the write half of the
-// repo-less workflow: the CLI (`pix config set`, `pix setup`) mutates a
-// loaded Config in memory and calls Save() so the user NEVER hand-edits the file.
+// repo-less workflow: the CLI (`pix setup`, and every verb that mutates a
+// setting) loads a Config in memory and calls Save() so the user NEVER
+// hand-edits the file.
 func (c *Config) Save() error {
 	path := Path()
 	dir := filepath.Dir(path)

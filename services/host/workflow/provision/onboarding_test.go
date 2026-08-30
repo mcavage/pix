@@ -2,6 +2,7 @@ package provision
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,10 +11,46 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/sys"
+	"pix/host/sys/systest"
 )
 
-func realEnv() hostenv.Env { return hostenv.Env{System: sys.Real{}, Quiet: true} }
+// fakeReadyEnv answers `sbx mcp ls` and `sbx mcp auth status <name>` so that
+// every name in ready classifies mcp.CatalogMCPReady (registered +
+// authorized), without depending on a real `sbx` binary being on PATH — sbx is
+// a HOST tool (docs/design/pix-v2-architecture.md), never present in the
+// module's own test environment or in CI, so a catalog-readiness test has to
+// supply this evidence itself rather than probe for it.
+func fakeReadyEnv(t *testing.T, ready ...string) hostenv.Env {
+	t.Helper()
+	set := map[string]bool{}
+	for _, n := range ready {
+		set[n] = true
+	}
+	return hostenv.Env{System: &systest.Fake{
+		LookPathFn: func(string) (string, error) { return "/usr/local/bin/sbx", nil },
+		RunTimedFn: func(_ string, args ...string) (string, bool, error) {
+			if len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
+				var b strings.Builder
+				b.WriteString("NAME    KIND    STATE\n")
+				for n := range set {
+					fmt.Fprintf(&b, "%s   remote  registered\n", n)
+				}
+				return b.String(), false, nil
+			}
+			if len(args) >= 3 && args[0] == "mcp" && args[1] == "auth" && args[2] == "status" {
+				name := ""
+				if len(args) >= 4 {
+					name = args[3]
+				}
+				if set[name] {
+					return "authorized", false, nil
+				}
+				return "not authenticated", false, fmt.Errorf("exit status 1")
+			}
+			return "", false, fmt.Errorf("fakeReadyEnv: unhandled sbx %v", args)
+		},
+	}}
+}
 
 // The onboarding half of provision, tested against REAL boundaries like the rest
 // of this package: a real config file on disk and the package's own
@@ -75,7 +112,7 @@ func TestValidateOnboarding_CatalogIsTheAllowlist(t *testing.T) {
 	writeProposal(t, ws, `{"version":1,"mcp":["`+name+`"]}`)
 
 	var out bytes.Buffer
-	ReconcileOnboarding(ws, realEnv(), strings.NewReader(""), &out, true, false)
+	ReconcileOnboarding(ws, fakeReadyEnv(t, name), strings.NewReader(""), &out, true, false)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +125,7 @@ func TestValidateOnboarding_CatalogIsTheAllowlist(t *testing.T) {
 	ws2 := t.TempDir()
 	path := writeProposal(t, ws2, `{"version":1,"mcp":["warehouse"]}`)
 	out.Reset()
-	ReconcileOnboarding(ws2, realEnv(), strings.NewReader(""), &out, true, false)
+	ReconcileOnboarding(ws2, fakeReadyEnv(t), strings.NewReader(""), &out, true, false)
 	if !strings.Contains(out.String(), "not a known catalog server") {
 		t.Errorf("refusal must say the catalog does not know it, got:\n%s", out.String())
 	}
@@ -161,7 +198,7 @@ func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
 	path := writeProposal(t, ws, `{"version":1,"mcp":["notion"]}`)
 
 	var out bytes.Buffer
-	ReconcileOnboarding(ws, realEnv(), strings.NewReader(""), &out, true, false)
+	ReconcileOnboarding(ws, fakeReadyEnv(t, "notion"), strings.NewReader(""), &out, true, false)
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("onboarding.json should be removed after apply, err=%v", err)
@@ -195,7 +232,11 @@ func TestReconcileOnboarding_LeavesFileWhenNotApplied(t *testing.T) {
 			ws := t.TempDir()
 			path := writeProposal(t, ws, tc.body)
 			var out bytes.Buffer
-			ReconcileOnboarding(ws, realEnv(), strings.NewReader(""), &out, tc.assumeYes, false)
+			// "notion" is ready in the fake env whenever it appears; the
+			// "refused name" case never reaches the catalog-readiness probe at
+			// all (it fails validateOnboarding's allowlist first), so an empty
+			// ready set there is correct too.
+			ReconcileOnboarding(ws, fakeReadyEnv(t, "notion"), strings.NewReader(""), &out, tc.assumeYes, false)
 			if _, err := os.Stat(path); err != nil {
 				t.Errorf("the file must be left for review, err=%v", err)
 			}

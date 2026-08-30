@@ -383,7 +383,7 @@ func (c *envTrustCmd) Run(d *cli.Deps) error {
 // "y" on: a raw ESC/CSI/OSC could repaint or retitle the consent screen,
 // and a raw newline could forge a renderer-owned line (a fake count, a
 // fake prompt, a fake "trusted" verdict). This is the same discipline the
-// deleted v1 `pix env review` renderer applied (docs/design/environments.md
+// deleted v1 environment-review renderer applied (docs/design/environments.md
 // §9.1's Wave C security M1); it is not optional polish.
 func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, verbose bool) {
 	safe := sys.TerminalSafe

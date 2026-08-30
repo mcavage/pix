@@ -122,22 +122,6 @@ func RuntimeID(b Binding) string {
 	return b.Backend + "/" + b.UpstreamID
 }
 
-// BoundNativeProviders is the set of providers that already had a native
-// binding. Captured BEFORE rebuilding bindings, it is the whole mechanism
-// behind roster widening.
-func BoundNativeProviders(cfg *config.Config) map[string]bool {
-	out := map[string]bool{}
-	if cfg == nil {
-		return out
-	}
-	for _, b := range cfg.Inference.Models {
-		if cfg.Inference.Backends[b.Backend].Driver == "native" {
-			out[b.Backend] = true
-		}
-	}
-	return out
-}
-
 // CallableProviders returns the distinct providers this host has at least one
 // CALLABLE binding for, in first-seen config order, or nil when this host has
 // made no inference decision at all.

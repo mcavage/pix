@@ -62,9 +62,9 @@ func TestReleaseVersionsLockstep(t *testing.T) {
 	if mkMatch == nil {
 		t.Fatal("Makefile: no `VERSION ?= <version>` line found")
 	}
-	specMatch := regexp.MustCompile(`image:\s*"docker\.io/[^"]*/pix:([^"]+)"`).FindSubmatch(spec)
+	specMatch := regexp.MustCompile(`image:\s*"docker\.io/[^"]*/pix-agent:([^"]+)"`).FindSubmatch(spec)
 	if specMatch == nil {
-		t.Fatal(`pi-kit/spec.yaml: no pinned "docker.io/.../pix:<version>" image tag found`)
+		t.Fatal(`pi-kit/spec.yaml: no pinned "docker.io/.../pix-agent:<version>" image tag found`)
 	}
 	pkgMatch := regexp.MustCompile(`"version"\s*:\s*"([^"]+)"`).FindSubmatch(pkg)
 	if pkgMatch == nil {

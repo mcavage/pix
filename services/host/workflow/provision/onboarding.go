@@ -83,7 +83,7 @@ func validateOnboarding(r *OnboardingResult, declared map[string]config.MCPServe
 			continue
 		}
 		return fmt.Errorf("mcp %q is not declared by the active pack and is not a known catalog server; "+
-			"activate the pack that provides it, or configure it explicitly with `pix mcp add %s --url <url>`", m, m)
+			"activate the pack that provides it, or configure it explicitly with `sbx mcp add %s --url <url>`", m, m)
 	}
 	for label, v := range map[string]string{
 		"ollama_bridge_model":  r.OllamaBridgeModel,
@@ -199,7 +199,7 @@ func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 			regErr = Injected.Register(cfg, env, out, nil, nil)
 		}
 		if regErr != nil {
-			fmt.Fprintf(out, "  mcp add skipped: %v (finish later: pix mcp add)\n", regErr)
+			fmt.Fprintf(out, "  mcp add skipped: %v (finish later: sbx mcp add)\n", regErr)
 		}
 	}
 	_ = workspace.RemoveStateFile(ws, OnboardingFileName)

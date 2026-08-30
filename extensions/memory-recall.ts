@@ -319,8 +319,10 @@ export default function (pi: any) {
 	pi.registerCommand?.("recall", {
 		description: "Show what memory would recall for a query (blank = show all, up to 100)",
 		handler: async (args: any, ctx: any) => {
-			// A bare `/recall` means "show everything", matching the host CLI's
-			// `pix memory recall '*'`, not an empty (and therefore useless) query.
+			// A bare `/recall` means "show everything" (query "*"), not an empty
+			// (and therefore useless) query. There is no separate pix-owned CLI
+			// verb for this: /recall and the memory_recall MCP tool are the whole
+			// surface (AGENTS.md §"Memory is operated through MCP tools").
 			const query = String(args ?? "").trim() || "*";
 			const isAll = query === "*";
 			// Deliberately NOT wrapped in safe(): this is a user-invoked command, so a

@@ -15,9 +15,11 @@ import (
 //
 //   - registration helpers accept a leading `~`, but only a CANONICAL
 //     ABSOLUTE path is ever assigned to Environments;
-//   - `environment` and `environments.*` have no hand-edit path — every
-//     writer here is a method a `pix env` verb (Wave C) calls, never
-//     something `pix config set/unset` reaches (see
+//   - `environment` and `environments.*` have no hand-edit path — the
+//     methods below were written for a v1 `pix env` verb design and have
+//     no live caller in v2 (whose `pix env default NAME` writes the machine
+//     default through pixhome.SetDefaultEnvironment instead), but no
+//     generic config-mutation verb reaches these keys either (see
 //     workflow/provision/config.go's environmentKeyRefusal).
 //
 // It does not implement the `pix env` verbs, host trust review, or launch
@@ -25,10 +27,10 @@ import (
 
 // CanonicalEnvironmentPath expands a leading `~` (via $HOME), then resolves
 // the result to an absolute, cleaned path. It does not require the path to
-// exist — registration may name a directory `pix env add` is about to
-// scaffold. This is the ONLY transform AddEnvironment applies before storing,
-// so it is exported for a caller (a future `pix env` verb, or a test) that
-// needs the exact canonical form without going through the registry.
+// exist — registration may name a directory that has not been scaffolded
+// yet. This is the ONLY transform AddEnvironment applies before storing, so
+// it is exported for a caller (a test, or any future registry-style writer)
+// that needs the exact canonical form without going through the registry.
 func CanonicalEnvironmentPath(path string) (string, error) {
 	expanded, err := expandHome(path)
 	if err != nil {
@@ -161,11 +163,12 @@ func (c *Config) RemoveEnvironment(name string) bool {
 // Name, computed by closestKnownName below — never a question, never an
 // offer to act on Name's behalf.
 //
-// `pix env add` is the ONLY command this message references, and it is named
-// here purely as the fix a user would type; the register-one line is fixed
-// literal text (`pix env add <name> [path]`), never Name itself — echoing
-// the typo back as "the fix" would read as an instruction to register the
-// typo unchanged.
+// This is the v1 registry's error shape; v2 has no registration verb of
+// any kind to name as the fix — an environment is a plain
+// directory under ~/.pix/envs a user creates by hand — so the register-one
+// line below is fixed, generic prose, never Name itself: echoing the typo
+// back as "the fix" would read as an instruction to register the typo
+// unchanged.
 type UnknownEnvironmentError struct {
 	Name  string
 	Known []string // sorted; empty (not nil) when the registry is empty
@@ -279,9 +282,11 @@ func optimalStringAlignmentDistance(a, b string) int {
 
 // Error renders docs/design/environments.md §8.1's actionable copy: the
 // failure statement, `known:`, an optional `closest:` (closestKnownName;
-// omitted whenever it returns ok=false), and the fixed register-one line.
-// The register-one line is fixed literal text (`pix env add <name>
-// [path]`) — it never interpolates the mistyped Name.
+// omitted whenever it returns ok=false), and a fixed register-one line. The
+// register-one line is fixed generic prose, never interpolating the
+// mistyped Name — v2 has no registration verb, so it points at creating a
+// directory under ~/.pix/envs rather than naming a registration command
+// this codebase no longer has.
 func (e *UnknownEnvironmentError) Error() string {
 	known := "none"
 	if len(e.Known) > 0 {
@@ -291,15 +296,17 @@ func (e *UnknownEnvironmentError) Error() string {
 	if closest, ok := closestKnownName(e.Name, e.Known); ok {
 		msg += fmt.Sprintf("\n     closest: %s", closest)
 	}
-	return msg + "\n     register one: pix env add <name> [path]"
+	return msg + "\n     create one: a directory under ~/.pix/envs/<name>"
 }
 
 // UseEnvironment sets the machine default environment NAME. name must already
 // be registered in Environments, or empty to clear the default outright. This
-// enforces only "this name exists" — the host trust review `pix env use`
-// (workflow/env.Use) performs before selecting a Tier1 environment is a
-// separate, layered-on-top gate, not something this schema-level method
-// knows about.
+// enforces only "this name exists" — the host trust review workflow/env.Use
+// performs before selecting a Tier1 environment is a separate, layered-on-top
+// gate, not something this schema-level method knows about. v2's actual
+// default-setting verb is `pix env default NAME`, which writes through
+// pixhome.SetDefaultEnvironment instead of this v1 registry method (nothing
+// in the current CLI calls UseEnvironment any more).
 //
 // On refusal it returns an *UnknownEnvironmentError and leaves Environment
 // (and Environments) untouched: a rejected selection is never a partial

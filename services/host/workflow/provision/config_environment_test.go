@@ -9,10 +9,12 @@ import (
 
 // config_environment_test.go: `environment` and every `environments.<name>`
 // key are real, recognized config-schema fields (config.Config.Environment /
-// .Environments, E1.5), but they have NO hand-edit path — `pix env use` and
-// `pix env add`/`pix env forget` (Wave C) are the only writers. ApplyConfigChange
-// must refuse both set and unset for both shapes, name the correct `pix env`
-// command, and leave cfg untouched (a refusal is not a partial write).
+// .Environments, E1.5) from the v1 registry design, but they have NO
+// hand-edit path in v2 either — `pix env default NAME` is the only verb
+// that writes the machine default, and there is no registration verb at
+// all (an environment is a plain directory under ~/.pix/envs). ApplyConfigChange
+// must refuse both set and unset for both shapes, name the correct fix, and
+// leave cfg untouched (a refusal is not a partial write).
 
 func TestApplyConfigChange_RefusesEnvironmentSet(t *testing.T) {
 	cfg := &config.Config{}
@@ -20,8 +22,8 @@ func TestApplyConfigChange_RefusesEnvironmentSet(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a refusal for `config set environment`")
 	}
-	if !strings.Contains(err.Error(), "pix env use") {
-		t.Errorf("error should direct to `pix env use`, got %v", err)
+	if !strings.Contains(err.Error(), "pix env default") {
+		t.Errorf("error should direct to `pix env default`, got %v", err)
 	}
 }
 
@@ -31,8 +33,8 @@ func TestApplyConfigChange_RefusesEnvironmentUnset(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a refusal for `config unset environment`")
 	}
-	if !strings.Contains(err.Error(), "pix env use") {
-		t.Errorf("error should direct to `pix env use`, got %v", err)
+	if !strings.Contains(err.Error(), "pix env default") {
+		t.Errorf("error should direct to `pix env default`, got %v", err)
 	}
 }
 
@@ -42,8 +44,8 @@ func TestApplyConfigChange_RefusesEnvironmentsRegistrySet(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a refusal for `config set environments.<name>`")
 	}
-	if !strings.Contains(err.Error(), "pix env add") {
-		t.Errorf("error should direct to `pix env add`, got %v", err)
+	if !strings.Contains(err.Error(), "~/.pix/envs/home") {
+		t.Errorf("error should direct to the plain ~/.pix/envs directory, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "home") {
 		t.Errorf("error should name the environment, got %v", err)
@@ -56,8 +58,8 @@ func TestApplyConfigChange_RefusesEnvironmentsRegistryUnset(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a refusal for `config unset environments.<name>`")
 	}
-	if !strings.Contains(err.Error(), "pix env forget") {
-		t.Errorf("error should direct to `pix env forget`, got %v", err)
+	if !strings.Contains(err.Error(), "~/.pix/envs/home") {
+		t.Errorf("error should direct to the plain ~/.pix/envs directory, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "home") {
 		t.Errorf("error should name the environment, got %v", err)
@@ -84,9 +86,9 @@ func TestApplyConfigChange_EnvironmentRefusalDoesNotMutate(t *testing.T) {
 	}
 }
 
-// ConfigKeysHelp must mention environment/environments so `pix config --help`
-// stays discoverable even though the keys are refused, and must not claim
-// they are settable.
+// ConfigKeysHelp must mention environment/environments so a reader of this
+// key list stays informed even though the keys are refused, and must not
+// claim they are settable.
 func TestConfigKeysHelp_MentionsEnvironmentRefusal(t *testing.T) {
 	if !strings.Contains(ConfigKeysHelp, "pix env") {
 		t.Errorf("ConfigKeysHelp should point environment/environments readers at `pix env`, got:\n%s", ConfigKeysHelp)
@@ -104,8 +106,8 @@ func TestApplyConfigChange_RefusesExactEnvironmentsKeySet(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a refusal for `config set environments`")
 	}
-	if !strings.Contains(err.Error(), "pix env add") {
-		t.Errorf("error should direct to `pix env add`, got %v", err)
+	if !strings.Contains(err.Error(), "~/.pix/envs") {
+		t.Errorf("error should direct to the plain ~/.pix/envs directory, got %v", err)
 	}
 	if strings.Contains(err.Error(), "unknown key") {
 		t.Errorf("exact `environments` key must hit the owned-key refusal, not the generic unknown-key path, got %v", err)
@@ -118,8 +120,8 @@ func TestApplyConfigChange_RefusesExactEnvironmentsKeyUnset(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a refusal for `config unset environments`")
 	}
-	if !strings.Contains(err.Error(), "pix env forget") {
-		t.Errorf("error should direct to `pix env forget`, got %v", err)
+	if !strings.Contains(err.Error(), "~/.pix/envs") {
+		t.Errorf("error should direct to the plain ~/.pix/envs directory, got %v", err)
 	}
 	if strings.Contains(err.Error(), "unknown key") {
 		t.Errorf("exact `environments` key must hit the owned-key refusal, not the generic unknown-key path, got %v", err)
@@ -133,8 +135,9 @@ func TestApplyConfigChange_RefusesExactEnvironmentsKeyUnset(t *testing.T) {
 // by inferring exactness from the trimmed suffix: trimming the
 // "environments." prefix off "environments.environments" leaves "environments"
 // too, so a suffix-equality check collapses the two and silently drops the
-// specific env name from the guidance, pointing at `pix env add <name>`
-// instead of `pix env add environments`.
+// specific env name from the guidance, pointing at the generic
+// ~/.pix/envs/<name> form instead of naming ~/.pix/envs/environments
+// specifically.
 func TestApplyConfigChange_RefusesEnvironmentNamedEnvironmentsSet(t *testing.T) {
 	cfg := &config.Config{}
 	_, err := ApplyConfigChange(cfg, false, "environments.environments", []string{"/abs/environments"})
@@ -144,8 +147,8 @@ func TestApplyConfigChange_RefusesEnvironmentNamedEnvironmentsSet(t *testing.T) 
 	if !strings.Contains(err.Error(), "environments.environments") {
 		t.Errorf("error should name the specific key `environments.environments`, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "pix env add environments") {
-		t.Errorf("error should direct to `pix env add environments` (the specific env name), got %v", err)
+	if !strings.Contains(err.Error(), "~/.pix/envs/environments") {
+		t.Errorf("error should direct to ~/.pix/envs/environments (the specific env name), got %v", err)
 	}
 	if strings.Contains(err.Error(), "<name>") {
 		t.Errorf("error must not fall back to the generic bare-key placeholder, got %v", err)
@@ -161,8 +164,8 @@ func TestApplyConfigChange_RefusesEnvironmentNamedEnvironmentsUnset(t *testing.T
 	if !strings.Contains(err.Error(), "environments.environments") {
 		t.Errorf("error should name the specific key `environments.environments`, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "pix env forget environments") {
-		t.Errorf("error should direct to `pix env forget environments` (the specific env name), got %v", err)
+	if !strings.Contains(err.Error(), "~/.pix/envs/environments") {
+		t.Errorf("error should direct to ~/.pix/envs/environments (the specific env name), got %v", err)
 	}
 	if strings.Contains(err.Error(), "<name>") {
 		t.Errorf("error must not fall back to the generic bare-key placeholder, got %v", err)

@@ -724,27 +724,6 @@ func EnvironmentHolders(env hostenv.Env, envRoot string) ([]string, error) {
 	return held, nil
 }
 
-// EnvironmentHolderProbe adapts EnvironmentHolders to the name-keyed,
-// fail-closed probe shape `env forget` takes (workflow/env's HolderProbe),
-// with the caller supplying the name -> canonical root lookup, since only
-// it holds the config.
-func EnvironmentHolderProbe(env hostenv.Env, rootFor func(name string) (string, bool)) func(string) (bool, error) {
-	return func(name string) (bool, error) {
-		if rootFor == nil {
-			return false, errors.New("launch: no environment root lookup; refusing to answer as unheld")
-		}
-		root, ok := rootFor(name)
-		if !ok || strings.TrimSpace(root) == "" {
-			return false, nil // not registered: nothing this host could have launched under it
-		}
-		held, err := EnvironmentHolders(env, root)
-		if err != nil {
-			return false, err
-		}
-		return len(held) > 0, nil
-	}
-}
-
 // EnvTeardownPlanner is the planner a launch hands SessionDeps.Teardown so
 // the environment-scoped removal path (E2.4) runs INSIDE the existing
 // proof chain rather than beside it: PlanEnvRemoveSeam recomposes the same

@@ -297,7 +297,7 @@ func TestUseEnvironmentUnknownErrorShape(t *testing.T) {
 	// transposition, e<->m), within a 4-rune name's threshold of 1, and
 	// uniquely closer than "work" — so `closest: home` renders, matching
 	// docs/design/environments.md §8.1's own worked example verbatim.
-	want := "pix: no environment named \"hoem\".\n     known: home, work\n     closest: home\n     register one: pix env add <name> [path]"
+	want := "pix: no environment named \"hoem\".\n     known: home, work\n     closest: home\n     create one: a directory under ~/.pix/envs/<name>"
 	if got := err.Error(); got != want {
 		t.Errorf("Error() =\n%s\nwant\n%s", got, want)
 	}
@@ -343,7 +343,7 @@ func TestUseEnvironmentUnknownErrorNoneWhenEmpty(t *testing.T) {
 	}
 
 	err = cfg.UseEnvironment("anything")
-	want := "pix: no environment named \"anything\".\n     known: none\n     register one: pix env add <name> [path]"
+	want := "pix: no environment named \"anything\".\n     known: none\n     create one: a directory under ~/.pix/envs/<name>"
 	if err == nil || err.Error() != want {
 		t.Errorf("Error() = %v, want %q", err, want)
 	}
@@ -366,7 +366,7 @@ func TestUseEnvironmentUnknownErrorSpecialSafeName(t *testing.T) {
 
 	name := "stage-2.prod_env"
 	err = cfg.UseEnvironment(name)
-	want := "pix: no environment named \"stage-2.prod_env\".\n     known: home\n     register one: pix env add <name> [path]"
+	want := "pix: no environment named \"stage-2.prod_env\".\n     known: home\n     create one: a directory under ~/.pix/envs/<name>"
 	if err == nil || err.Error() != want {
 		t.Errorf("Error() = %v, want %q", err, want)
 	}
@@ -499,7 +499,7 @@ func TestUseEnvironmentUnknownErrorClosestUniqueMatch(t *testing.T) {
 	}
 
 	err = cfg.UseEnvironment("worc")
-	want := "pix: no environment named \"worc\".\n     known: home, work\n     closest: work\n     register one: pix env add <name> [path]"
+	want := "pix: no environment named \"worc\".\n     known: home, work\n     closest: work\n     create one: a directory under ~/.pix/envs/<name>"
 	if got := err.Error(); got != want {
 		t.Errorf("Error() =\n%s\nwant\n%s", got, want)
 	}

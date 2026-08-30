@@ -73,7 +73,7 @@ func TestVerifyCatalogMCPReady_UnregisteredNamesAddAndAuth(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unregistered catalog server must fail the gate")
 	}
-	if !strings.Contains(err.Error(), "pix mcp add notion") || !strings.Contains(err.Error(), "pix mcp auth notion") {
+	if !strings.Contains(err.Error(), "sbx mcp add notion") || !strings.Contains(err.Error(), "sbx mcp auth notion") {
 		t.Errorf("error must carry the exact repair commands, got: %v", err)
 	}
 }
@@ -87,7 +87,7 @@ func TestVerifyCatalogMCPReady_UnauthorizedNamesAuthCommand(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unauthorized catalog server must fail the gate")
 	}
-	if !strings.Contains(err.Error(), "pix mcp auth notion") {
+	if !strings.Contains(err.Error(), "sbx mcp auth notion") {
 		t.Errorf("error must carry the exact auth command, got: %v", err)
 	}
 }
@@ -101,7 +101,7 @@ func TestVerifyCatalogMCPReady_ExplicitPolicyDenial(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "denied by policy") {
 		t.Errorf("an explicit policy denial must fail as DENIED (not a setup todo), got: %v", err)
 	}
-	if strings.Contains(err.Error(), "pix mcp auth notion`") && strings.Contains(err.Error(), "then re-run") {
+	if strings.Contains(err.Error(), "sbx mcp auth notion`") && strings.Contains(err.Error(), "then re-run") {
 		t.Errorf("a policy denial must not pretend an auth command fixes it: %v", err)
 	}
 }
@@ -159,7 +159,7 @@ func TestReconcileOnboarding_CatalogGateLeavesFileAndConfig(t *testing.T) {
 	if slices.Contains(cfg.MCP, "notion") {
 		t.Errorf("notion must NOT be persisted while unregistered: %v", cfg.MCP)
 	}
-	if !strings.Contains(out.String(), "pix mcp add notion") {
+	if !strings.Contains(out.String(), "sbx mcp add notion") {
 		t.Errorf("refusal must name the exact repair command, got:\n%s", out.String())
 	}
 }

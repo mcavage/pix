@@ -19,11 +19,6 @@ func writeFile(t *testing.T, path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 // ── AC-11: containment refusal names both absolute paths ────────────────
 
 func TestRefuseContainmentNestedRootNamesBothPaths(t *testing.T) {

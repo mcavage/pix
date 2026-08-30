@@ -222,10 +222,10 @@ func currentCreationFingerprint(cfg *config.Config, o launch.RunOpts, sel launch
 	return launch.CreationFingerprint(launch.CreationFactsFor(in), launch.AttachHMACResolver(configDirOrEmpty(), nil))
 }
 
-// envHolderProbe and envSandboxState were removed: both supported
-// `pix env forget`/a live-sandbox-state column on `pix env show`, and
-// neither verb exists in the accepted v2 four-verb surface (list/show/
+// envHolderProbe and envSandboxState were removed: both supported an env
+// "forget" verb and a live-sandbox-state column on `pix env show`, and
+// neither is part of the accepted v2 four-verb surface (list/show/
 // default/trust, docs/design/pix-v2-surface.md §3.4 — there is no
-// forget). Both were already unreachable dead code (no call site) before
-// this comment; they named nativeenv.HolderProbe, a v1 registry-era type
-// that has itself been deleted along with forget.go.
+// unregister verb at all). Both were already unreachable dead code (no call
+// site) before this comment; they named nativeenv.HolderProbe, a v1
+// registry-era type that has itself been deleted along with forget.go.

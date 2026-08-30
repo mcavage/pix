@@ -93,7 +93,7 @@ type runCmd struct {
 	Env    string `help:"Launch under a named environment (an exact ~/.pix/envs/<name> directory, never a prefix); overrides the machine default for this run only." placeholder:"NAME"`
 	Model  string `help:"Active pi model (passed through to pi)." placeholder:"M"`
 	Resume string `help:"Resume this pi session (passed through to pi on every attach or create)." placeholder:"SESSION"`
-	Task   string `help:"Launch an existing task's sandbox (same as 'pix task run NAME')." placeholder:"NAME"`
+	Task   string `help:"Launch an existing task's sandbox." placeholder:"NAME"`
 	Keep   bool   `short:"k" help:"Keep the sandbox when the last shell exits: a sticky, identity-bound marker the teardown/orphan reaper refuses on (an explicit 'pix rm' still removes it)."`
 
 	// PiArg is the `--` tail, rewritten by rewriteRunPassthrough. Hidden because a
@@ -131,7 +131,7 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 		Passthrough: c.PiArg,
 		Keep:        c.Keep,
 	}
-	// `--task NAME` is the `pix task run NAME` shorthand: task.Resolve does the work
+	// `--task NAME` resolves an existing task checkout by name: task.Resolve does the work
 	// and this fills the ordinary DIR + --name shape, so no sandbox-lifecycle code is
 	// duplicated here. An explicit --name still wins.
 	if c.Task != "" {

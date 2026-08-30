@@ -90,27 +90,30 @@ func TestSecretHelpConfigIndependent(t *testing.T) {
 	}
 }
 
-// TestSecretSetWriteFailure_DispatcherExitsNonzero: a failed op-refs.env write
+// TestSecretSetWriteFailure_DispatcherExitsNonzero: a failed secrets.env write
 // must make the CLI exit nonzero, never quietly succeed. Runs through the REAL
 // dispatcher (the kong root) against the real filesystem in a subprocess, so
 // the exit code is genuinely observed rather than merely a returned error
-// value nobody acted on.
+// value nobody acted on. PIX_HOME (not the v1 PIX_CONFIG) is what `secret`
+// actually resolves against (see secret/pixhome.go), so the sabotage has to
+// land on <PIX_HOME>/secrets.env, not a config-dir op-refs.env, or the
+// production write never even touches the poisoned path.
 func TestSecretSetWriteFailure_DispatcherExitsNonzero(t *testing.T) {
-	if cfgDir := os.Getenv("PIX_SECRET_SET_FAIL_CFGDIR"); cfgDir != "" {
+	if home := os.Getenv("PIX_SECRET_SET_FAIL_HOME"); home != "" {
 		runSecretDispatch([]string{"set", "ANTHROPIC_API_KEY", "op://v/anthropic/key"})
 		return
 	}
 	dir := t.TempDir()
-	cfgDir := filepath.Join(dir, "cfg")
-	// Sabotage op-refs.env: pre-create it as a DIRECTORY, so reading it fails
+	home := filepath.Join(dir, "home")
+	// Sabotage secrets.env: pre-create it as a DIRECTORY, so reading it fails
 	// (EISDIR) and the transaction must refuse rather than clobber it.
-	if err := os.MkdirAll(filepath.Join(cfgDir, "op-refs.env"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, "secrets.env"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretSetWriteFailure_DispatcherExitsNonzero")
 	cmd.Env = append(os.Environ(),
-		"PIX_SECRET_SET_FAIL_CFGDIR="+cfgDir,
-		"PIX_CONFIG="+filepath.Join(cfgDir, "config.toml"),
+		"PIX_SECRET_SET_FAIL_HOME="+home,
+		"PIX_HOME="+home,
 	)
 	outBuf, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
@@ -120,28 +123,28 @@ func TestSecretSetWriteFailure_DispatcherExitsNonzero(t *testing.T) {
 	if ee.ExitCode() == 0 {
 		t.Errorf("exit code = 0, want nonzero, Output: %s", outBuf)
 	}
-	if !strings.Contains(string(outBuf), "could not read") {
+	if !strings.Contains(string(outBuf), "is a directory") {
 		t.Errorf("output should explain the failure, got:\n%s", outBuf)
 	}
 }
 
 // TestSecretRm_DispatcherExitsNonzeroOnFailure exercises the same failure
 // through the real dispatcher for `rm`, proving the CLI itself exits nonzero
-// (not merely that secret.RunSecretRm returns an error nobody consumed).
+// (not merely that secret.RemoveRef returns an error nobody consumed).
 func TestSecretRm_DispatcherExitsNonzeroOnFailure(t *testing.T) {
-	if cfgDir := os.Getenv("PIX_SECRET_RM_FAIL_CFGDIR"); cfgDir != "" {
+	if home := os.Getenv("PIX_SECRET_RM_FAIL_HOME"); home != "" {
 		runSecretDispatch([]string{"rm", "ANTHROPIC_API_KEY"})
 		return
 	}
 	dir := t.TempDir()
-	cfgDir := filepath.Join(dir, "cfg")
-	if err := os.MkdirAll(filepath.Join(cfgDir, "op-refs.env"), 0o755); err != nil {
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(filepath.Join(home, "secrets.env"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretRm_DispatcherExitsNonzeroOnFailure")
 	cmd.Env = append(os.Environ(),
-		"PIX_SECRET_RM_FAIL_CFGDIR="+cfgDir,
-		"PIX_CONFIG="+filepath.Join(cfgDir, "config.toml"),
+		"PIX_SECRET_RM_FAIL_HOME="+home,
+		"PIX_HOME="+home,
 	)
 	outBuf, err := cmd.CombinedOutput()
 	var ee *exec.ExitError

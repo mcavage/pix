@@ -58,9 +58,6 @@ type Holder struct {
 // Path is the reference file this holder owns.
 func (h *Holder) Path() string { return h.path }
 
-// NodeID is the node this reference belongs to.
-func (h *Holder) NodeID() string { return h.node }
-
 // Release drops the lock and removes the reference file. Removal is best
 // effort: a leftover FILE with no LOCK is correctly counted as not-a-holder
 // by Census, so failing to unlink can never fabricate a holder.

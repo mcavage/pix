@@ -19,13 +19,14 @@
       }
     },
     "pix/host/cmd/pix": {
-      "prod_loc": 3404,
+      "_prod_loc_note": "Pix v2 gate-green cleanup (test/dead-code sweep): real fixes grew this package — secret set/rm dispatch tests corrected to sabotage the real PIX_HOME/secrets.env path (adding a PIX_HOME-based fixture var, +1 global), plus rewritten verb-reference comments across several files. Not dead-code accumulation; ratcheted up with a reason per this file's own write-budgets refusal.",
+      "prod_loc": 3417,
       "test_loc": 4386,
       "exports": 5,
       "exports_used_externally": 0,
       "exits": 1,
       "streams": 0,
-      "globals": 19,
+      "globals": 20,
       "init": 2,
       "edges": 24,
       "parser_families": {

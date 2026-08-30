@@ -18,6 +18,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -207,21 +208,6 @@ func parse(parser *kong.Kong, argv []string) (ctx *kong.Context, err error) {
 // package because each one is about presenting a command to a user, which is
 // what this package is for.
 
-// WantsHelp reports whether argv requests help. A `--` terminator stops the
-// scan: everything after it belongs to the wrapped program, and a `--help` there
-// is theirs, not ours.
-func WantsHelp(argv []string) bool {
-	for _, a := range argv {
-		if a == "--" {
-			return false
-		}
-		if a == "-h" || a == "--help" {
-			return true
-		}
-	}
-	return false
-}
-
 // IsTTY reports whether r is a terminal. Commands consult Deps.Interactive
 // rather than calling this directly; it is exported for the one caller that
 // builds a Deps.
@@ -231,36 +217,6 @@ func IsTTY(r io.Reader) bool {
 		return false
 	}
 	return term.IsTerminal(int(f.Fd()))
-}
-
-// UpDown renders a liveness boolean. Trivial, and shared because two renderers
-// disagreeing about the word for "not running" is a real bug class in a
-// diagnostic tool.
-func UpDown(up bool) string {
-	if up {
-		return "up"
-	}
-	return "down"
-}
-
-// SafeGitURL rejects a URL that git could read as a FLAG rather than a remote.
-// It is argument hygiene shared by every verb that clones something.
-func SafeGitURL(url string) bool {
-	if url == "" || strings.HasPrefix(url, "-") {
-		return false
-	}
-	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "ssh://") {
-		return true
-	}
-	// scp-style user@host:path (no scheme). Must contain ':' and not be a
-	// transport helper like ext::/fd:: (those contain '::').
-	if strings.Contains(url, "::") {
-		return false
-	}
-	if at := strings.IndexByte(url, '@'); at > 0 && strings.Contains(url[at:], ":") {
-		return true
-	}
-	return false
 }
 
 // grepWord reports whether out contains name as a whole word (matches the
@@ -290,18 +246,12 @@ func ConfirmYN(in io.Reader, out io.Writer, prompt string, def bool) bool {
 	return ans == "y" || ans == "yes"
 }
 
-// AskLine reads one word-shaped answer, lowercased, with def for a bare Enter.
-// It is ConfirmYN's open-ended twin and reads the SAME way — straight off in,
-// never through a buffered reader. That is the whole reason it lives here: a
-// caller that wraps in with its own bufio.Reader steals input from every later
-// prompt on the same stream, and the flows that ask a question usually go on to
-// hand the same stream to something that asks another one.
-func AskLine(in io.Reader, out io.Writer, prompt, def string) string {
-	fmt.Fprint(out, prompt)
-	var line string
-	fmt.Fscanln(in, &line)
-	if ans := strings.ToLower(strings.TrimSpace(line)); ans != "" {
-		return ans
-	}
-	return def
+// WriteJSONOut prints v as indented JSON. It lived in flagset.go (the
+// hand-rolled parser every verb has since migrated off of; see git history
+// for that file), but this is a plain output helper with no dependency on
+// that parser, so it moved here rather than going with it.
+func WriteJSONOut(out io.Writer, v any) error {
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }

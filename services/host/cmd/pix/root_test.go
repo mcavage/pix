@@ -47,10 +47,15 @@ func TestRootOwnsEveryVerb(t *testing.T) {
 	for _, v := range rootVerbs() {
 		got[v] = true
 	}
+	// The v2 accepted surface (docs/design/pix-v2-surface.md §3, root.go's
+	// own doc comment): run, ls, rm, task, setup, doctor, reset, env, secret,
+	// version, help. A removed verb (status, config, serve, mcp, models,
+	// agent, pack, memory, and every v1 alias) belongs in a NEGATIVE test
+	// (TestDeletionSweep_NoServeOrPackVerbInHelpText et al in pix_test.go),
+	// never a positive membership assertion here.
 	for _, want := range []string{
-		"run", "status", "st", "ls", "rm", "version", "config", "serve",
-		"doctor", "setup", "mcp", "pack", "secret", "memory", "mem",
-		"models", "agent", "task", "help",
+		"run", "ls", "rm", "version",
+		"doctor", "setup", "reset", "secret", "env", "task", "help",
 	} {
 		if !got[want] {
 			t.Errorf("verb %q is not a child of the kong root (got %v)", want, rootVerbs())
@@ -76,24 +81,6 @@ func TestKnownVerbsDerivedFromRoot(t *testing.T) {
 func TestTieredHelpStaysShort(t *testing.T) {
 	if n := len(strings.Split(strings.TrimRight(helpText, "\n"), "\n")); n > 25 {
 		t.Errorf("tiered `pix help` is %d lines, budget is 25 — move detail to `help --all`", n)
-	}
-}
-
-// TestHelpTextMoreLine_NamesOnlyLiveVerbs: DX finding 4 — the curated
-// landing screen's "More" line hand-lists a few verbs `help --all` covers in
-// full. Every token in it must be a REAL, currently dispatchable verb (never
-// a retired one like "state", which has no live subcommand left at all), so
-// the short screen can never point a reader at a name that only answers
-// PIX_RETIRED.
-func TestHelpTextMoreLine_NamesOnlyLiveVerbs(t *testing.T) {
-	line, ok := findMoreLine(helpText)
-	if !ok {
-		t.Fatal("helpText has no \"More\" line to check")
-	}
-	for _, tok := range moreLineTokens(line) {
-		if !knownVerbs()[tok] {
-			t.Errorf("helpText's More line names %q, which is not a live verb (knownVerbs); line: %q", tok, line)
-		}
 	}
 }
 
@@ -156,33 +143,6 @@ func TestTieredHelpTiersMatchGeneratedGroups(t *testing.T) {
 			}
 		}
 	}
-}
-
-// findMoreLine locates the "More" line in the curated help text.
-func findMoreLine(text string) (string, bool) {
-	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "More") {
-			return line, true
-		}
-	}
-	return "", false
-}
-
-// moreLineTokens extracts the comma-separated verb list between "More" and
-// the trailing "(see ...)" parenthetical.
-func moreLineTokens(line string) []string {
-	after, _, _ := strings.Cut(line, "(")
-	_, list, found := strings.Cut(after, "More")
-	if !found {
-		return nil
-	}
-	var out []string
-	for _, tok := range strings.Split(list, ",") {
-		if t := strings.TrimSpace(tok); t != "" {
-			out = append(out, t)
-		}
-	}
-	return out
 }
 
 // TestRootHelpIsTheCuratedScreen: a root help request prints the tiered text,
@@ -305,16 +265,14 @@ func TestDispatch_BareInteractive_NeverTouchesARealSandbox(t *testing.T) {
 func TestMigratedVerbHelpIsGenerated(t *testing.T) {
 	for verb, want := range map[string]string{
 		"ls":     "Usage: pix ls",
-		"models": "Usage: pix models",
-		"agent":  "Usage: pix agent",
 		"secret": "Usage: pix secret",
 		"rm":     "Usage: pix rm",
-		"serve":  "Usage: pix serve",
 		"task":   "Usage: pix task",
 		"run":    "Usage: pix run",
-		"status": "Usage: pix status",
+		"env":    "Usage: pix env",
 		"doctor": "Usage: pix doctor",
 		"setup":  "Usage: pix setup",
+		"reset":  "Usage: pix reset",
 	} {
 		d, out, errb := rootDeps()
 		if code := dispatch([]string{verb, "--help"}, d); code != 0 {
@@ -334,10 +292,10 @@ func TestExitMapper(t *testing.T) {
 		{"rm", "--this-is-not-a-real-flag-9x7z"},
 		{"task", "--this-is-not-a-real-flag-9x7z"},
 		{"run", "--this-is-not-a-real-flag-9x7z"},
-		{"status", "--this-is-not-a-real-flag-9x7z"},
+		{"env", "--this-is-not-a-real-flag-9x7z"},
 		{"doctor", "--this-is-not-a-real-flag-9x7z"},
 		{"setup", "--this-is-not-a-real-flag-9x7z"},
-		{"serve", "--this-is-not-a-real-flag-9x7z"},
+		{"reset", "--this-is-not-a-real-flag-9x7z"},
 	} {
 		d, _, errb := rootDeps()
 		if code := dispatch(argv, d); code != 2 {

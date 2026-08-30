@@ -42,10 +42,12 @@ optional.
 
 ## 2. Install
 
+<!-- PIX_PRIMARY_PATH_START -->
 ```bash
 brew install mcavage/tap/pix
 pix setup
 ```
+<!-- PIX_PRIMARY_PATH_END -->
 
 Use the `mcavage/tap/` prefix. Bare `brew install pix` matches no formula,
 and Homebrew will suggest `pixi`, which is a different tool.

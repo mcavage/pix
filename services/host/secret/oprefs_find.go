@@ -76,16 +76,3 @@ func FindOpRefs(env hostenv.Env) string {
 	return ""
 }
 
-// OpRefFilled reports whether op-refs.env has a FILLED op:// ref for env var key.
-func OpRefFilled(env hostenv.Env, key string) bool {
-	_, content, exists := OpRefsContent(env)
-	if !exists {
-		return false
-	}
-	for _, r := range ParseOpRefs(content, nil) {
-		if r.Key == key && r.IsRef && !r.Placeholder {
-			return true
-		}
-	}
-	return false
-}

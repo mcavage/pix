@@ -27,13 +27,15 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { parseRoster, type Roster } from "../lib/inference-roster.ts";
 
-// The bridge model is configured on the HOST (`pix config set
-// ollama_bridge_model <tag>`); `pix run` writes the resolved value into
+// The bridge model is configured on the HOST, in config.toml's
+// ollama_bridge_model key (there is no dedicated CLI verb for it in v2; it
+// is set by the in-sandbox onboarding proposal, or by hand-editing the
+// key); `pix run` writes the resolved value into
 // <workspace>/.pix/ollama-bridge.model, and pi runs with the workspace as
 // cwd, so we read it here — the same host-writes-file / VM-reads-file seam the
 // profile + knowledge-scope files use. This is why you do NOT hand-edit sandbox
-// env: set it once with `pix config set` and every `pix run` picks it
-// up. A literal OLLAMA_BRIDGE_MODEL env var still wins (power-user override).
+// env: change the host config and every `pix run` picks it up. A literal
+// OLLAMA_BRIDGE_MODEL env var still wins (power-user override).
 function bridgeModelFromWorkspace(): string | undefined {
 	try {
 		const raw = readFileSync(".pix/ollama-bridge.model", "utf8").trim();
@@ -120,7 +122,7 @@ function bridgeTagModel(): BridgeModel {
 // pre-manifest world, and falling back to the bridge tag is exactly right there.
 // modelsFromManifest is the PURE half: parsed manifest in, provider model list
 // out, with the configured bridge tag guaranteed present. The tag must survive
-// a manifest that omits it — it is what `pix config set ollama_bridge_model`
+// a manifest that omits it — it is what config.toml's ollama_bridge_model key
 // promises and what the interactive cycle offers. Exported for tests.
 export function modelsFromManifest(
 	parsed: any,

@@ -6,9 +6,9 @@ import (
 )
 
 // verbcoverage_test.go: the two tests that would have caught a verb nobody can
-// find. They read the DISPATCH SWITCH itself (main.go's `switch args[0]`), not
-// a hand-maintained list, so a verb added to the switch and forgotten in help
-// fails the build instead of shipping undiscoverable.
+// find. They read the ROOT TREE itself (root.go's rootCmd, via rootVerbs()),
+// not a hand-maintained list, so a verb added to the tree and forgotten in
+// help fails the build instead of shipping undiscoverable.
 
 // hiddenVerbs is the ONLY escape hatch: verbs deliberately absent from the
 // help tree. Every entry needs a reason on its line — an entry without one is
@@ -18,28 +18,26 @@ var hiddenVerbs = map[string]string{
 	"--help":    "alias of help, not a verb",
 	"-v":        "alias of version, not a verb",
 	"--version": "alias of version, not a verb",
-	"st":        "documented abbreviation of status",
 	"ls":        "documented abbreviation, listed under its long form",
-	"mem":       "documented abbreviation of memory",
 }
 
 // dispatchVerbs is the actual, live set of things a user may type: the
-// children of the kong root. It was main.go's `switch args[0]`, parsed out of
-// the source; the root is now the only dispatcher, so the list is derived from
-// the parser itself and cannot describe a verb that is not dispatchable.
+// children of the kong root. It was main.go's `switch args[0]`, then rootVerbs
+// derived off kong's Model.Children; either way the list is derived from the
+// parser itself and cannot describe a verb that is not dispatchable.
 func dispatchVerbs(t *testing.T) []string {
 	t.Helper()
 	verbs := rootVerbs()
-	if len(verbs) < 10 {
+	if len(verbs) < 8 {
 		t.Fatalf("found only %d root verbs (%v) — the root tree moved and this test stopped testing anything", len(verbs), verbs)
 	}
 	return verbs
 }
 
-// TestHelpListsEveryTopLevelVerb: everything the dispatch switch accepts is
+// TestHelpListsEveryTopLevelVerb: everything the root dispatches is
 // discoverable in `pix help --all`, or explicitly listed as hidden with a
-// reason. This is the test that would have caught `gworkspace` being
-// dispatchable but unlisted.
+// reason. This is the test that would have caught a verb being dispatchable
+// but unlisted.
 func TestHelpListsEveryTopLevelVerb(t *testing.T) {
 	for _, verb := range dispatchVerbs(t) {
 		if _, hidden := hiddenVerbs[verb]; hidden {
@@ -51,21 +49,18 @@ func TestHelpListsEveryTopLevelVerb(t *testing.T) {
 	}
 }
 
-// TestEveryDispatchedSubcommandAppearsInItsUsage: a verb must name every
-// subcommand its own dispatch accepts. The measured pairs below are the
-// multi-subcommand verbs; each one's help screen — the legacy constant, or the
-// generated one for a migrated verb — is parsed for the subcommand token. This
-// is the test that would have caught `task path` being implemented and
-// unlisted.
+// TestEveryDispatchedSubcommandAppearsInItsUsage: a multi-subcommand verb
+// must name every subcommand its own dispatch accepts. Each verb's generated
+// usage (`pix help <verb>`) is parsed for the subcommand token — this is the
+// test that would have caught `task path` being implemented and unlisted.
+// The v1 verbs this used to cover (config, mcp, models, secret sync) are
+// gone with the router/pack/mcp-registry surfaces they belonged to; only the
+// v2 multi-subcommand verbs remain.
 func TestEveryDispatchedSubcommandAppearsInItsUsage(t *testing.T) {
 	for verb, subs := range map[string][]string{
-		"config": {"show", "path", "get", "set", "unset"},
-		"mcp":    {"add", "ls", "auth"},
-		"secret": {"ls", "set", "rm", "check", "sync"},
-		// `models` has exactly one listed subcommand left: ls/show/pick/route
-		// went with the router (Wave F), and bare `pix models` is the default
-		// status screen, not a token in the command list.
-		"models": {"add"},
+		"task":   {"new", "ls", "path", "rm"},
+		"env":    {"list", "show", "default", "trust"},
+		"secret": {"ls", "set", "rm", "check"},
 	} {
 		d, out, _ := rootDeps()
 		dispatch([]string{"help", verb}, d)

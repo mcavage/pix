@@ -568,19 +568,6 @@ func indent(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-// CurrentOpRef returns the current FILLED op:// ref for a provider env var
-// from op-refs.env, the single refs file. Pure/read-only — it never writes.
-func CurrentOpRef(env hostenv.Env, envVar string) (string, bool) {
-	if _, content, exists := OpRefsContent(env); exists {
-		for _, r := range ParseOpRefs(content, nil) {
-			if r.Key == envVar && r.IsRef && !r.Placeholder {
-				return r.Value, true
-			}
-		}
-	}
-	return "", false
-}
-
 // DefaultOpRefsPath computes the absolute XDG op-refs.env path from the injected
 // env (mirrors config.OpRefsPath but stays hermetic under test): $PIX_CONFIG
 // dir, else $XDG_CONFIG_HOME/pix, else ~/.config/pix — all + op-refs.env.

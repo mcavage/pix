@@ -182,9 +182,3 @@ var _ System = Real{}
 // single variable and nothing else. Narrowing a parameter to this is the whole
 // point of splitting the interfaces: `func servePort(env sys.Getenver, ...)`
 type Getenver interface{ Getenv(name string) string }
-
-// GetenvFunc adapts a bare lookup function to Getenver. It has no nil case on
-// purpose: a nil GetenvFunc is a programming error that panics at the call.
-type GetenvFunc func(name string) string
-
-func (f GetenvFunc) Getenv(name string) string { return f(name) }

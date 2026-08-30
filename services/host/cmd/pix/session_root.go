@@ -70,9 +70,9 @@ type interactiveRoot struct {
 	holder *session.Holder
 	store  session.Store
 	tree   string
-	// node is this OCCURRENCE's own node id, distinct from holder.NodeID()
-	// (the fixed "root-interactive" lock name every interactive root ever
-	// takes): a resumed tree's root node record must get a FRESH id each
+	// node is this OCCURRENCE's own node id, distinct from the fixed
+	// "root-interactive" lock name every interactive root ever takes as its
+	// holder path: a resumed tree's root node record must get a FRESH id each
 	// time a new interactive session starts, or a second occurrence's first
 	// PutNode would be refused as a backwards transition from the PRIOR
 	// occurrence's already-"finished" record. The lock name stays fixed on

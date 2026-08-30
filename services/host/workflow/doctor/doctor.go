@@ -1,19 +1,18 @@
-// Package doctor is the two readiness surfaces: `pix status`, the glance, and
-// `pix doctor`, the diagnosis. They are one package because they are one
-// question asked at two depths, and keeping them apart is what let them
-// disagree.
+// Package doctor is `pix doctor`'s diagnosis: every probe, its evidence, and
+// the exact repair command. It once also rendered a second, shorter surface
+// for the `pix status` verb; that verb is not part of the v2 CLI surface
+// (docs/design/pix-v2-surface.md §3) and its dispatchable wrapper was deleted
+// as unreachable. RenderStatus/StatusDescription/RenderStatusConfigError
+// remain here because workflow/doctor's own tests still exercise them
+// directly as the library half of what was a fast/thorough pair; nothing
+// dispatches them as a verb any more.
 //
-// Both build the SAME probe set (probes.go) and render the SAME Snapshot
-// (health). What differs is deliberate and small:
+// Everything below builds one probe set (probes.go) and renders one Snapshot
+// (health). Exit 1 is reserved for a REQUIRED probe that verified a gap;
+// unknown alone is not a failure, because "I could not check" is not "you are
+// broken".
 //
-//	status  short, no repair commands, ALWAYS exit 0. It is the landing
-//	        screen and a scraper's `pix status || exit` must not fail because
-//	        a probe could not see something from in here.
-//	doctor  every probe, its evidence, and the exact commands. Exit 1 only
-//	        for a REQUIRED probe that verified a gap; unknown alone is not a
-//	        failure, because "I could not check" is not "you are broken".
-//
-// This replaces six group builders (providers, ollama, memory, gog, secrets,
+// This replaced six group builders (providers, ollama, memory, gog, secrets,
 // mcp), two renderers and two JSON schemas. The readiness model they were
 // written against survives only where a leaf still needs it — the Google
 // Workspace and MCP helpers below, which other workflows call.
@@ -23,14 +22,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sort"
 
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/health"
-	"pix/host/hostenv"
-	"pix/host/inference"
-	"pix/host/secret"
 )
 
 // RunDoctor probes the host and writes the full diagnosis, returning the
@@ -99,38 +94,6 @@ exit codes:
 // name is expected to change when MCP support stabilizes. README.md carries the
 // one accepted non-Go copy and must change at the same time.
 const SbxInstallHint = health.SbxInstallFix
-
-// UnwiredProviderKeys is the gap this whole feature closes, as a fact both the
-// status screen and doctor can read: a provider whose key RESOLVES on this host
-// but which has no native binding in config, i.e. a key that is present,
-// correct, and doing nothing.
-//
-// It reports absence of wiring, never a verdict about the key's validity. A
-// binding that exists but failed its probe is NOT reported here — that is a
-// different problem with a different fix, and conflating them would send a user
-// to `models add` for a credential their provider rejected.
-//
-// Silent when a pack owns inference (its bindings are the pack's business) and
-// when the key list is unreadable, since an unreadable list is not evidence of
-// a gap.
-func UnwiredProviderKeys(cfg *config.Config, env hostenv.Env) []string {
-	if cfg == nil || cfg.Inference.ExclusiveSource != "" {
-		return nil
-	}
-	names, err := secret.ProviderKeyNames(env)
-	if err != nil || len(names) == 0 {
-		return nil
-	}
-	bound := inference.BoundNativeProviders(cfg)
-	var gaps []string
-	for _, n := range names {
-		if !bound[n] {
-			gaps = append(gaps, n)
-		}
-	}
-	sort.Strings(gaps)
-	return gaps
-}
 
 // The sandbox-liveness tri/four-state (unknown/absent/running/stopped) that
 // used to live here as SbxState moved to the L1 sandbox package (see

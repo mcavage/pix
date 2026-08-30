@@ -19,7 +19,7 @@ const taskDescription = `Run parallel tasks on one repo: each task is a checkout
 or a linked worktree with --worktree) with its own branch, so tasks never
 collide. 'rm' persists the branch back into the main repo before the
 checkout goes away, and refuses a dirty/unpushed/live one without --force.
-'pix run --task NAME' is a shorthand for 'pix task run NAME'.`
+'pix run --task NAME' launches an existing task's sandbox directly.`
 
 func (c *taskCmd) Help() string { return taskDescription }
 
