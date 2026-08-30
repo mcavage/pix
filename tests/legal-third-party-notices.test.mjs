@@ -56,7 +56,7 @@ test("bakedTools ledger records ruff, fd, and go with license/source/version pro
 });
 
 test("validateBakedTools(): passes when the Dockerfile ARG pins match the ledger", () => {
-	const dockerfileText = fs.readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
+	const dockerfileText = fs.readFileSync(path.join(repoRoot, "images/agent/Dockerfile"), "utf8");
 	const { ok, findings } = gen.validateBakedTools(dockerfileText, deps.bakedTools);
 	assert.equal(ok, true, JSON.stringify(findings));
 });
@@ -81,7 +81,7 @@ test("validateBakedTools(): fails closed when a ledger tool has no matching Dock
 test("CLI --check-baked-tools passes against the real Dockerfile", () => {
 	const out = execFileSync(
 		"node",
-		[genScript, "--check-baked-tools", path.join(repoRoot, "Dockerfile")],
+		[genScript, "--check-baked-tools", path.join(repoRoot, "images/agent/Dockerfile")],
 		{ cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
 	);
 	void out;
@@ -268,7 +268,7 @@ test("the ledger's typescript row is ARG-pinned and matches the Dockerfile and p
 	const ts = deps.npmGlobal.find((p) => p.name === "typescript");
 	assert.ok(ts, "expected a typescript npmGlobal row");
 	assert.equal(ts.dockerfileArg, "TYPESCRIPT_VERSION");
-	const dockerfile = fs.readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
+	const dockerfile = fs.readFileSync(path.join(repoRoot, "images/agent/Dockerfile"), "utf8");
 	assert.match(dockerfile, new RegExp(`ARG TYPESCRIPT_VERSION=${ts.version.replace(/\./g, "\\.")}`));
 	assert.match(dockerfile, /npm install -g --ignore-scripts "typescript@\$\{TYPESCRIPT_VERSION\}"/);
 	const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
@@ -290,7 +290,7 @@ test("validateNpmGlobalPins(): fails closed on ARG drift, and on an unpinned ins
 });
 
 test("CLI --check-npm-pins passes against the real Dockerfile", () => {
-	execFileSync("node", [genScript, "--check-npm-pins", path.join(repoRoot, "Dockerfile")], {
+	execFileSync("node", [genScript, "--check-npm-pins", path.join(repoRoot, "images/agent/Dockerfile")], {
 		cwd: repoRoot,
 		stdio: ["ignore", "pipe", "pipe"],
 	});

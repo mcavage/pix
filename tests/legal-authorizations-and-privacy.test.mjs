@@ -128,12 +128,13 @@ test("publish.yml exports the published manifest digest and records provenance a
 	assert.match(publishWorkflow, /outputs:\s*\n\s*digest: \$\{\{ steps\.manifest\.outputs\.digest \}\}/);
 	assert.match(publishWorkflow, /bash scripts\/release\/verify-provenance\.sh "\$V" "\$DIGEST"/);
 	assert.match(publishWorkflow, /needs: \[version, merge\]/);
-	// The version bump (and therefore the release) waits on provenance.
-	assert.match(publishWorkflow, /needs: \[version, merge, provenance\]/);
+	// The version bump (and therefore the release) waits on provenance (and, in
+	// the two-image graph, on the pix-memory build and the release-manifest step).
+	assert.match(publishWorkflow, /needs: \[version, merge, build-memory, provenance, release-manifest\]/);
 });
 
 test("publish.yml generates the SBOM against the published image digest, not a rebuild", () => {
-	assert.match(publishWorkflow, /image: \$\{\{ env\.IMAGE \}\}@\$\{\{ needs\.merge\.outputs\.digest \}\}/);
+	assert.match(publishWorkflow, /image: \$\{\{ env\.AGENT_IMAGE \}\}@\$\{\{ needs\.merge\.outputs\.digest \}\}/);
 	// The SBOM must be PROVEN to describe the published artifact. Scout records
 	// the image it analyzed as a pkg:oci purl, and for a multi-arch reference
 	// that is the platform child it resolved, so the check reads the published

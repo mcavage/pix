@@ -62,7 +62,7 @@ fi
 # the Dockerfile (not npm/go.mod managed), pinned by an ARG. Fails closed if
 # the Dockerfile ARG drifts from the ledger's recorded, license-verified
 # version (e.g. someone bumps RUFF_VERSION without touching the ledger).
-if node scripts/legal/generate-third-party-notices.mjs --check-baked-tools Dockerfile >"$TMP_DIR/baked.out" 2>"$TMP_DIR/baked.err"; then
+if node scripts/legal/generate-third-party-notices.mjs --check-baked-tools images/agent/Dockerfile >"$TMP_DIR/baked.out" 2>"$TMP_DIR/baked.err"; then
 	ok "baked-tool (ruff/fd/go) versions match the ledger"
 else
 	fail "baked-tool (ruff/fd/go) version drift between Dockerfile and the ledger"
@@ -74,14 +74,14 @@ fi
 # serves at build time, which makes the ledger's recorded version/license a
 # claim about an unreproducible build. Fails closed on drift between
 # ARG TYPESCRIPT_VERSION and the ledger's npmGlobal entry.
-if node scripts/legal/generate-third-party-notices.mjs --check-npm-pins Dockerfile >"$TMP_DIR/npmpins.out" 2>"$TMP_DIR/npmpins.err"; then
+if node scripts/legal/generate-third-party-notices.mjs --check-npm-pins images/agent/Dockerfile >"$TMP_DIR/npmpins.out" 2>"$TMP_DIR/npmpins.err"; then
 	ok "ARG-pinned npm globals (typescript) match the ledger"
 else
 	fail "ARG-pinned npm global version drift between Dockerfile and the ledger"
 	cat "$TMP_DIR/npmpins.err" >&2
 fi
 
-if grep -qE 'npm install -g --ignore-scripts "typescript@\$\{TYPESCRIPT_VERSION\}"' Dockerfile; then
+if grep -qE 'npm install -g --ignore-scripts "typescript@\$\{TYPESCRIPT_VERSION\}"' images/agent/Dockerfile; then
 	ok "Dockerfile installs typescript at the pinned ARG version"
 else
 	fail "Dockerfile installs an UNPINNED global typescript (use typescript@\${TYPESCRIPT_VERSION})"
@@ -147,7 +147,7 @@ require_text 'github\.com/hashicorp/yamux/tree/v0\.1\.2' "yamux Source Code Form
 require_text 'licenses/MPL-2\.0\.txt' "pointer to the shipped MPL-2.0 license text"
 
 # --- 4. inclusion: image + tarball -------------------------------------------
-if grep -qE 'COPY[[:space:]].*THIRD_PARTY_NOTICES\.md[[:space:]]' Dockerfile; then
+if grep -qE 'COPY[[:space:]].*THIRD_PARTY_NOTICES\.md[[:space:]]' images/agent/Dockerfile; then
 	ok "Dockerfile COPYs THIRD_PARTY_NOTICES.md into the image"
 else
 	fail "Dockerfile does not COPY THIRD_PARTY_NOTICES.md into the image"
@@ -155,13 +155,13 @@ fi
 
 # MIT s2 ("included in all copies") + MPL-2.0 s3.1: pix's own license and the
 # MPL text must travel with the image, not only live in the repo.
-if grep -qE 'COPY[[:space:]].*[[:space:]]LICENSE[[:space:]]' Dockerfile; then
+if grep -qE 'COPY[[:space:]].*[[:space:]]LICENSE[[:space:]]' images/agent/Dockerfile; then
 	ok "Dockerfile COPYs LICENSE into the image"
 else
 	fail "Dockerfile does not COPY LICENSE into the image (MIT s2)"
 fi
 
-if grep -qE 'COPY[[:space:]].*[[:space:]]licenses/[[:space:]]' Dockerfile; then
+if grep -qE 'COPY[[:space:]].*[[:space:]]licenses/[[:space:]]' images/agent/Dockerfile; then
 	ok "Dockerfile COPYs licenses/ (MPL-2.0 text) into the image"
 else
 	fail "Dockerfile does not COPY licenses/ into the image (MPL-2.0 s3.1)"
@@ -189,7 +189,7 @@ else
 	fail "publish.yml does not run verify-provenance.sh against the merge job's published digest (AC-REL-04)"
 fi
 
-if grep -qF 'image: ${{ env.IMAGE }}@${{ needs.merge.outputs.digest }}' .github/workflows/publish.yml; then
+if grep -qF 'image: ${{ env.AGENT_IMAGE }}@${{ needs.merge.outputs.digest }}' .github/workflows/publish.yml; then
 	ok "publish.yml generates the SBOM against the PUBLISHED image digest"
 else
 	fail "publish.yml does not generate an SBOM against the published image digest (AC-REL-04)"
