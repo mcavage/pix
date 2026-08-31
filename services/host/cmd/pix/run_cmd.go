@@ -291,6 +291,17 @@ func unloadedLocalImage(d *cli.Deps, what string) error {
 // finds no sandbox at all, so it creates, and a drift refusal there would be
 // a real refusal rather than a loop.
 func runLaunch(d *cli.Deps, o launch.RunOpts) error {
+	// Before the environment is resolved and before ANY sandbox side
+	// effect: if this binary's release bundle no longer matches what this
+	// PIX_HOME has installed (the ordinary state after `brew upgrade`), the
+	// machine-owned stack artifacts are reconciled here, once per
+	// invocation. A matching manifest costs one file read; an absent one is
+	// first run and still requires an explicit `pix setup`
+	// (upgrade_auto.go).
+	if uerr := autoReconcileRelease(d, autoUpgradeSeamsFor()); uerr != nil {
+		fmt.Fprintln(d.Err, strings.TrimRight(uerr.Error(), "\n"))
+		return cli.SilentError{Code: 1}
+	}
 	return runLaunchAttempt(d, cloneRunOpts(o), cloneRunOpts(o))
 }
 
