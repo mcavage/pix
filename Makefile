@@ -13,11 +13,19 @@
 # independently numbered images.
 DOCKER_USER  ?= mcavage
 VERSION      ?= 0.1.71
-# LAUNCHER_VERSION stamps the pix binary. A LOCAL build marks the version
-# "+local" so the launcher knows it is UNRELEASED (no matching git tag
-# v$(VERSION) exists) and uses the local checkout kit instead of pinning a bogus
-# tag. A CI RELEASE build overrides this to a clean X.Y.Z (LAUNCHER_VERSION=$(VERSION)).
-LAUNCHER_VERSION ?= $(VERSION)+local
+# LAUNCHER_VERSION stamps the pix binary. A LOCAL build derives a NEXT-PATCH
+# prerelease (X.Y.(Z+1)-beta.<sha7>[.dirty.<12hex>], scripts/release/derive-build-version.sh)
+# from the committed package.json base plus this checkout's git state, so a
+# release stack (pinned at the clean $(VERSION)) and a dev stack (pinned at
+# this derived identity) coexist without either resolving to, or being
+# mistaken for, the other's tag. `launcher.IsReleased` (services/host/launcher/released.go)
+# still correctly calls this UNRELEASED — it is never a bare X.Y.Z — so it
+# uses the local checkout kit instead of pinning a nonexistent v$(VERSION) tag.
+# A CI RELEASE build overrides this to a clean X.Y.Z (LAUNCHER_VERSION=$(VERSION)):
+# `?=` never evaluates the $(shell ...) default once the variable already has
+# a value from the command line or environment, so a release build never
+# shells out to derive anything.
+LAUNCHER_VERSION ?= $(shell scripts/release/derive-build-version.sh)
 AGENT_DOCKERFILE  ?= images/agent/Dockerfile
 AGENT_IMAGE       ?= docker.io/$(DOCKER_USER)/pix-agent:$(VERSION)
 AGENT_LATEST      ?= docker.io/$(DOCKER_USER)/pix-agent:latest
@@ -177,33 +185,33 @@ run-published: ## Run the latest PUBLISHED image via the git kit (always fresh �
 run-no-mcp: ## Launch with NO MCP servers attached (debugging MCP setup failures)
 	@sbx run pix --kit $(KIT) .
 
-launcher: ## Build the ONE pix binary (out/pix), version-stamped (local builds stamp $(VERSION)+local so the launcher uses the local kit, not a nonexistent v$(VERSION) tag). services/host/cmd/pix is the only build target, and the only binary a release ships.
+launcher: ## Build the ONE pix binary (out/pix), version-stamped (local builds derive a next-patch -beta.<sha7> prerelease, see LAUNCHER_VERSION above, so the launcher uses the local kit, not a nonexistent v$(VERSION) tag). services/host/cmd/pix is the only build target, and the only binary a release ships.
 	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix ./cmd/pix)
 	@echo "Built out/pix (version $(LAUNCHER_VERSION))."
 	@echo "Install: ln -sf $(CURDIR)/out/pix ~/.local/bin/pix"
 
-runtime-archive: ## Build the runtime archive (skills/agents/settings/keybindings/themes, canonical runtime/<version>/ layout) WITHOUT touching the live repo layout dev `make run` reads
-	bash scripts/release/build-runtime-archive.sh $(VERSION) out/pix-runtime-$(VERSION).tar.gz
+runtime-archive: ## Build the runtime archive (skills/agents/settings/keybindings/themes, canonical runtime/<version>/ layout) WITHOUT touching the live repo layout dev `make run` reads. Named at $(LAUNCHER_VERSION) — the SAME identity the launcher binary stamps — so a local install's runtime dir always matches the binary that reads it; release CI passes the clean $(VERSION) directly to this same script instead (see .github/workflows/publish.yml), never through this target.
+	bash scripts/release/build-runtime-archive.sh $(LAUNCHER_VERSION) out/pix-runtime-$(LAUNCHER_VERSION).tar.gz
 
 # Binds ONE Pix version to the pix-agent digest, the pix-memory digest, the
 # runtime archive digest, and the kit revision (docs/design/pix-v2-architecture.md
 # §3). Digests are read from `docker inspect` on the just-built local images —
 # this is the LOCAL/dev shape; CI's publish workflow binds the PUBLISHED
 # (pushed, multi-arch) digests instead, which only exist after a real push.
-release-manifest: build-agent build-memory runtime-archive ## Emit out/release-manifest.json binding version + both image digests + runtime digest + kit revision
+release-manifest: build-agent build-memory runtime-archive ## Emit out/release-manifest.json binding version + both image digests + runtime digest + kit revision. Manifest "version" is $(LAUNCHER_VERSION) (matches the launcher binary and the runtime archive above); the pix-agent/pix-memory images stay tagged at the clean, published $(VERSION) regardless — only the local build's OWN identity moves, never the published image tags.
 	@AGENT_DIGEST=$$(docker image inspect $(AGENT_IMAGE) --format '{{index .RepoDigests 0}}' 2>/dev/null | sed 's/^.*@//'); \
 	if [ -z "$$AGENT_DIGEST" ]; then AGENT_DIGEST="sha256:$$(docker image inspect $(AGENT_IMAGE) --format '{{.Id}}' | sed 's/^sha256://')"; fi; \
 	MEMORY_DIGEST=$$(docker image inspect $(MEMORY_IMAGE) --format '{{index .RepoDigests 0}}' 2>/dev/null | sed 's/^.*@//'); \
 	if [ -z "$$MEMORY_DIGEST" ]; then MEMORY_DIGEST="sha256:$$(docker image inspect $(MEMORY_IMAGE) --format '{{.Id}}' | sed 's/^sha256://')"; fi; \
 	node scripts/release/emit-manifest.mjs \
-		--version $(VERSION) \
+		--version $(LAUNCHER_VERSION) \
 		--agent-digest "$$AGENT_DIGEST" \
 		--memory-digest "$$MEMORY_DIGEST" \
-		--runtime-archive out/pix-runtime-$(VERSION).tar.gz \
+		--runtime-archive out/pix-runtime-$(LAUNCHER_VERSION).tar.gz \
 		--write out/release-manifest.json
 
-bundle: launcher release-manifest ## Assemble the installable release bundle in out/: the ONE pix binary + release-manifest.json + pix-runtime-$(VERSION).tar.gz
-	@ls -l out/pix out/release-manifest.json out/pix-runtime-$(VERSION).tar.gz
+bundle: launcher release-manifest ## Assemble the installable release bundle in out/: the ONE pix binary + release-manifest.json + pix-runtime-$(LAUNCHER_VERSION).tar.gz
+	@ls -l out/pix out/release-manifest.json out/pix-runtime-$(LAUNCHER_VERSION).tar.gz
 
 install: bundle ## Build the release bundle and put the ONE pix binary on your PATH (~/.local/bin)
 	mkdir -p $(HOME)/.local/bin
@@ -211,8 +219,8 @@ install: bundle ## Build the release bundle and put the ONE pix binary on your P
 	@echo "Installed: pix -> $(CURDIR)/out/pix"
 	@# `pix setup` discovers the release bundle NEXT TO THE RESOLVED binary, so
 	@# this symlink is fine: it resolves into out/, where release-manifest.json
-	@# and pix-runtime-$(VERSION).tar.gz were just written by release-manifest.
-	@echo "Bundle:    out/release-manifest.json + out/pix-runtime-$(VERSION).tar.gz"
+	@# and pix-runtime-$(LAUNCHER_VERSION).tar.gz were just written by release-manifest.
+	@echo "Bundle:    out/release-manifest.json + out/pix-runtime-$(LAUNCHER_VERSION).tar.gz"
 	@echo "Next:      pix setup   (installs the runtime under ~/.pix and reconciles pix-memory)"
 	@echo "Ensure ~/.local/bin is on your PATH, then: cd <any project> && pix"
 

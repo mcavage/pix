@@ -49,9 +49,19 @@ export function sha256File(path) {
 // with a missing binding is not a partial manifest, it is a wrong one — the
 // whole point is that setup/doctor can trust ONE document instead of
 // re-deriving identity from a version string.
+// versionRE mirrors services/host/release/release.go's versionRE exactly: the
+// safe filename/release-path grammar (conservative, semver-compatible,
+// leading alnum, no slash/backslash/control byte). A CI release always
+// passes a clean X.Y.Z; a LOCAL build (`make bundle`/`make release-manifest`)
+// passes the SAME derived identity the launcher binary stamps
+// (scripts/release/derive-build-version.sh: X.Y.(Z+1)-beta.<sha7>[.dirty.<12hex>]),
+// so the manifest's "version" field never disagrees with the binary reading it.
+const versionRE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 export function buildManifest({ version, agentDigest, memoryDigest, runtimeDigest, kitRevision, generatedAt }) {
-	if (!/^\d+\.\d+\.\d+$/.test(String(version))) {
-		throw new Error(`version must be plain semver, got: ${JSON.stringify(version)}`);
+	const v = String(version);
+	if (!versionRE.test(v) || v.includes("..")) {
+		throw new Error(`version must match the safe release grammar [A-Za-z0-9][A-Za-z0-9._-]* with no ".." segment, got: ${JSON.stringify(version)}`);
 	}
 	validateDigest("agentDigest", agentDigest);
 	validateDigest("memoryDigest", memoryDigest);

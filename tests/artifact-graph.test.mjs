@@ -132,8 +132,30 @@ test("release-manifest binds ONE version to both image digests, the runtime dige
 	assert.equal(manifest.kitRevision, "0123456789abcdef0123456789abcdef01234567");
 
 	assert.throws(() => gen.buildManifest({ version: "1.2.3", agentDigest: "not-a-digest", memoryDigest: validDigest, runtimeDigest: validDigest, kitRevision: "abc1234" }));
-	assert.throws(() => gen.buildManifest({ version: "not-semver", agentDigest: validDigest, memoryDigest: validDigest, runtimeDigest: validDigest, kitRevision: "abc1234" }));
+	assert.throws(() => gen.buildManifest({ version: "/etc/passwd", agentDigest: validDigest, memoryDigest: validDigest, runtimeDigest: validDigest, kitRevision: "abc1234" }));
+	assert.throws(() => gen.buildManifest({ version: "1.2.3/../etc", agentDigest: validDigest, memoryDigest: validDigest, runtimeDigest: validDigest, kitRevision: "abc1234" }));
 	assert.throws(() => gen.buildManifest({ version: "1.2.3", agentDigest: validDigest, memoryDigest: validDigest, runtimeDigest: validDigest, kitRevision: "" }));
+
+	// A LOCAL build's manifest "version" is the SAME derived identity the
+	// launcher binary stamps (scripts/release/derive-build-version.sh), not a
+	// plain X.Y.Z — buildManifest must accept it rather than disagree with the
+	// binary reading this manifest (docs/design/pix-v2-architecture.md §3).
+	const local = gen.buildManifest({
+		version: "0.1.72-beta.abc1234",
+		agentDigest: validDigest,
+		memoryDigest: validDigest,
+		runtimeDigest: validDigest,
+		kitRevision: "abc1234",
+	});
+	assert.equal(local.version, "0.1.72-beta.abc1234");
+	const localDirty = gen.buildManifest({
+		version: "0.1.72-beta.abc1234.dirty.0123456789ab",
+		agentDigest: validDigest,
+		memoryDigest: validDigest,
+		runtimeDigest: validDigest,
+		kitRevision: "abc1234",
+	});
+	assert.equal(localDirty.version, "0.1.72-beta.abc1234.dirty.0123456789ab");
 });
 
 test("the runtime archive stages skills/agents/settings/keybindings/themes into the canonical runtime/<version>/ layout, without touching the live repo tree", (t) => {
@@ -194,7 +216,7 @@ test("install packages ONE binary plus its adjacent release bundle, in the right
 	assert.match(makefile, /^install: bundle/m);
 	assert.match(makefile, /^release-manifest: build-agent build-memory runtime-archive/m);
 	const bundleBlock = makefile.slice(makefile.indexOf("\nbundle:"), makefile.indexOf("\ninstall:"));
-	for (const artifact of ["out/pix", "out/release-manifest.json", "out/pix-runtime-$(VERSION).tar.gz"]) {
+	for (const artifact of ["out/pix", "out/release-manifest.json", "out/pix-runtime-$(LAUNCHER_VERSION).tar.gz"]) {
 		assert.ok(bundleBlock.includes(artifact), `make bundle must produce ${artifact}`);
 	}
 });
@@ -210,7 +232,7 @@ test("the launcher's bundle file names match what the release targets actually w
 	assert.match(bundleGo, /BundleManifestFile = "release-manifest\.json"/);
 	assert.match(bundleGo, /return "pix-runtime-" \+ version \+ "\.tar\.gz"/);
 	assert.match(makefile, /out\/release-manifest\.json/);
-	assert.match(makefile, /out\/pix-runtime-\$\(VERSION\)\.tar\.gz/);
+	assert.match(makefile, /out\/pix-runtime-\$\(LAUNCHER_VERSION\)\.tar\.gz/);
 	const archiveScript = fs.readFileSync(path.join(repoRoot, "scripts/release/build-runtime-archive.sh"), "utf8");
 	assert.match(archiveScript, /pix-runtime-\$\{VERSION\}\.tar\.gz/);
 	assert.match(archiveScript, /export COPYFILE_DISABLE=1/, "macOS builds must suppress synthetic AppleDouble archive members");
