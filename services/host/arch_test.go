@@ -162,6 +162,16 @@ var pkgLayer = map[string]int{
 	// the REST of the launcher's paths onto PIX_HOME is a later cutover step
 	// (architecture §13 step 4), not U1.
 	"pixhome": layerFoundation,
+	// stack is Wave A U1's foundation package ("one PIX_HOME = one stack"):
+	// the single producer of a PIX_HOME's stable stack ID (sha256 of its
+	// canonicalized path, first IDLen hex characters) and every resource
+	// name a later capability derives from it — a scoped sandbox prefix, the
+	// per-stack pix-memory container/MCP names, and the per-stack local
+	// image tag grammar. Like pixhome and release it takes no intra-module
+	// dependency other than pixhome itself (Current derives from
+	// pixhome.Dir), so it sits in L0 beside them, not among the L1
+	// capabilities its naming helpers exist to feed.
+	"stack": layerFoundation,
 	// unitreport, unitreport/unitreporttest, plugin, service, memory (the
 	// pre-v2 host memory CLI), and the custom memory JSON-RPC package rpc are
 	// deleted — see the L1 comment above.
@@ -283,15 +293,18 @@ var pkgLayer = map[string]int{
 // each other" would forbid cli from importing sys, which is nonsense.
 // Ranks, lowest first: pixhome is PIX_HOME resolution with no dependencies at
 // all (stdlib only, docs/design ledger item "old config XDG fallback" — QA
-// F5); config is a pure file format that now delegates its own path
-// resolution to pixhome (config.Path/StateDir/DataDir all route through
-// PIX_HOME, never a second XDG root) so it sits one rank above; sys sits
-// above that because sys.Real.StateDir delegates to config, which is
-// correct — the OS seam should not re-derive the launcher's data layout.
+// F5); stack sits one rank above it for the same reason config does — its
+// only intra-module import is pixhome (Current derives from pixhome.Dir) —
+// and shares config's rank because neither imports the other; config is a
+// pure file format that also delegates its own path resolution to pixhome
+// (config.Path/StateDir/DataDir all route through PIX_HOME, never a second
+// XDG root); sys sits above that because sys.Real.StateDir delegates to
+// config, which is correct — the OS seam should not re-derive the
+// launcher's data layout.
 var l0Order = map[string]int{
 	"pixhome": 0,
-	"config":  1,
-	"sys":     2, "launcher": 2,
+	"config":  1, "stack": 1,
+	"sys": 2, "launcher": 2,
 	"workspace":   3,
 	"sys/systest": 3, "hostenv": 4,
 	"cli": 5,
