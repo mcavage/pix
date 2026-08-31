@@ -32,6 +32,7 @@ package launch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -384,6 +385,24 @@ type SessionDeps struct {
 	// Spawn builds the child process for argv. The command layer owns stdio and
 	// environment wiring; this package owns only WHEN it starts and its argv.
 	Spawn func(argv []string) *exec.Cmd
+	// PrepareSecrets gives THIS sandbox the credentials this PIX_HOME
+	// configures, scoped to it (secret.PrepareSandboxSecrets). It is called
+	// on BOTH transitions, once each, and never before the sandbox is known
+	// to exist: on a create, after the positive instance receipt has been
+	// promoted and before the session is exec'd; on an attach, after the
+	// identity and fingerprint checks and before the child is spawned. That
+	// placement is what makes a rotated ref take effect on the next run
+	// rather than at the next recreate.
+	//
+	// A failure is fatal to the transition. On a CREATE that means the
+	// sandbox this call just made is torn down (RunSession, below): a box
+	// that exists but has no credentials is an orphan the user did not ask
+	// for. On an ATTACH the existing sandbox is retained — it was not ours
+	// to remove, and the previous run's credentials may still be in it.
+	//
+	// nil means "no credential preparation wired" (tests, and any caller
+	// that has none to do).
+	PrepareSecrets func(sandbox string) error
 	// LockTimeout bounds the lifecycle-lock acquire; zero means
 	// SessionLockTimeout.
 	LockTimeout time.Duration
@@ -396,6 +415,31 @@ type SessionRefused struct{ Err error }
 
 func (e *SessionRefused) Error() string { return e.Err.Error() }
 func (e *SessionRefused) Unwrap() error { return e.Err }
+
+// SecretPrepFailed is the ONE refusal that leaves a sandbox behind: the create
+// succeeded and was recorded, and then the credentials that sandbox exists to
+// use could not be given to it. RunSession answers it by handing the sandbox
+// to the same proof-gated teardown a normal exit uses, once the lifecycle lock
+// is released — so a credential-less box is never left for a later orphan
+// sweep to find. It wraps a *SessionRefused so the command layer's existing
+// "decided under the lock, nothing is running" rendering still applies.
+type SecretPrepFailed struct {
+	Refusal *SessionRefused
+	// Created is true when THIS transition created the sandbox (the only case
+	// that may remove it). An attach sets it false and the sandbox is kept.
+	Created bool
+}
+
+func (e *SecretPrepFailed) Error() string { return e.Refusal.Error() }
+func (e *SecretPrepFailed) Unwrap() error { return e.Refusal }
+
+// prepareSessionSecrets runs the credential hook, if one is wired.
+func prepareSessionSecrets(spec SessionSpec, deps SessionDeps) error {
+	if deps.PrepareSecrets == nil {
+		return nil
+	}
+	return deps.PrepareSecrets(spec.Name)
+}
 
 // RunSession is the whole create/attach lifecycle for one session, in the one
 // order that is safe (see this file's header):
@@ -430,6 +474,20 @@ func RunSession(spec SessionSpec, deps SessionDeps) error {
 	if err != nil {
 		if child != nil {
 			killUnreferencedAndTeardown(spec, deps, child, err)
+			return err
+		}
+		// The one transition failure that leaves a sandbox behind: the create
+		// succeeded, its receipt was promoted, and the credential preparation
+		// that runs before the session starts failed. No child was ever
+		// started and no reference lease was taken, so the moment
+		// AttachRefUnderLifecycle returned (above) the lifecycle lock was
+		// released — which is exactly when the proof-gated teardown may run.
+		var prep *SecretPrepFailed
+		if errors.As(err, &prep) && prep.Created {
+			fmt.Fprintf(deps.Warn, "pix: %s was created but could not be given its credentials; removing it rather than leaving a credential-less sandbox behind\n", spec.Name)
+			res := TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown)
+			reportTeardown(deps.Warn, res, spec.Workspace)
+			releaseEffectiveAfterTeardown(deps, spec.Name, res)
 		}
 		return err
 	}
@@ -549,6 +607,13 @@ func startEnvCreateTransition(spec SessionSpec, deps SessionDeps) (*SessionChild
 	if !recorded {
 		return nil, &SessionRefused{Err: fmt.Errorf("%q was created but reports no verifiable instance id — refusing to attach to a sandbox this host cannot prove it owns", spec.Name)}
 	}
+	// The credentials come next, and BEFORE the keep marker: a create whose
+	// credentials could not be prepared is torn down by RunSession, and a keep
+	// marker bound first would be a proof that refuses that removal.
+	if perr := prepareSessionSecrets(spec, deps); perr != nil {
+		return nil, &SecretPrepFailed{Created: true, Refusal: &SessionRefused{
+			Err: fmt.Errorf("%q was created but its credentials could not be prepared: %w", spec.Name, perr)}}
+	}
 	if spec.Keep {
 		if kerr := setSessionKeep(spec.Key); kerr != nil {
 			fmt.Fprintf(deps.Warn, "pix: warning: -k/--keep could not be recorded: %v\n", kerr)
@@ -604,6 +669,15 @@ func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, 
 				return nil, &SessionRefused{Err: aerr}
 			}
 			argv = execArgs
+		}
+		// Identity and fingerprint are settled; this sandbox is the one this
+		// launch means to enter. Refresh its scoped credentials BEFORE the
+		// child is spawned, so a rotated ref takes effect on this attach
+		// rather than at the next recreate. A failure refuses the attach and
+		// RETAINS the sandbox: this transition did not create it.
+		if perr := prepareSessionSecrets(spec, deps); perr != nil {
+			return nil, &SecretPrepFailed{Created: false, Refusal: &SessionRefused{
+				Err: fmt.Errorf("%q was left running; its credentials could not be prepared: %w", spec.Name, perr)}}
 		}
 	}
 

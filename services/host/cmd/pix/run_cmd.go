@@ -354,15 +354,18 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		}
 	}
 
-	// A pi session needs at least one provider key: resolve the 1Password refs into
-	// sbx (a no-op when a key is there), then refuse ONLY on a POSITIVE "no key"
-	// answer — unprobeable means cannot verify, which proceeds. keyResult is kept for
-	// the readiness snapshot, so run pays for one `sbx secret ls`.
+	// A pi session needs at least one provider key, and the evidence is THIS
+	// PIX_HOME's configured op:// refs — never `sbx secret ls`, whose global
+	// entries belong to the host rather than to this stack. Offer to write a
+	// ref when none is configured and we are interactive, then refuse ONLY on a
+	// POSITIVE "no ref" answer: unreadable means cannot verify, which proceeds.
+	// The values themselves are resolved later, per sandbox, by the credential
+	// hook wired into SessionDeps below.
 	var keyResult health.Result
 	if _, lerr := defaultShellEnv().LookPath("sbx"); lerr == nil && !inference.ConfiguredKeylessInference() && !uatSmokeSkipsProviderKeyGate() {
 		env := defaultShellEnv()
 		launch.BootstrapProviderKeys(env, d.In, d.Err, d.Interactive)
-		keyResult = launch.ProbeModelKeys(context.Background(), "")
+		keyResult = launch.ProbeModelKeys(env)
 		if launch.RefusesLaunch(keyResult) {
 			fmt.Fprint(d.Err, secret.ModelKeyMissingMessage(env))
 			return cli.SilentError{Code: 1}
@@ -741,6 +744,16 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		Env:  defaultShellEnv(),
 		Poll: launch.SbxCreatePoll(defaultShellEnv()),
 		Warn: d.Err,
+		// Credentials are this sandbox's, not the host's: every create and
+		// every attach resolves the refs THIS PIX_HOME configures and writes
+		// them scoped to o.Name, so a rotation lands on the next run and no
+		// other stack's sandbox can read them. Keyless-configured inference
+		// tolerates a resolution failure (that session was never going to
+		// use a provider key); everything else refuses.
+		PrepareSecrets: func(name string) error {
+			return secret.PrepareSandboxSecrets(defaultShellEnv(), name, d.Err,
+				secret.ScopedSecretOptions{ModelKeyOptional: inference.ConfiguredKeylessInference()})
+		},
 		// Teardown routes through the environment-scoped planner (E2.4), so
 		// the stable effective file this launch created is what removal names
 		// — inside the SAME proof chain, never beside it.

@@ -168,21 +168,32 @@ func TestSanitizeIdentity(t *testing.T) {
 	}
 }
 
-func TestSbxModelKeyState(t *testing.T) {
-	// present
-	p := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "anthropic\ngithub\n", nil }}}
-	if present, ok := launch.SbxModelKeyState(p); !present || !ok {
-		t.Errorf("present key: got present=%v ok=%v", present, ok)
+// The preflight's tri-state, over the evidence Wave C moved it to: THIS
+// PIX_HOME's configured refs, never `sbx secret ls`.
+func TestConfiguredModelKeyState(t *testing.T) {
+	refs := func(content string, readErr error) hostenv.Env {
+		return hostenv.Env{System: &systest.Fake{
+			LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil },
+			IsFileFn:   func(string) bool { return readErr != nil },
+			ReadFileFn: func(string) (string, error) {
+				if readErr != nil {
+					return "", readErr
+				}
+				return content, nil
+			},
+			RunFn: func(name string, args ...string) (string, error) {
+				t.Fatalf("the preflight must not run anything: %s %v", name, args)
+				return "", nil
+			}}}
 	}
-	// no key but probeOK
-	nk := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "github\n", nil }}}
-	if present, ok := launch.SbxModelKeyState(nk); present || !ok {
-		t.Errorf("no key: got present=%v ok=%v (want false,true)", present, ok)
+	if present, ok := launch.ConfiguredModelKeyState(refs("ANTHROPIC_API_KEY=op://v/a/k\n", nil)); !present || !ok {
+		t.Errorf("configured ref: got present=%v ok=%v", present, ok)
 	}
-	// transient ls failure -> probeOK false (must NOT be read as "no key")
-	fail := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("control plane down") }}}
-	if present, ok := launch.SbxModelKeyState(fail); present || ok {
-		t.Errorf("ls failure: got present=%v ok=%v (want false,false)", present, ok)
+	if present, ok := launch.ConfiguredModelKeyState(refs("GITHUB_TOKEN=op://v/gh/t\n", nil)); present || !ok {
+		t.Errorf("github-only: got present=%v ok=%v (want false,true)", present, ok)
+	}
+	if present, ok := launch.ConfiguredModelKeyState(refs("", fmt.Errorf("permission denied"))); present || ok {
+		t.Errorf("unreadable refs: got present=%v ok=%v (want false,false)", present, ok)
 	}
 }
 

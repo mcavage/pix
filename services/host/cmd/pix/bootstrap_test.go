@@ -11,39 +11,38 @@ import (
 	"testing"
 )
 
-// bootstrap with a key already present is a no-op that returns true and never
-// touches op (no prompt).
+// bootstrap with a model ref already configured is a no-op that returns true
+// and never touches op (no prompt).
 func TestBootstrapProviderKeys_PresentNoOp(t *testing.T) {
 	var opCalled bool
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(n string) (string, error) { return "/usr/bin/" + n, nil }, ReadFileFn: func(string) (string, error) { return "", nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(n string) (string, error) { return "/usr/bin/" + n, nil }, ReadFileFn: func(string) (string, error) { return "ANTHROPIC_API_KEY=op://v/a/k\n", nil }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "op" {
 			opCalled = true
-		}
-		if name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls" {
-			return "anthropic\ngithub\n", nil
 		}
 		return "", nil
 	}}}
 	var out bytes.Buffer
 	if !launch.BootstrapProviderKeys(env, strings.NewReader(""), &out, false) {
-		t.Fatal("present key should bootstrap true")
+		t.Fatal("a configured model ref should bootstrap true")
 	}
 	if opCalled {
-		t.Error("must not touch op when a key is already present")
+		t.Error("must not touch op when a ref is already configured")
 	}
 }
 
-// bootstrap with no key and no TTY returns false (can't provision unattended).
+// bootstrap with no configured ref and no TTY returns false (can't provision
+// unattended) — and a host-wide sbx secret does not change that answer: a
+// global belongs to whoever pushed it, not to this PIX_HOME.
 func TestBootstrapProviderKeys_MissingNoTTY(t *testing.T) {
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(n string) (string, error) { return "/usr/bin/" + n, nil }, ReadFileFn: func(string) (string, error) { return "", nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(n string) (string, error) { return "/usr/bin/" + n, nil }, ReadFileFn: func(string) (string, error) { return "GITHUB_TOKEN=op://v/gh/t\n", nil }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls" {
-			return "github\n", nil // no model key
+			return "anthropic\nopenai\ngoogle\n", nil // GLOBAL keys: not this stack's
 		}
 		return "", nil
 	}}}
 	var out bytes.Buffer
 	if launch.BootstrapProviderKeys(env, strings.NewReader("y\n"), &out, false) {
-		t.Error("no key + no TTY must return false")
+		t.Error("no configured ref + no TTY must return false, whatever sbx lists globally")
 	}
 }
 

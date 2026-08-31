@@ -20,13 +20,10 @@ package main
 //     rejected registration.
 
 import (
-	"bytes"
 	"fmt"
 	"pix/host/hostenv"
-	"pix/host/secret"
 	"pix/host/sys/systest"
 	"pix/host/workflow/launch"
-	"strings"
 	"testing"
 	"time"
 )
@@ -97,27 +94,6 @@ func TestLocalImageLoaded_HangingSbxBounded(t *testing.T) {
 	}
 	if el := time.Since(start); el > 10*time.Second {
 		t.Fatalf("launch.LocalImageLoaded took %s — unbounded", el)
-	}
-}
-
-// TestEnsureProviderKeysFromRefs_HangingSbxBoundedNoMutation: the secret-sync
-// read probe (`sbx secret ls`) is bounded; on a hang the sync returns without
-// guessing — it must never reach op or `sbx secret set`.
-func TestEnsureProviderKeysFromRefs_HangingSbxBoundedNoMutation(t *testing.T) {
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, GetenvFn: func(string) string { return "" }, HomeDirFn: func() string { return "/home/u" }, ReadFileFn: func(string) (string, error) {
-		return "ANTHROPIC_API_KEY=op://Vault/Anthropic/api key\n", nil
-	}, RunFn: func(name string, args ...string) (string, error) {
-		t.Fatalf("a hung `sbx secret ls` must abort the sync before any op/sbx mutation: %s %v", name, args)
-		return "", nil
-	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
-	var out bytes.Buffer
-	start := time.Now()
-	secret.EnsureProviderKeysFromRefsLocked(env, &out)
-	if el := time.Since(start); el > 10*time.Second {
-		t.Fatalf("secret.EnsureProviderKeysFromRefsLocked took %s — unbounded", el)
-	}
-	if strings.Contains(out.String(), "resolved") {
-		t.Errorf("a hung probe must not claim any key was resolved, got:\n%s", out.String())
 	}
 }
 
