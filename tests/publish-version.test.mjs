@@ -18,7 +18,7 @@ test("the publish version comes from committed package.json, not the run number"
 
 // scripts/release/derive-build-version.sh derives the LOCAL (dev-stack)
 // build identity (LAUNCHER_VERSION's default, Makefile) — a next-patch
-// -beta.<sha7>[.dirty.<12hex>] prerelease so a release stack and a dev stack
+// -beta.g<sha7>[.dirty.<12hex>] prerelease so a release stack and a dev stack
 // coexist. Release CI must keep computing and committing the clean X.Y.Z
 // itself, the same way it always has: it never shells out to the local
 // derivation script, and the version it stamps/tags/commits stays plain

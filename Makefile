@@ -14,7 +14,7 @@
 DOCKER_USER  ?= mcavage
 VERSION      ?= 0.1.71
 # LAUNCHER_VERSION stamps the pix binary. A LOCAL build derives a NEXT-PATCH
-# prerelease (X.Y.(Z+1)-beta.<sha7>[.dirty.<12hex>], scripts/release/derive-build-version.sh)
+# prerelease (X.Y.(Z+1)-beta.g<sha7>[.dirty.<12hex>], scripts/release/derive-build-version.sh)
 # from the committed package.json base plus this checkout's git state, so a
 # release stack (pinned at the clean $(VERSION)) and a dev stack (pinned at
 # this derived identity) coexist without either resolving to, or being
@@ -231,7 +231,7 @@ run-published: ## Run the latest PUBLISHED image via the git kit (always fresh â
 run-no-mcp: ## Launch with NO MCP servers attached (debugging MCP setup failures)
 	@sbx run pix --kit $(KIT) .
 
-launcher: ## Build the ONE pix binary (out/pix), version-stamped (local builds derive a next-patch -beta.<sha7> prerelease, see LAUNCHER_VERSION above, so the launcher uses the local kit, not a nonexistent v$(VERSION) tag). services/host/cmd/pix is the only build target, and the only binary a release ships.
+launcher: ## Build the ONE pix binary (out/pix), version-stamped (local builds derive a next-patch -beta.g<sha7> prerelease, see LAUNCHER_VERSION above, so the launcher uses the local kit, not a nonexistent v$(VERSION) tag). services/host/cmd/pix is the only build target, and the only binary a release ships.
 	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix ./cmd/pix)
 	@echo "Built out/pix (version $(LAUNCHER_VERSION))."
 	@echo "Install: ln -sf $(CURDIR)/out/pix ~/.local/bin/pix"

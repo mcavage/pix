@@ -14,8 +14,8 @@
 #   - a single filesystem path segment (services/host/release/release.go's
 #     `versionRE`, [A-Za-z0-9][A-Za-z0-9._-]*).
 #
-#   X.Y.(Z+1)-beta.<sha7>                       clean working tree
-#   X.Y.(Z+1)-beta.<sha7>.dirty.<12hex>         dirty working tree
+#   X.Y.(Z+1)-beta.g<sha7>                      clean working tree
+#   X.Y.(Z+1)-beta.g<sha7>.dirty.<12hex>        dirty working tree
 #
 # X.Y.Z is read straight from package.json (the same file the lockstep test
 # and release CI treat as the one source of truth) and the PATCH IS BUMPED BY
@@ -98,7 +98,9 @@ sha256_hex() { # reads stdin, prints the lowercase hex digest
 # working tree in a single, deterministic byte stream.
 DIFF_BYTES="$(git -C "$ROOT" diff HEAD)"
 
-BUILD_VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-beta.${SHA7}"
+# Prefix the hexadecimal commit with "g" so a digits-only SHA prefix never
+# becomes a SemVer numeric identifier with a forbidden leading zero.
+BUILD_VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-beta.g${SHA7}"
 if [ -n "$DIFF_BYTES" ]; then
 	DIRTY_HASH="$(printf '%s' "$DIFF_BYTES" | sha256_hex | cut -c1-12)"
 	BUILD_VERSION="${BUILD_VERSION}.dirty.${DIRTY_HASH}"

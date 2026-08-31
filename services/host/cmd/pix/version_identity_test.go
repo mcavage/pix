@@ -31,7 +31,7 @@ func TestRunEffectiveInput_CarriesPixManagedEnvFacts(t *testing.T) {
 		t.Fatalf("stack.ID: %v", err)
 	}
 
-	o := launch.RunOpts{Workspace: t.TempDir(), Name: "pix-" + wantID + "-w", LauncherVersion: "0.1.72-beta.abc1234"}
+	o := launch.RunOpts{Workspace: t.TempDir(), Name: "pix-" + wantID + "-w", LauncherVersion: "0.1.72-beta.gabc1234"}
 	in, err := runEffectiveInput(&config.Config{}, o, launch.EnvSelection{}, o.LauncherVersion)
 	if err != nil {
 		t.Fatalf("runEffectiveInput: %v", err)

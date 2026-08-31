@@ -126,7 +126,7 @@ func SessionFingerprint(cfg *config.Config, o RunOpts) sandbox.Fingerprint {
 	sort.Strings(sorted)
 	fp := sandbox.Fingerprint{"static_mcp": strings.Join(sorted, ",")}
 	// The stamped launcher build is part of a sandbox's creation identity: a
-	// sandbox built by 0.1.71 and one built by 0.1.72-beta.abc1234 are
+	// sandbox built by 0.1.71 and one built by 0.1.72-beta.gabc1234 are
 	// different constructions even when every other pin matches, because the
 	// baked runtime, the resolved kit reference and the Pix-managed env block
 	// all move with the version. An UNSTAMPED build contributes no key at all

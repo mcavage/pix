@@ -70,7 +70,7 @@ adopting, replacing, or deleting the other's resources.
   no keep marker, direct host-mounted workspace). Every other environment
   variable's drift is substantive and still refuses.
 - **Local builds carry a distinct, derived identity.** A local
-  `make`-produced version is `X.Y.(Z+1)-beta.<sha7>[.dirty.<12hex>]`, and
+  `make`-produced version is `X.Y.(Z+1)-beta.g<sha7>[.dirty.<12hex>]`, and
   the launcher binary, the runtime archive, the release manifest, and both
   locally built image tags (`pix-agent`, `pix-memory`) all share it. Release
   CI publishes the clean semver instead. `make load` tags and prunes sbx

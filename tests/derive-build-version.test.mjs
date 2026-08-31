@@ -71,7 +71,7 @@ function deriveExpectFailure(dir) {
 	return res.stderr;
 }
 
-test("a clean tree derives X.Y.(Z+1)-beta.<sha7> with no dirty suffix", () => {
+test("a clean tree derives X.Y.(Z+1)-beta.g<sha7> with no dirty suffix", () => {
 	const dir = makeTempRepo();
 	try {
 		writePkg(dir, "1.2.3");
@@ -79,7 +79,7 @@ test("a clean tree derives X.Y.(Z+1)-beta.<sha7> with no dirty suffix", () => {
 		const sha = run("git", ["rev-parse", "--short=7", "HEAD"], dir).trim();
 
 		const version = derive(dir);
-		assert.equal(version, `1.2.4-beta.${sha}`);
+		assert.equal(version, `1.2.4-beta.g${sha}`);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
@@ -94,7 +94,7 @@ test("an UNSTAGED change to a tracked file derives a .dirty.<12hex> suffix", () 
 
 		fs.writeFileSync(path.join(dir, "README.md"), "hello, world\n");
 		const version = derive(dir);
-		assert.match(version, /^1\.2\.4-beta\.[0-9a-f]{7}\.dirty\.[0-9a-f]{12}$/);
+		assert.match(version, /^1\.2\.4-beta\.g[0-9a-f]{7}\.dirty\.[0-9a-f]{12}$/);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
@@ -110,7 +110,7 @@ test("a STAGED change to a tracked file also derives a .dirty.<12hex> suffix", (
 		fs.writeFileSync(path.join(dir, "README.md"), "hello, staged\n");
 		run("git", ["add", "README.md"], dir);
 		const version = derive(dir);
-		assert.match(version, /^1\.2\.4-beta\.[0-9a-f]{7}\.dirty\.[0-9a-f]{12}$/);
+		assert.match(version, /^1\.2\.4-beta\.g[0-9a-f]{7}\.dirty\.[0-9a-f]{12}$/);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
@@ -118,7 +118,7 @@ test("a STAGED change to a tracked file also derives a .dirty.<12hex> suffix", (
 
 test("staged and unstaged dirt against the SAME diff bytes derive the SAME dirty hash", () => {
 	// Two DIFFERENT repos (so different HEAD shas, and thus a different
-	// -beta.<sha7>) but the SAME diff bytes must still agree on the
+	// -beta.g<sha7>) but the SAME diff bytes must still agree on the
 	// .dirty.<12hex> suffix: only the DIFF is hashed, nothing about the repo
 	// identity itself.
 	const dirA = makeTempRepo();

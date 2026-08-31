@@ -141,21 +141,21 @@ test("release-manifest binds ONE version to both image digests, the runtime dige
 	// plain X.Y.Z — buildManifest must accept it rather than disagree with the
 	// binary reading this manifest (docs/design/pix-v2-architecture.md §3).
 	const local = gen.buildManifest({
-		version: "0.1.72-beta.abc1234",
+		version: "0.1.72-beta.gabc1234",
 		agentDigest: validDigest,
 		memoryDigest: validDigest,
 		runtimeDigest: validDigest,
 		kitRevision: "abc1234",
 	});
-	assert.equal(local.version, "0.1.72-beta.abc1234");
+	assert.equal(local.version, "0.1.72-beta.gabc1234");
 	const localDirty = gen.buildManifest({
-		version: "0.1.72-beta.abc1234.dirty.0123456789ab",
+		version: "0.1.72-beta.gabc1234.dirty.0123456789ab",
 		agentDigest: validDigest,
 		memoryDigest: validDigest,
 		runtimeDigest: validDigest,
 		kitRevision: "abc1234",
 	});
-	assert.equal(localDirty.version, "0.1.72-beta.abc1234.dirty.0123456789ab");
+	assert.equal(localDirty.version, "0.1.72-beta.gabc1234.dirty.0123456789ab");
 });
 
 test("the runtime archive stages skills/agents/settings/keybindings/themes into the canonical runtime/<version>/ layout, without touching the live repo tree", (t) => {

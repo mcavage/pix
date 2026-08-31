@@ -54,7 +54,7 @@ export function sha256File(path) {
 // leading alnum, no slash/backslash/control byte). A CI release always
 // passes a clean X.Y.Z; a LOCAL build (`make bundle`/`make release-manifest`)
 // passes the SAME derived identity the launcher binary stamps
-// (scripts/release/derive-build-version.sh: X.Y.(Z+1)-beta.<sha7>[.dirty.<12hex>]),
+// (scripts/release/derive-build-version.sh: X.Y.(Z+1)-beta.g<sha7>[.dirty.<12hex>]),
 // so the manifest's "version" field never disagrees with the binary reading it.
 const versionRE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 

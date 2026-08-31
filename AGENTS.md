@@ -109,7 +109,7 @@ facts, `PIX_LAUNCHER_VERSION` and `PIX_STACK_ID`, and the session
 fingerprint carries `launcher_version`. Those two composed env keys are the
 only recreation-safe ones, so a version bump takes the existing proof-gated
 auto-recreate path while any other env drift still refuses. A **local build
-is `X.Y.(Z+1)-beta.<sha7>[.dirty.<12hex>]`** and the binary, runtime
+is `X.Y.(Z+1)-beta.g<sha7>[.dirty.<12hex>]`** and the binary, runtime
 archive, manifest and both local image tags share it; **release CI publishes
 the clean semver**. `make load` scopes its unique tag and its prune to a
 hash of the canonical worktree path, and `make run` derives its sandbox name
