@@ -64,7 +64,8 @@ const awaitRelease = `
 		i=$((i + 1))
 		if [ "$i" -gt 6000 ]; then exit 0; fi
 		sleep 0.02
-	done`
+	done
+	touch "$d/exited"`
 
 // sessionFixture is the fixture sbx: a real script that records argv, becomes
 // visible to `ls` only after `run` has started, and keeps a "session" alive
@@ -432,6 +433,11 @@ func TestRunSession_KilledCreator_LeavesTheRecord(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		release(t, fixture)
+		// The creator is deliberately killed below, so its sbx child is
+		// orphaned. Wait for that child to observe the release barrier before
+		// testing.TempDir removes the fixture directory; otherwise cleanup can
+		// race the child's final path lookup and flake with "directory not empty".
+		waitForFile(t, filepath.Join(fixture, "exited"), 5*time.Second)
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	})
