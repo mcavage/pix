@@ -262,7 +262,7 @@ func confirmContainerReplace(d *cli.Deps) func(current container.Info, want cont
 		fmt.Fprintf(d.Err, "  running: %s (fingerprint %s)\n", current.Image, current.Fingerprint())
 		fmt.Fprintf(d.Err, "  wanted:  %s (fingerprint %s)\n", want.Image, want.Fingerprint())
 		if !d.Interactive {
-			fmt.Fprintln(d.Err, "pix setup: refusing to replace it on a non-interactive terminal; rerun interactively or remove it yourself: docker rm -f pix-memory")
+			fmt.Fprintf(d.Err, "pix setup: refusing to replace it on a non-interactive terminal; rerun interactively or remove it yourself: docker rm -f %s\n", want.ContainerName)
 			return false
 		}
 		fmt.Fprint(d.Err, "Replace it? Its /data volume is preserved either way. [y/N] ")

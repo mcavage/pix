@@ -15,6 +15,7 @@ import (
 
 	"pix/host/container"
 	"pix/host/pixhome"
+	"pix/host/stack"
 )
 
 // canaryToken is a value that could never occur by accident (unlike a
@@ -102,9 +103,17 @@ func TestComputeEffective_InternalFactsStillCarryTheRealToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeEffective: %v", err)
 	}
+	id, err := stack.ID(home.Home)
+	if err != nil {
+		t.Fatalf("stack.ID: %v", err)
+	}
+	wantName, err := stack.MCPMemoryName(id)
+	if err != nil {
+		t.Fatalf("stack.MCPMemoryName: %v", err)
+	}
 	found := false
 	for _, s := range facts.MCPServers {
-		if s.Name == "pix-memory" {
+		if s.Name == wantName {
 			found = true
 			if !strings.Contains(s.URL, canaryToken) {
 				t.Fatalf("ComputeEffective's own facts must carry the REAL token internally; got URL %q", s.URL)

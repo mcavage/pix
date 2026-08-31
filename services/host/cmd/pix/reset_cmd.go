@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"pix/host/cli"
-	"pix/host/container"
 	"pix/host/pixhome"
+	"pix/host/stack"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/reset"
 )
@@ -56,6 +56,26 @@ func (c *resetCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return err
 	}
+	// This PIX_HOME's own scoped identity (Wave B coexistence): the
+	// container/MCP names reset targets are ALWAYS derived here, never the
+	// bare legacy names — a host whose stack id cannot be derived refuses
+	// before ANY mutation, including the confirmation bill.
+	id, err := stack.ID(home.Home)
+	if err != nil {
+		return err
+	}
+	containerName, err := stack.MemoryContainerName(id)
+	if err != nil {
+		return err
+	}
+	memoryMCPName, err := stack.MCPMemoryName(id)
+	if err != nil {
+		return err
+	}
+	sessionMCPName, err := stack.MCPSessionName(id)
+	if err != nil {
+		return err
+	}
 	// M2 (security re-review): an interactive reset must show EXACTLY what
 	// is about to happen and default to No, the same posture `pix env
 	// trust`/the run trust gate already hold for a host-mutating decision
@@ -65,7 +85,7 @@ func (c *resetCmd) Run(d *cli.Deps) error {
 	// order, and a decline here mutates NOTHING (runs before ResetHome is
 	// ever called).
 	if !c.Yes {
-		renderResetBill(d.Out, home.Home)
+		renderResetBill(d.Out, home.Home, containerName)
 		fmt.Fprint(d.Out, "Proceed? [y/N] ")
 		reader := bufio.NewReader(d.In)
 		line, _ := reader.ReadString('\n')
@@ -75,11 +95,15 @@ func (c *resetCmd) Run(d *cli.Deps) error {
 		}
 	}
 	res, err := reset.ResetHome(reset.HomeDeps{
-		Home:   home.Home,
-		Sweep:  rmAllSandboxes(d),
-		Out:    d.Out,
-		ErrOut: d.Err,
-		Now:    time.Now,
+		Home:           home.Home,
+		ContainerName:  containerName,
+		MCP:            sbxMemoryDeregistrar{},
+		MemoryMCPName:  memoryMCPName,
+		SessionMCPName: sessionMCPName,
+		Sweep:          rmAllSandboxes(d),
+		Out:            d.Out,
+		ErrOut:         d.Err,
+		Now:            time.Now,
 	})
 	if err != nil {
 		return err
@@ -96,10 +120,10 @@ func (c *resetCmd) Run(d *cli.Deps) error {
 // the order it performs them — the bill a confirming "y" is answering for.
 // It never varies by flag (there are none left to vary it): every
 // interactive reset sees the same three lines.
-func renderResetBill(out io.Writer, home string) {
+func renderResetBill(out io.Writer, home, containerName string) {
 	fmt.Fprintln(out, "pix reset will:")
 	fmt.Fprintln(out, "  1. remove every pix-* sandbox (the same proof-gated path as `pix rm --all`)")
-	fmt.Fprintf(out, "  2. stop and remove the %q container\n", container.Name)
+	fmt.Fprintf(out, "  2. stop and remove the %q container\n", containerName)
 	fmt.Fprintf(out, "  3. rename %s aside to a timestamped backup (nothing is deleted)\n\n", home)
 }
 

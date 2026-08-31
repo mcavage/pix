@@ -22,7 +22,9 @@ import (
 	"pix/host/mcp"
 	"pix/host/pixhome"
 	"pix/host/release"
+	"pix/host/stack"
 	"pix/host/workflow/provision"
+	"pix/host/workflow/reset"
 )
 
 // homeContainerSpec builds the container.Spec every v2 home caller
@@ -56,12 +58,23 @@ func homeContainerSpec(home pixhome.Paths) container.Spec {
 	if p, err := container.ReadMemoryPort(home); err == nil {
 		port = p
 	}
+	// StackID/ContainerName are THIS PIX_HOME's own scoped identity (Wave B
+	// coexistence: "one PIX_HOME = one stack") — never the bare legacy
+	// container.Name. A home whose stack id cannot be derived (essentially
+	// never: only a filepath.Abs failure) degrades to an empty ContainerName
+	// rather than falling back to the unscoped name; every real caller of
+	// this spec (doctor, run, setup) already treats an empty/absent name as
+	// "nothing to compare against" rather than crashing.
+	id, _ := stack.ID(home.Home)
+	name, _ := stack.MemoryContainerName(id)
 	return container.Spec{
-		ContainerName: container.Name,
+		ContainerName: name,
 		Image:         image,
 		HostPort:      port,
 		DataDir:       home.StateMemory,
 		AuthTokenFile: container.MemoryAuthTokenPath(home),
+		StackID:       id,
+		Home:          home.Home,
 	}
 }
 
@@ -131,6 +144,17 @@ func (sbxMemoryRegistrar) EnsureMemoryRemote(name, url string) (provision.MCPReg
 	if lsErr == nil {
 		for _, n := range mcp.RegisteredNamesFrom(lsOut) {
 			if n == name {
+				// This host's own scoped name is already registered somewhere.
+				// When inspect/get output actually lets us check the endpoint,
+				// verify it rather than trusting the bare name match: a same
+				// scoped name pointed at a DIFFERENT endpoint is a real drift,
+				// never a silent "present" (round-4 review's own standard,
+				// applied here too — never a success word nothing probed).
+				if matches, verified := mcp.VerifyExistingEndpoint(name, url); verified && !matches {
+					return provision.MCPRegistrationNone, fmt.Errorf(
+						"%s is already registered with the sbx Gateway at a different endpoint than %s; refusing to overwrite it (remove it manually first if you want pix to re-register it: sbx mcp rm %s)",
+						name, container.RedactMemoryURLToken(url), name)
+				}
 				return provision.MCPRegistrationPresent, nil
 			}
 		}
@@ -142,6 +166,36 @@ func (sbxMemoryRegistrar) EnsureMemoryRemote(name, url string) (provision.MCPReg
 		return provision.MCPRegistrationNone, fmt.Errorf("%w: %s", addErr, container.RedactMemoryURLToken(strings.TrimSpace(stderr)))
 	}
 	return provision.MCPRegistrationAdded, nil
+}
+
+// sbxMemoryDeregistrar is the production workflow/reset.MCPDeregistrar for
+// THIS stack's own scoped memory/session MCP registrations: `sbx mcp ls`
+// proves presence before `sbx mcp rm` ever runs, and the removal is
+// verified by name, never a bulk/global operation — `pix reset` never
+// removes an MCP registration it did not first prove was registered under
+// exactly this call's own name.
+type sbxMemoryDeregistrar struct{}
+
+func (sbxMemoryDeregistrar) RemoveIfRegistered(name string) (reset.MCPRemovalState, error) {
+	lsOut, _, lsErr := runSbxCapturedOut("mcp", "ls")
+	if lsErr != nil {
+		return reset.MCPRemovalRetained, fmt.Errorf("list sbx MCP registrations: %w", lsErr)
+	}
+	present := false
+	for _, n := range mcp.RegisteredNamesFrom(lsOut) {
+		if n == name {
+			present = true
+			break
+		}
+	}
+	if !present {
+		return reset.MCPRemovalAbsent, nil
+	}
+	_, stderr, err := runSbxCapturedOut("mcp", "rm", name)
+	if err != nil {
+		return reset.MCPRemovalRetained, fmt.Errorf("remove %s: %w: %s", name, err, strings.TrimSpace(stderr))
+	}
+	return reset.MCPRemovalRemoved, nil
 }
 
 // runSbxCapturedOut is a tiny local wrapper so this file needs no export

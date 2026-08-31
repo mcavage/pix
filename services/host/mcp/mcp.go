@@ -220,6 +220,25 @@ func catalogEntryMatchesShippedURL(name, url string) (bool, error) {
 	return false, fmt.Errorf("could not inspect existing registration (`sbx mcp inspect|get %s` both failed)", name)
 }
 
+// VerifyExistingEndpoint inspects an ALREADY-PRESENT registration under name
+// (via `sbx mcp inspect NAME`, falling back to `sbx mcp get NAME`) and
+// reports whether its canonical endpoint equals want. verified is false when
+// NEITHER verb produced a readable answer — the caller must then treat the
+// registration as unverifiable (this host genuinely cannot tell), never as a
+// match or a mismatch. This is the exported form of
+// catalogEntryMatchesShippedURL's own inspect/get probe, for a caller (e.g.
+// cmd/pix's pix-memory registrar) outside this package that needs the same
+// evidence without importing the catalog-specific classification around it.
+func VerifyExistingEndpoint(name, want string) (matches bool, verified bool) {
+	for _, verb := range []string{"inspect", "get"} {
+		stdout, _, err := runSbxCaptured([]string{"mcp", verb, name})
+		if err == nil {
+			return outputContainsCanonicalEndpoint(stdout, want), true
+		}
+	}
+	return false, false
+}
+
 // catalogLsEvidenceOrFailClosed runs the ONE bounded `sbx mcp ls` every
 // direct catalog fallback (add or rm) fetches up front, so every catalog
 // entry is classified against a single consistent snapshot rather than a

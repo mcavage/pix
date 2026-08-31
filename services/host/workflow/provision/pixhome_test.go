@@ -8,10 +8,27 @@ import (
 
 	"pix/host/config"
 	"pix/host/container"
-	"pix/host/envinfo"
 	"pix/host/pixhome"
 	"pix/host/release"
+	"pix/host/stack"
 )
+
+// wantMemoryMCPName returns the exact scoped pix-memory MCP name Setup must
+// register home under — the same derivation Setup itself uses (stack.ID,
+// then stack.MCPMemoryName), so a test never independently guesses at a
+// name Setup could legitimately compute differently.
+func wantMemoryMCPName(t *testing.T, home pixhome.Paths) string {
+	t.Helper()
+	id, err := stack.ID(home.Home)
+	if err != nil {
+		t.Fatalf("stack.ID: %v", err)
+	}
+	name, err := stack.MCPMemoryName(id)
+	if err != nil {
+		t.Fatalf("stack.MCPMemoryName: %v", err)
+	}
+	return name
+}
 
 type fakeGitRunner struct{ ran bool }
 
@@ -118,7 +135,8 @@ func TestSetup_FromScratch(t *testing.T) {
 func TestSetup_MCPMismatchIsReportedNotOverwritten(t *testing.T) {
 	home := pixhome.New(t.TempDir())
 	docker := &fakeDockerRunner{inspectErr: errors.New("exit 1"), inspectOut: "Error: No such object"}
-	mcp := &fakeMCP{registered: map[string]string{envinfo.MCPMemoryName: "http://127.0.0.1:9999/mcp"}}
+	memoryName := wantMemoryMCPName(t, home)
+	mcp := &fakeMCP{registered: map[string]string{memoryName: "http://127.0.0.1:9999/mcp"}}
 	spec := container.Spec{ContainerName: "pix-memory-test", Image: "img@sha256:" + strings.Repeat("b", 64), HostPort: 18080, DataDir: home.StateMemory}
 
 	res, err := Setup(Deps{Home: home, ContainerRunner: docker, Prober: fakeProber{}, ContainerSpec: spec, MCP: mcp})
@@ -128,8 +146,64 @@ func TestSetup_MCPMismatchIsReportedNotOverwritten(t *testing.T) {
 	if !res.MCPRegistered || res.MCPState != MCPRegistrationPresent {
 		t.Fatalf("expected registered=true state=present, got %+v", res)
 	}
-	if mcp.registered[envinfo.MCPMemoryName] != "http://127.0.0.1:9999/mcp" {
+	if mcp.registered[memoryName] != "http://127.0.0.1:9999/mcp" {
 		t.Fatal("Setup must never overwrite an existing mismatched registration")
+	}
+}
+
+// TestSetup_RegistersScopedMemoryMCPName is the TDD anchor for Wave B U4:
+// two DIFFERENT PIX_HOME homes must register two DIFFERENT scoped names,
+// never the bare legacy "pix-memory".
+func TestSetup_RegistersScopedMemoryMCPName(t *testing.T) {
+	homeA := pixhome.New(t.TempDir())
+	homeB := pixhome.New(t.TempDir())
+	nameA := wantMemoryMCPName(t, homeA)
+	nameB := wantMemoryMCPName(t, homeB)
+	if nameA == nameB {
+		t.Fatalf("two different PIX_HOME homes must derive different scoped MCP names, both got %q", nameA)
+	}
+	if nameA == "pix-memory" || nameB == "pix-memory" {
+		t.Fatalf("a scoped name must never equal the bare legacy name: %q, %q", nameA, nameB)
+	}
+
+	docker := &fakeDockerRunner{inspectErr: errors.New("exit 1"), inspectOut: "Error: No such object"}
+	mcp := &fakeMCP{}
+	spec := container.Spec{ContainerName: "pix-memory-test", Image: "img@sha256:" + strings.Repeat("b", 64), HostPort: 18080, DataDir: homeA.StateMemory}
+	res, err := Setup(Deps{Home: homeA, ContainerRunner: docker, Prober: fakeProber{}, ContainerSpec: spec, MCP: mcp})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	if !res.MCPRegistered || res.MCPState != MCPRegistrationAdded {
+		t.Fatalf("expected a fresh registration, got %+v", res)
+	}
+	if _, ok := mcp.registered[nameA]; !ok {
+		t.Fatalf("Setup did not register under the scoped name %q; registered = %v", nameA, mcp.registered)
+	}
+	if _, ok := mcp.registered["pix-memory"]; ok {
+		t.Fatal("Setup must never register under the bare legacy name")
+	}
+}
+
+// TestSetup_LegacyBareRegistrationDoesNotSatisfyReadiness proves a stale
+// registration under the OLD bare "pix-memory" name (from before per-stack
+// scoping) is irrelevant to this run's readiness: Setup must still register
+// (or find registered) its OWN scoped name, never treat an unrelated bare
+// name as already covering it.
+func TestSetup_LegacyBareRegistrationDoesNotSatisfyReadiness(t *testing.T) {
+	home := pixhome.New(t.TempDir())
+	docker := &fakeDockerRunner{inspectErr: errors.New("exit 1"), inspectOut: "Error: No such object"}
+	mcp := &fakeMCP{registered: map[string]string{"pix-memory": "http://127.0.0.1:9999/mcp"}}
+	spec := container.Spec{ContainerName: "pix-memory-test", Image: "img@sha256:" + strings.Repeat("b", 64), HostPort: 18080, DataDir: home.StateMemory}
+
+	res, err := Setup(Deps{Home: home, ContainerRunner: docker, Prober: fakeProber{}, ContainerSpec: spec, MCP: mcp})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	if res.MCPState != MCPRegistrationAdded {
+		t.Fatalf("a legacy bare registration must not be mistaken for this stack's own; MCPState = %v, want Added", res.MCPState)
+	}
+	if !res.Ready() {
+		t.Fatal("Ready() = false after this stack's own scoped name was freshly registered")
 	}
 }
 
@@ -182,18 +256,29 @@ func TestSetup_RegistersMemoryURLWithToken(t *testing.T) {
 		t.Fatalf("ReadMemoryAuthToken = (%q, %v), want a generated token", tok, terr)
 	}
 	want := "http://127.0.0.1:18080/mcp?token=" + tok
-	if got := mcp.registered[envinfo.MCPMemoryName]; got != want {
+	if got := mcp.registered[wantMemoryMCPName(t, home)]; got != want {
 		t.Fatalf("registered MCP URL = %q, want %q", got, want)
 	}
 }
 
+// TestReservedMCPNameMatchesContainerName pins the invariant
+// TestReservedMCPNameMatchesContainerName used to check on the bare legacy
+// names directly: stack.MCPMemoryName and stack.MemoryContainerName MUST
+// always agree on the exact literal for the SAME stack id, or Setup's own
+// registration and doctor's probe of the container would silently drift
+// apart the moment either one's naming grammar changed independently.
 func TestReservedMCPNameMatchesContainerName(t *testing.T) {
-	// container.Name is the docker adapter's name; envinfo.MCPMemoryName is
-	// the reserved MCP server name Setup registers it under. They must be
-	// the same literal string, or setup's registration and doctor's probe
-	// would silently drift apart.
-	if envinfo.MCPMemoryName != container.Name {
-		t.Fatalf("envinfo.MCPMemoryName = %q, container.Name = %q", envinfo.MCPMemoryName, container.Name)
+	const id = "0123456789abcdef"
+	mcpName, err := stack.MCPMemoryName(id)
+	if err != nil {
+		t.Fatalf("stack.MCPMemoryName: %v", err)
+	}
+	containerName, err := stack.MemoryContainerName(id)
+	if err != nil {
+		t.Fatalf("stack.MemoryContainerName: %v", err)
+	}
+	if mcpName != containerName {
+		t.Fatalf("stack.MCPMemoryName(%s) = %q, stack.MemoryContainerName(%s) = %q", id, mcpName, id, containerName)
 	}
 }
 
@@ -301,12 +386,13 @@ func TestSetup_PortConflictFirstFailsSecondSucceeds_PersistsPortAndMCPURL(t *tes
 	// stale conflicting one, and never a different port than what actually
 	// started (the token query param varies run to run, so this checks the
 	// host:port/path prefix rather than an exact string).
+	memoryName := wantMemoryMCPName(t, home)
 	wantPrefix := fmt.Sprintf("http://127.0.0.1:%d/mcp", res.MemoryPort)
-	if got := mcp.registered[envinfo.MCPMemoryName]; !strings.HasPrefix(got, wantPrefix) {
+	if got := mcp.registered[memoryName]; !strings.HasPrefix(got, wantPrefix) {
 		t.Errorf("registered MCP URL = %q, want prefix %q", got, wantPrefix)
 	}
-	if strings.Contains(mcp.registered[envinfo.MCPMemoryName], fmt.Sprintf(":%d/", conflictingPort)) {
-		t.Errorf("registered MCP URL still names the conflicting port %d: %q", conflictingPort, mcp.registered[envinfo.MCPMemoryName])
+	if strings.Contains(mcp.registered[memoryName], fmt.Sprintf(":%d/", conflictingPort)) {
+		t.Errorf("registered MCP URL still names the conflicting port %d: %q", conflictingPort, mcp.registered[memoryName])
 	}
 
 	// The failed first create must have been cleaned up (by ID) rather than

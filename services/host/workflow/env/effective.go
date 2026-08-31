@@ -34,6 +34,7 @@ import (
 	"pix/host/mcp"
 	"pix/host/pixhome"
 	"pix/host/sandbox"
+	"pix/host/stack"
 )
 
 // effectiveTemplateRepo/effectivePullPolicyMissing are docs/design/
@@ -178,13 +179,15 @@ func RenderEffectiveDocument(home pixhome.Paths, explicit string) ([]byte, error
 
 // redactBuiltinMemoryToken replaces the reserved pix-memory MCP server's
 // URL with a token-redacted copy, in place, on facts.MCPServers — the ONE
-// entry WithBuiltinMCPServers ever names envinfo.MCPMemoryName. Every other
-// server (an authored environment's own) is left untouched: this function
-// redacts Pix's OWN generated credential, never anything a reviewer
-// authored themselves and can already see in their own file.
+// entry WithBuiltinMCPServers ever names a pix-memory built-in under
+// (envinfo.IsMemoryMCPName covers both the bare legacy name and THIS
+// PIX_HOME's own scoped one). Every other server (an authored environment's
+// own) is left untouched: this function redacts Pix's OWN generated
+// credential, never anything a reviewer authored themselves and can
+// already see in their own file.
 func redactBuiltinMemoryToken(facts *envinfo.RuntimeFacts) {
 	for i := range facts.MCPServers {
-		if facts.MCPServers[i].Name == envinfo.MCPMemoryName {
+		if envinfo.IsMemoryMCPName(facts.MCPServers[i].Name) {
 			facts.MCPServers[i].URL = container.RedactMemoryURLToken(facts.MCPServers[i].URL)
 		}
 	}
@@ -207,6 +210,14 @@ func redactBuiltinMemoryToken(facts *envinfo.RuntimeFacts) {
 // shows container.DefaultMemoryPort, the same "not ready yet" display value.
 func builtinMCPFacts(home pixhome.Paths) envinfo.BuiltinMCPFacts {
 	var facts envinfo.BuiltinMCPFacts
+	// This PIX_HOME's own scoped built-in names (Wave B coexistence): a
+	// stack id that cannot be derived degrades to omitting BOTH built-ins
+	// entirely, the same "unresolvable yet" posture an unresolvable running
+	// executable already gets below — never a bare legacy-name fallback.
+	if id, err := stack.ID(home.Home); err == nil {
+		facts.MemoryName, _ = stack.MCPMemoryName(id)
+		facts.SessionName, _ = stack.MCPSessionName(id)
+	}
 	token, _ := container.ReadMemoryAuthToken(home)
 	port := container.DefaultMemoryPort
 	if p, err := container.ReadMemoryPort(home); err == nil {

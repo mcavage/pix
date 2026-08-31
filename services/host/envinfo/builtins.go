@@ -2,33 +2,73 @@ package envinfo
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
+
+	"pix/host/stack"
 )
 
-// MCPMemoryName and MCPSessionName are the two MCP server names Pix
-// reserves for its own built-ins (docs/design/pix-v2-architecture.md §10,
-// PRD "Reserve built-in MCP names `pix-memory` and `pix-session`"). The
-// effective compiler emits both as ordinary native sbx MCP declarations;
-// nothing else may claim either name.
+// MCPMemoryName and MCPSessionName are Pix's two LEGACY, unscoped built-in
+// MCP server names (docs/design/pix-v2-architecture.md §10, PRD "Reserve
+// built-in MCP names `pix-memory` and `pix-session`"), predating per-
+// PIX_HOME stack scoping (Wave A/B coexistence). They remain reserved
+// forever — a host that never scoped anything, or a name an author simply
+// guesses, must still refuse — but no CURRENT runtime composition ever
+// emits either bare form any more: see IsMemoryMCPName/IsSessionMCPName for
+// the reservation check that also covers the whole scoped family, and
+// BuiltinMCPServers for what actually renders (this PIX_HOME's own
+// stack.MCPMemoryName/MCPSessionName, always suffixed with its stack id,
+// never a global fallback to these bare constants).
 const (
 	MCPMemoryName  = "pix-memory"
 	MCPSessionName = "pix-session"
 )
 
-// ReservedMCPNames returns the reserved built-in names in a stable order.
-// It returns a fresh slice so a caller can never mutate the reservation.
+// scopedMemoryNameRe and scopedSessionNameRe match ANY valid per-stack
+// scoped built-in name — "pix-memory-<16 lowercase hex>" / "pix-session-<16
+// lowercase hex>" — for ANY stack id, not just this process's own. An
+// authored environment must never be able to shadow another PIX_HOME's
+// built-in either (the whole point of reserving the FAMILY, not one
+// literal string): a name that merely happens to look like a foreign
+// stack's pix-memory is exactly as reserved as this host's own.
+var (
+	scopedMemoryNameRe  = regexp.MustCompile(fmt.Sprintf(`^pix-memory-[0-9a-f]{%d}$`, stack.IDLen))
+	scopedSessionNameRe = regexp.MustCompile(fmt.Sprintf(`^pix-session-[0-9a-f]{%d}$`, stack.IDLen))
+)
+
+// IsMemoryMCPName reports whether name is Pix's reserved pix-memory
+// built-in, in either its bare legacy form or any per-stack scoped form.
+func IsMemoryMCPName(name string) bool {
+	n := strings.TrimSpace(name)
+	return n == MCPMemoryName || scopedMemoryNameRe.MatchString(n)
+}
+
+// IsSessionMCPName reports whether name is Pix's reserved pix-session
+// built-in, in either its bare legacy form or any per-stack scoped form.
+func IsSessionMCPName(name string) bool {
+	n := strings.TrimSpace(name)
+	return n == MCPSessionName || scopedSessionNameRe.MatchString(n)
+}
+
+// ReservedMCPNames returns the two LEGACY reserved names in a stable order,
+// for display purposes only (the exact rename-it wording
+// ReservedMCPCollisionError prints). The full reservation IsReservedMCPName
+// enforces is bigger than this list — it also covers the whole scoped
+// family — because that family cannot be enumerated as a finite set of
+// literal strings.
 func ReservedMCPNames() []string {
 	return []string{MCPMemoryName, MCPSessionName}
 }
 
-// IsReservedMCPName reports whether name is one of Pix's built-ins.
+// IsReservedMCPName reports whether name is one of Pix's built-ins: either
+// legacy bare name, or ANY validly-shaped per-stack scoped name in either
+// family. Reserving the whole family (not merely this PIX_HOME's own
+// current stack id) means an authored environment can never shadow a
+// built-in this host will compose today OR a different PIX_HOME's built-in
+// it might see on the same machine.
 func IsReservedMCPName(name string) bool {
-	switch strings.TrimSpace(name) {
-	case MCPMemoryName, MCPSessionName:
-		return true
-	}
-	return false
+	return IsMemoryMCPName(name) || IsSessionMCPName(name)
 }
 
 // ReservedMCPCollisionError is the refusal for an authored `.sbxenv.yaml`
@@ -90,12 +130,22 @@ func RefuseReservedMCPNames(doc *Document) error {
 // BuiltinMCPFacts is the caller-resolved facts needed to render Pix's two
 // reserved built-in MCP declarations (docs/design/pix-v2-architecture.md
 // §10): pix-memory, a remote Streamable HTTP endpoint registered by `pix
-// setup`, and pix-session, a Gateway-launched host stdio command. A field
-// left at its zero value means the caller could not resolve that built-in
-// yet (no memory container reconciled, no resolvable pix executable) —
-// BuiltinMCPServers renders no entry for it rather than inventing one.
+// setup`, and pix-session, a Gateway-launched host stdio command.
+// MemoryName and SessionName are THIS PIX_HOME's own scoped names (stack.
+// MCPMemoryName/MCPSessionName — "pix-memory-<stack id>"/"pix-session-<stack
+// id>"): every current caller resolves them from its own PIX_HOME's stack
+// id, never a bare legacy fallback, so BuiltinMCPServers has no global name
+// of its own left to reach for. A field left at its zero value means the
+// caller could not resolve that built-in yet (no memory container
+// reconciled, no resolvable pix executable, no derivable stack id) —
+// BuiltinMCPServers renders no entry for it rather than inventing one, and
+// in particular never falls back to MCPMemoryName/MCPSessionName when a
+// Name field is empty but its paired URL/Command is not: an unscoped name
+// is exactly the collision this whole mechanism exists to prevent.
 type BuiltinMCPFacts struct {
+	MemoryName     string
 	MemoryURL      string
+	SessionName    string
 	SessionCommand string
 	SessionArgs    []string
 }
@@ -107,12 +157,12 @@ type BuiltinMCPFacts struct {
 // place, so by the time this runs both names are exclusively Pix's own.
 func BuiltinMCPServers(facts BuiltinMCPFacts) []MCPWrapperFact {
 	var out []MCPWrapperFact
-	if strings.TrimSpace(facts.MemoryURL) != "" {
-		out = append(out, MCPWrapperFact{Name: MCPMemoryName, URL: facts.MemoryURL})
+	if name := strings.TrimSpace(facts.MemoryName); name != "" && strings.TrimSpace(facts.MemoryURL) != "" {
+		out = append(out, MCPWrapperFact{Name: name, URL: facts.MemoryURL})
 	}
-	if strings.TrimSpace(facts.SessionCommand) != "" {
+	if name := strings.TrimSpace(facts.SessionName); name != "" && strings.TrimSpace(facts.SessionCommand) != "" {
 		out = append(out, MCPWrapperFact{
-			Name:    MCPSessionName,
+			Name:    name,
 			Command: facts.SessionCommand,
 			Args:    append([]string(nil), facts.SessionArgs...),
 		})

@@ -6,10 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
-
-	"pix/host/container"
 )
 
 type fakeContainerRunner struct {
@@ -153,7 +152,7 @@ func TestResetHome_MissingHomeIsNotAnError(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "never-existed")
 	runner := &fakeContainerRunner{inspectOut: "Error: No such object", inspectErr: errors.New("exit 1")}
-	res, err := ResetHome(HomeDeps{Home: home, ContainerRunner: runner, Now: fixedNow})
+	res, err := ResetHome(HomeDeps{Home: home, ContainerRunner: runner, ContainerName: "pix-memory-test", Now: fixedNow})
 	if err != nil {
 		t.Fatalf("ResetHome: %v", err)
 	}
@@ -162,31 +161,139 @@ func TestResetHome_MissingHomeIsNotAnError(t *testing.T) {
 	}
 }
 
-// container.Name sanity: default ContainerName resolves to it.
-func TestResetHome_DefaultsContainerName(t *testing.T) {
+// TestResetHome_RefusesWithoutExplicitContainerName is the TDD anchor for
+// Wave B U4's "reset cannot default to bare pix-memory": omitting
+// ContainerName must refuse outright, with zero Docker calls and PIX_HOME
+// completely untouched — never a silent fall back to container.Name, which
+// could reach a totally different PIX_HOME's own container on a host
+// running more than one stack.
+func TestResetHome_RefusesWithoutExplicitContainerName(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "pixhome")
 	os.MkdirAll(home, 0o700)
-	var seenName string
 	runner := &recordingRunner{fakeContainerRunner: fakeContainerRunner{inspectOut: "Error: No such object", inspectErr: errors.New("exit 1")}}
+
 	_, err := ResetHome(HomeDeps{Home: home, ContainerRunner: runner, Now: fixedNow})
-	if err != nil {
-		t.Fatalf("ResetHome: %v", err)
+	if err == nil {
+		t.Fatal("expected an error when ContainerName is empty")
 	}
-	seenName = runner.lastArg
-	if seenName != container.Name {
-		t.Fatalf("used container name %q, want default %q", seenName, container.Name)
+	if !strings.Contains(err.Error(), "pix-memory") {
+		t.Fatalf("error should name the bare legacy name it refuses to guess, got: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("expected zero docker calls, got %v", runner.calls)
+	}
+	if _, statErr := os.Stat(home); statErr != nil {
+		t.Fatal("PIX_HOME must be untouched when the container name is missing")
 	}
 }
 
 type recordingRunner struct {
 	fakeContainerRunner
 	lastArg string
+	calls   [][]string
 }
 
 func (r *recordingRunner) Run(args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 1 {
 		r.lastArg = args[1]
 	}
 	return r.fakeContainerRunner.Run(args...)
+}
+
+// fakeDeregistrar is a scripted MCPDeregistrar: each call consumes the next
+// scripted outcome for its name, and records every call so a test can
+// assert exactly which names were (and were not) targeted.
+type fakeDeregistrar struct {
+	outcomes map[string]MCPRemovalState
+	errs     map[string]error
+	calls    []string
+}
+
+func (f *fakeDeregistrar) RemoveIfRegistered(name string) (MCPRemovalState, error) {
+	f.calls = append(f.calls, name)
+	if err, ok := f.errs[name]; ok {
+		return MCPRemovalRetained, err
+	}
+	return f.outcomes[name], nil
+}
+
+// TestResetHome_RemovesOnlyThisStacksOwnMCPRegistrations proves the
+// best-effort MCP removal targets EXACTLY the two scoped names handed in,
+// never anything else, and reports the proven outcome per name.
+func TestResetHome_RemovesOnlyThisStacksOwnMCPRegistrations(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "pixhome")
+	os.MkdirAll(home, 0o700)
+	runner := &fakeContainerRunner{inspectOut: "Error: No such object", inspectErr: errors.New("exit 1")}
+	dereg := &fakeDeregistrar{outcomes: map[string]MCPRemovalState{
+		"pix-memory-aaaaaaaaaaaaaaaa":  MCPRemovalRemoved,
+		"pix-session-aaaaaaaaaaaaaaaa": MCPRemovalAbsent,
+	}}
+
+	res, err := ResetHome(HomeDeps{
+		Home: home, ContainerRunner: runner, ContainerName: "pix-memory-aaaaaaaaaaaaaaaa",
+		MCP: dereg, MemoryMCPName: "pix-memory-aaaaaaaaaaaaaaaa", SessionMCPName: "pix-session-aaaaaaaaaaaaaaaa",
+		Now: fixedNow,
+	})
+	if err != nil {
+		t.Fatalf("ResetHome: %v", err)
+	}
+	if res.MemoryMCPState != MCPRemovalRemoved {
+		t.Fatalf("MemoryMCPState = %v, want Removed", res.MemoryMCPState)
+	}
+	if res.SessionMCPState != MCPRemovalAbsent {
+		t.Fatalf("SessionMCPState = %v, want Absent", res.SessionMCPState)
+	}
+	if len(dereg.calls) != 2 {
+		t.Fatalf("expected exactly 2 targeted removal calls, got %v", dereg.calls)
+	}
+}
+
+// TestResetHome_NoDeregistrarWiredIsHonestlyRetained proves the default
+// (no MCPDeregistrar wired) never fabricates a "removed" result.
+func TestResetHome_NoDeregistrarWiredIsHonestlyRetained(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "pixhome")
+	os.MkdirAll(home, 0o700)
+	runner := &fakeContainerRunner{inspectOut: "Error: No such object", inspectErr: errors.New("exit 1")}
+
+	res, err := ResetHome(HomeDeps{
+		Home: home, ContainerRunner: runner, ContainerName: "pix-memory-aaaaaaaaaaaaaaaa",
+		MemoryMCPName: "pix-memory-aaaaaaaaaaaaaaaa", SessionMCPName: "pix-session-aaaaaaaaaaaaaaaa",
+		Now: fixedNow,
+	})
+	if err != nil {
+		t.Fatalf("ResetHome: %v", err)
+	}
+	if res.MemoryMCPState != MCPRemovalRetained || res.SessionMCPState != MCPRemovalRetained {
+		t.Fatalf("expected both retained with no deregistrar wired, got memory=%v session=%v", res.MemoryMCPState, res.SessionMCPState)
+	}
+}
+
+// TestResetHome_MCPRemovalFailureNeverBlocksRename proves best-effort really
+// means best-effort: a deregistrar error must not stop PIX_HOME from being
+// renamed once the container is proven absent.
+func TestResetHome_MCPRemovalFailureNeverBlocksRename(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "pixhome")
+	os.MkdirAll(home, 0o700)
+	runner := &fakeContainerRunner{inspectOut: "Error: No such object", inspectErr: errors.New("exit 1")}
+	dereg := &fakeDeregistrar{errs: map[string]error{"pix-memory-aaaaaaaaaaaaaaaa": errors.New("sbx unreachable")}}
+
+	res, err := ResetHome(HomeDeps{
+		Home: home, ContainerRunner: runner, ContainerName: "pix-memory-aaaaaaaaaaaaaaaa",
+		MCP: dereg, MemoryMCPName: "pix-memory-aaaaaaaaaaaaaaaa",
+		Now: fixedNow,
+	})
+	if err != nil {
+		t.Fatalf("ResetHome: %v", err)
+	}
+	if res.MemoryMCPState != MCPRemovalRetained {
+		t.Fatalf("MemoryMCPState = %v, want Retained on an operational failure", res.MemoryMCPState)
+	}
+	if res.BackupPath == "" {
+		t.Fatal("a failed MCP removal must never block the PIX_HOME rename")
+	}
 }
