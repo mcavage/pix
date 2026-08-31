@@ -3,27 +3,18 @@
 // an os/exec-backed health.ExecChecker, an HTTP-backed container.Prober, and
 // an `sbx mcp`-backed registrar/lister for the reserved pix-memory remote.
 //
-// KNOWN LIMITATION, stated once here rather than re-discovered per caller:
-// `sbx mcp ls` has no machine-readable output (`--json`/`-o json` are both
-// rejected — see mcp.RegisteredNamesFrom's own doc comment), so this host can
-// only conservatively confirm a server NAME is present in the human table. It
-// cannot recover the URL that name is registered at. That means
-// sbxMemoryMCP can answer "not registered" with confidence but can never
-// positively confirm a URL match — the architecture's promised
-// "same-name mismatch refuses launch" drift check is therefore NOT
-// implemented here: doing so honestly would require a real drift signal this
-// host does not have. sbxMemoryMCP is wired only into `pix setup`'s
-// best-effort registration step (register once if absent; leave alone if the
-// name already exists, however it is pointed), and it is deliberately NOT
-// wired into `pix doctor`'s MCPLister seam — an unconfigured lister there
-// reports StatusUnknown ("could not verify"), which is the honest answer
-// given what this host can actually observe.
+// `sbx mcp ls` has no machine-readable endpoint output. The registrar can
+// prove a name absent, but an existing same-name registration is left alone;
+// it cannot honestly claim the URL matches. Doctor therefore reports that
+// registration as unverifiable rather than inventing a drift signal.
 package main
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"pix/host/cli"
@@ -144,8 +135,11 @@ func (sbxMemoryRegistrar) EnsureMemoryRemote(name, url string) (provision.MCPReg
 			}
 		}
 	}
-	if _, _, addErr := runSbxCapturedOut("mcp", "add", name, "--url", url); addErr != nil {
-		return provision.MCPRegistrationNone, addErr
+	// This reserved endpoint is intentionally loopback and token-authenticated,
+	// so opt out of sbx's SSRF guard and hosted OAuth flow for this add only.
+	_, stderr, addErr := runSbxCapturedOut("mcp", "add", name, "--url", url, "--skip-ssrf-check", "--skip_auth")
+	if addErr != nil {
+		return provision.MCPRegistrationNone, fmt.Errorf("%w: %s", addErr, container.RedactMemoryURLToken(strings.TrimSpace(stderr)))
 	}
 	return provision.MCPRegistrationAdded, nil
 }
