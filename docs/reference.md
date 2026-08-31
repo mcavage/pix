@@ -203,8 +203,8 @@ pix env trust NAME [--yes]                    # read and accept what NAME runs o
 
 **There is no `add`/`edit`/`use`/`forget`.** Create, clone, edit, move, and
 remove an environment with ordinary filesystem and Git tools under
-`~/.pix/envs`. An environment whose bill of materials is empty — it runs
-nothing on this host, hands out no credential, and expands no mount — needs
+`~/.pix/envs`. An environment whose bill of materials is empty (it runs
+nothing on this host, hands out no credential, and expands no mount) needs
 no acceptance at all: it is never prompted for, `pix env trust NAME` says
 there is nothing to accept and writes no record, and `pix env list`/`show`
 report it as trusted. Only a host-affecting fact (a host command or
