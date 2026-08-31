@@ -124,9 +124,9 @@ type Result struct {
 	DefaultEnvCreated bool
 	// KitRevision is the strict kit identity the installed manifest pins,
 	// carried here so a caller need not re-read the manifest to report it.
-	KitRevision string
-	Container        container.Result
-	MCPRegistered    bool
+	KitRevision   string
+	Container     container.Result
+	MCPRegistered bool
 	// MCPState is what the registrar observed; meaningful only when
 	// MCPRegistered is true.
 	MCPState MCPRegistrationState

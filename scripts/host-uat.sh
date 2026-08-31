@@ -133,9 +133,8 @@ pix doctor || true
 step "U4 environment: create one, preview its effective document, trust it"
 mkdir -p "$PIX_HOME/envs/uat"
 cat > "$PIX_HOME/envs/uat/.sbxenv.yaml" <<'YAML'
-version: 1
-workspace:
-  path: .
+schemaVersion: "1"
+agent: pix
 YAML
 pix env show uat --effective >"$PIX_HOME/effective.yaml" || fail "U4: --effective preview failed"
 grep -q 'pix-memory' "$PIX_HOME/effective.yaml" || fail "U4: the effective document omits the reserved pix-memory built-in"
@@ -147,9 +146,8 @@ grep -q 'memory_port' "$PIX_HOME/config.toml" || fail "U4: env default clobbered
 step "U4b setup hooks: an environment's own [[setup]] hook runs only under an explicit pix setup --env"
 mkdir -p "$PIX_HOME/envs/hooked"
 cat > "$PIX_HOME/envs/hooked/.sbxenv.yaml" <<'YAML'
-version: 1
-workspace:
-  path: .
+schemaVersion: "1"
+agent: pix
 YAML
 cat > "$PIX_HOME/envs/hooked/pix.toml" <<'TOML'
 schema = 1
@@ -162,11 +160,19 @@ apply_args = ["install"]
 required = true
 kind = "install"
 TOML
-cat > "$PIX_HOME/envs/hooked/setup-tool" <<'SH'
+# The marker lives at a fixed, ABSOLUTE path baked into the script at
+# generation time, never relative to "$0" or the current directory: a
+# setup hook now runs from a fresh, private, per-invocation snapshot
+# directory (the TOCTOU fix), so both "$0"'s own directory and "$PWD" are
+# wiped the moment this hook finishes and can never carry state between
+# runs. Persistent state a hook needs across invocations belongs at a
+# stable path it names outright, exactly like a real installer would.
+cat > "$PIX_HOME/envs/hooked/setup-tool" <<SH
 #!/bin/sh
-case "$1" in
-  check) [ -f "$(dirname "$0")/.installed" ] && exit 0 || exit 1 ;;
-  install) touch "$(dirname "$0")/.installed"; exit 0 ;;
+MARKER="$PIX_HOME/envs/hooked/.installed"
+case "\$1" in
+  check) [ -f "\$MARKER" ] && exit 0 || exit 1 ;;
+  install) touch "\$MARKER"; exit 0 ;;
 esac
 exit 2
 SH

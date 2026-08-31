@@ -83,6 +83,16 @@ test("host-uat.sh keeps a throwaway PIX_HOME and never touches ~/.pix", () => {
 	assert.doesNotMatch(script, /rm -rf "?\$HOME\/\.pix/, "it must never delete the user's real PIX_HOME");
 });
 
+test("host-uat.sh authors valid native environment fixtures outside their writable roots", () => {
+	const fixtures = [...script.matchAll(/cat > "\$PIX_HOME\/envs\/[^\n]+\/\.sbxenv\.yaml" <<'YAML'\n([\s\S]*?)\nYAML/g)];
+	assert.equal(fixtures.length, 2, "U4 and U4b must each author one native environment fixture");
+	for (const [, yaml] of fixtures) {
+		assert.match(yaml, /^schemaVersion: "1"$/m, "native sbx environments use schemaVersion, not version");
+		assert.match(yaml, /^agent: pix$/m, "the effective agent must be Pix");
+		assert.doesNotMatch(yaml, /^workspace:/m, "the env root must not mount itself writable; launch supplies the project workspace");
+	}
+});
+
 test("host-uat.sh exercises the [[setup]] hook path, the v2 replacement for pack install hooks", () => {
 	assert.match(script, /\[\[setup\]\]/, "the UAT must cover environment setup hooks");
 	assert.match(script, /pix setup --env hooked/, "hooks run only through an explicit pix setup --env");

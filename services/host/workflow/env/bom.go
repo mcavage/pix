@@ -459,20 +459,57 @@ func computeHostServices(root string, s *envinfo.Sidecar, b *BillOfMaterials, lo
 	return nil
 }
 
-// computeSetupHooks resolves and content-hashes every `[[setup]]` entry.
-// The command is resolved WITHOUT a PATH lookup on purpose — envinfo's
-// parse already refused a bare name, so the only two shapes here are a
-// relative path against the environment root and an absolute path, and
-// neither depends on the calling process's cwd or environment. A hook that
-// cannot be proven to be a regular, executable, non-symlink file with a
-// readable content hash fails the whole bill closed: an unfingerprintable
+// computeSetupHooks resolves and content-hashes every `[[setup]]` entry,
+// including its declared `inputs`. The command is resolved WITHOUT a PATH
+// lookup on purpose — envinfo's parse already refused a bare name, so the
+// only two shapes here are a relative path against the environment root
+// and an absolute path, and neither depends on the calling process's cwd
+// or environment. A RELATIVE command additionally has its resolved parent
+// directory's symlink chain proven contained inside the environment root
+// (envsetup.ProveContained): a lexically-inside-root path can still be a
+// symlink alias of somewhere else if an ancestor directory is itself a
+// symlink, exactly the containment gap workflow/env's own
+// RefuseContainment already closes for a registered environment root. An
+// ABSOLUTE command has no such containment to prove — it is allowed only
+// because it is fingerprinted the same way a relative one is — but it is
+// still snapshotted byte-for-byte at execution time exactly like a
+// relative one.
+//
+// Every declared input resolves and is proven contained the identical way
+// a relative command is, REGARDLESS of whether the command itself is
+// relative or absolute: an input is always a companion living inside this
+// environment, never something reached relative to wherever an absolute
+// command happens to live outside it. A hook (or an input) that cannot be
+// proven to be a regular, non-symlink file inside the environment root with
+// a readable content hash fails the whole bill closed: an unfingerprintable
 // host-exec surface is never silently reviewed as absent.
 func computeSetupHooks(root string, s *envinfo.Sidecar, b *BillOfMaterials) error {
 	for _, h := range s.Setup {
-		resolved := envsetup.Resolve(root, h.Command)
+		var resolved string
+		if filepath.IsAbs(h.Command) {
+			resolved = envsetup.Resolve(root, h.Command)
+		} else {
+			var err error
+			resolved, err = envsetup.ProveContained(root, h.Command)
+			if err != nil {
+				return fmt.Errorf("setup hook %q: %w (cannot fingerprint the host-exec surface; fail closed)", h.ID, err)
+			}
+		}
 		sha, err := envsetup.HashSetupExecutable(resolved)
 		if err != nil {
 			return fmt.Errorf("setup hook %q: %w (cannot fingerprint the host-exec surface; fail closed)", h.ID, err)
+		}
+		var inputs []envsetup.HookInput
+		for _, in := range h.Inputs {
+			resolvedIn, err := envsetup.ProveContained(root, in)
+			if err != nil {
+				return fmt.Errorf("setup hook %q: input %q: %w (cannot fingerprint the host-exec surface; fail closed)", h.ID, in, err)
+			}
+			inSHA, err := hashPath(resolvedIn)
+			if err != nil {
+				return fmt.Errorf("setup hook %q: input %q: %w (cannot fingerprint the host-exec surface; fail closed)", h.ID, in, err)
+			}
+			inputs = append(inputs, envsetup.HookInput{Path: in, SHA: inSHA})
 		}
 		b.SetupHooks = append(b.SetupHooks, SetupHookFact{
 			ID:        h.ID,
@@ -483,6 +520,7 @@ func computeSetupHooks(root string, s *envinfo.Sidecar, b *BillOfMaterials) erro
 			ApplyArgs: append([]string(nil), h.ApplyArgs...),
 			Kind:      h.EffectiveKind(),
 			Required:  h.Required,
+			Inputs:    inputs,
 		})
 	}
 	sort.Slice(b.SetupHooks, func(i, j int) bool { return b.SetupHooks[i].ID < b.SetupHooks[j].ID })

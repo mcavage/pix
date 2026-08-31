@@ -576,22 +576,49 @@ code Pix executes on the host, and the path is narrow by construction:
   presence, control characters, `..` segments, and unknown keys are refused
   at the exact file and line. A bare command name is refused — PATH is
   ambiguous and unfingerprintable.
-- Resolution and identity are `envsetup`'s: relative against the environment
-  root, absolute allowed only because it is proven the same way — a regular,
-  executable, non-symlink file with a sha256 content hash. `envsetup.Hook`
-  is the type; `workflow/env.SetupHookFact` is a type ALIAS for it, so the
+- Resolution and identity are `envsetup`'s: a RELATIVE command or input is
+  resolved against the environment root AND proven contained there —
+  `envsetup.ProveContained` resolves every symlink in the target's parent
+  chain (`filepath.EvalSymlinks`) and refuses a result that lands outside
+  the root's own real location, closing the gap a purely lexical join
+  leaves open when an ancestor directory is a symlink. An absolute command
+  is allowed only because it is fingerprinted the same way — a regular,
+  non-symlink file with a sha256 content hash (the executable must also be
+  executable; a companion `inputs` entry need not be). `envsetup.Hook` is
+  the type; `workflow/env.SetupHookFact` is a type ALIAS for it, so the
   value that is fingerprinted and rendered is the value that is executed.
+- An `[[setup]]` entry may declare `inputs = ["relative/path", ...]`:
+  companion scripts or data the hook's command reads. Each entry is
+  strictly validated (relative, clean, `..`-free, unique per hook),
+  resolved and containment-proven identically to a relative command, and
+  fingerprinted as path + sha256 content hash — mutating one after
+  acceptance re-gates exactly like mutating the executable does.
 - The trust bill of materials (§11) carries id, command, content hash, both
-  argv lists, kind, and required; all of them render in the DEFAULT consent
-  screen, and any change re-gates (fingerprint `v3`).
+  argv lists, kind, required, and every declared input's path + hash; all
+  of them render in the DEFAULT consent screen (argv rendered with
+  per-element shell quoting, never a bare space-`Join`, so a reviewer sees
+  the real argument boundaries), and any change re-gates (fingerprint
+  `v3`).
 - Execution happens only under an explicit `pix setup --env NAME`, from ONE
   environment snapshot whose fingerprint is proven equal to the accepted
-  record, with a re-hash of the executable immediately before exec (TOCTOU).
-  os/exec with argv, no shell, no injected environment. Check first (output
-  captured and bounded); apply only on a nonzero check, stdio inherited;
-  then check again — only that post-check earns a success word. A required
-  hook that stays unready fails setup; an optional one warns honestly. An
-  `auth` hook with no TTY refuses and names the exact command.
+  record. Immediately before running, `envsetup.Run` builds a fresh,
+  PRIVATE 0700 directory and copies the executable AND every declared input
+  into it, verifying each one's content against its accepted sha256 in the
+  SAME read that copies the bytes (`hosttrust.ReadVerifiedFile`: an
+  O_NOFOLLOW open, fstat-regular on the already-open descriptor, then the
+  hash) — never a separate "hash the path, then open the same path again to
+  exec it" sequence, which is the actual TOCTOU gap a swap could still land
+  in. check/apply/postcheck execute ONLY that snapshot's copied bytes, with
+  the snapshot's own root as cwd; the directory is removed unconditionally
+  when the hook finishes. Because the snapshot holds nothing but the
+  reviewed executable and its declared inputs, an environment sibling file
+  the hook did not name in `inputs` is unavailable to it by default. Beyond
+  that: os/exec with argv, no shell, no injected environment. Check first
+  (output captured and bounded, sanitized with `sys.TerminalSafe` before
+  ever building a rendered message); apply only on a nonzero check, stdio
+  inherited; then check again — only that post-check earns a success word.
+  A required hook that stays unready fails setup; an optional one warns
+  honestly. An `auth` hook with no TTY refuses and names the exact command.
 - There is no hook registry, no supervisor, and no plugin API: a hook exists
   only inside the environment directory that declares it.
 

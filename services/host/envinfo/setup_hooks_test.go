@@ -110,6 +110,56 @@ func TestSetupHooks_StrictRefusals(t *testing.T) {
 	}
 }
 
+// inputs is validated the same way command is: relative, clean, no `..`,
+// no control characters — plus its own uniqueness rule (a duplicate
+// companion path declared twice in one hook).
+func TestSetupHooks_InputsStrictRefusals(t *testing.T) {
+	const head = "schema = 1\n\n[[setup]]\nid=\"t\"\ncommand=\"./t\"\ncheck_args=[\"c\"]\napply_args=[\"a\"]\n"
+	cases := []struct {
+		name string
+		line string
+		want string
+	}{
+		{"absolute input", `inputs = ["/etc/passwd"]`, "must be relative"},
+		{"dotdot input", `inputs = ["../evil/data"]`, ".."},
+		{"unclean input (leading ./)", `inputs = ["./data.txt"]`, "clean"},
+		{"unclean input (double slash)", `inputs = ["lib//data.txt"]`, "clean"},
+		{"unclean input (trailing slash)", `inputs = ["lib/"]`, "clean"},
+		{"empty input", `inputs = [""]`, "must not be empty"},
+		{"duplicate input", `inputs = ["lib/data.txt", "lib/data.txt"]`, "duplicate"},
+		{"control char in input", "inputs = [\"lib/data\u0000.txt\"]", "control character"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseSidecarText(t, head+tc.line+"\n")
+			if err == nil {
+				t.Fatalf("want a refusal naming %q, got a clean parse", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q does not name %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestSetupHooks_ValidInputsParse(t *testing.T) {
+	s, err := parseSidecarText(t, `schema = 1
+
+[[setup]]
+id = "tool"
+command = "./setup-tool"
+check_args = ["check"]
+apply_args = ["install"]
+inputs = ["lib/helper.sh", "data/config.json"]
+`)
+	if err != nil {
+		t.Fatalf("ParseSidecar: %v", err)
+	}
+	if got := s.Setup[0].Inputs; len(got) != 2 || got[0] != "lib/helper.sh" || got[1] != "data/config.json" {
+		t.Fatalf("inputs decoded wrong: %+v", got)
+	}
+}
+
 // A hook command is argv, never a shell fragment: nothing in the parser
 // interprets a metacharacter, so `;`/`&&`/`$()` land in the argv verbatim
 // where os/exec treats them as literal text. The parse must NOT reject them

@@ -417,6 +417,24 @@ func runEnvTrust(d *cli.Deps, home pixhome.Paths, name string, yes, verbose bool
 	return nil
 }
 
+// safeArgv renders argv the way a human must review it before answering
+// y/N: EVERY element individually shell-quoted (sys.ShellQuote), not
+// space-joined. A bare strings.Join is ambiguous — ["rm", "-rf /"] and
+// ["rm", "-rf", "/"] render identically — which is exactly the gap between
+// "what a reviewer read" and "what os/exec will actually receive" a
+// rendered consent screen must never have. Each element also passes through
+// sys.TerminalSafe first, the same discipline safe() applies to every other
+// authored fact rendered here, before it is ever quoted; joining the
+// already-quoted results with a plain space is unambiguous, because every
+// individual token is self-delimiting.
+func safeArgv(argv []string) string {
+	parts := make([]string, len(argv))
+	for i, a := range argv {
+		parts[i] = sys.ShellQuote(sys.TerminalSafe(a))
+	}
+	return strings.Join(parts, " ")
+}
+
 // renderTrustBill prints workflow/env's canonical BillOfMaterials: counts
 // plus every host command/service name, credential destination, mount
 // expansion, and inference backend by default (D15); full argv and content
@@ -434,7 +452,13 @@ func runEnvTrust(d *cli.Deps, home pixhome.Paths, name string, yes, verbose bool
 // forge a renderer-owned line (a fake count, a fake prompt, a fake
 // "trusted" verdict). This is the same discipline the deleted v1
 // environment-review renderer applied (docs/design/environments.md §9.1's
-// Wave C security M1); it is not optional polish.
+// Wave C security M1); it is not optional polish. Every rendered argv
+// (a setup hook's check/apply, a host command's or host service's own
+// argument list) additionally goes through safeArgv, never a bare
+// strings.Join: each element is shell-quoted INDIVIDUALLY, so a reviewer
+// sees exactly the argument boundaries os/exec will actually use, not a
+// space-joined string a multi-word single argument could be misread as
+// two arguments (or the reverse).
 func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, verbose bool) {
 	safe := sys.TerminalSafe
 	fmt.Fprintf(out, "pix env trust %s\n", safe(name))
@@ -459,9 +483,12 @@ func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, ve
 			need = "required"
 		}
 		fmt.Fprintf(out, "  setup hook:        %s (%s, %s) %s\n", safe(h.ID), safe(h.Kind), need, safe(h.Command))
-		fmt.Fprintf(out, "                     check: %s %s\n", safe(h.Command), safe(strings.Join(h.CheckArgs, " ")))
-		fmt.Fprintf(out, "                     apply: %s %s\n", safe(h.Command), safe(strings.Join(h.ApplyArgs, " ")))
+		fmt.Fprintf(out, "                     check: %s %s\n", safe(h.Command), safeArgv(h.CheckArgs))
+		fmt.Fprintf(out, "                     apply: %s %s\n", safe(h.Command), safeArgv(h.ApplyArgs))
 		fmt.Fprintf(out, "                     sha256:%s\n", safe(h.SHA))
+		for _, in := range h.Inputs {
+			fmt.Fprintf(out, "                     input: %s  sha256:%s\n", safe(in.Path), safe(in.SHA))
+		}
 	}
 	for _, t := range b.CredentialTargets {
 		fmt.Fprintf(out, "  credential:        %s -> %s\n", safe(t.Source), safe(t.Destination))
@@ -493,14 +520,11 @@ func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, ve
 	}
 	fmt.Fprintln(out)
 	for _, c := range b.HostCommands {
-		fmt.Fprintf(out, "  argv %-20s %s\n", safe(c.Name), safe(strings.Join(c.Argv, " ")))
+		fmt.Fprintf(out, "  argv %-20s %s\n", safe(c.Name), safeArgv(c.Argv))
 	}
 	for _, s := range b.HostServices {
-		line := s.Command
-		if len(s.Args) > 0 {
-			line += " " + strings.Join(s.Args, " ")
-		}
-		fmt.Fprintf(out, "  argv %-20s %s\n", safe(s.Name), safe(line))
+		line := safeArgv(append([]string{s.Command}, s.Args...))
+		fmt.Fprintf(out, "  argv %-20s %s\n", safe(s.Name), line)
 		if s.SHA != "" {
 			fmt.Fprintf(out, "       %-20s sha256:%s\n", "", safe(s.SHA))
 		}

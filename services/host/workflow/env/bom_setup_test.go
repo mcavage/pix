@@ -114,6 +114,115 @@ func TestFingerprint_EverySetupHookFactIsSensitive(t *testing.T) {
 	}
 }
 
+const setupSidecarWithInput = `schema = 1
+
+[[setup]]
+id = "tool"
+command = "./setup-tool"
+check_args = ["check"]
+apply_args = ["install"]
+required = true
+kind = "install"
+inputs = ["lib/helper.sh"]
+`
+
+func TestComputeBoM_SetupHookInputIsResolvedHashedAndFingerprinted(t *testing.T) {
+	env := setupHookEnv(t, setupSidecarWithInput, "#!/bin/sh\nexit 0\n")
+	if err := os.MkdirAll(filepath.Join(env.Root, "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(env.Root, "lib", "helper.sh"), []byte("# a companion\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bom, err := ComputeBoM(env, nil, nil)
+	if err != nil {
+		t.Fatalf("ComputeBoM: %v", err)
+	}
+	h := bom.SetupHooks[0]
+	if len(h.Inputs) != 1 || h.Inputs[0].Path != "lib/helper.sh" || h.Inputs[0].SHA == "" {
+		t.Fatalf("input fact wrong: %+v", h.Inputs)
+	}
+
+	fp1, err := Fingerprint(bom)
+	if err != nil {
+		t.Fatalf("Fingerprint: %v", err)
+	}
+
+	// Companion mutation must move the fingerprint: an already-accepted
+	// environment re-gates rather than silently trusting new content.
+	if err := os.WriteFile(filepath.Join(env.Root, "lib", "helper.sh"), []byte("# mutated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bom2, err := ComputeBoM(env, nil, nil)
+	if err != nil {
+		t.Fatalf("ComputeBoM after mutation: %v", err)
+	}
+	fp2, err := Fingerprint(bom2)
+	if err != nil {
+		t.Fatalf("Fingerprint: %v", err)
+	}
+	if fp1 == fp2 {
+		t.Fatal("mutating a declared input must change the fingerprint; it could be swapped after acceptance")
+	}
+}
+
+func TestComputeBoM_MissingSetupHookInputFailsClosed(t *testing.T) {
+	env := setupHookEnv(t, setupSidecarWithInput, "#!/bin/sh\nexit 0\n")
+	// lib/helper.sh is declared but never written.
+	_, err := ComputeBoM(env, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "lib/helper.sh") {
+		t.Fatalf("a missing declared input must fail the bill closed naming it, got %v", err)
+	}
+}
+
+// A declared input whose PARENT directory is a symlink pointing outside the
+// environment root must be refused even though the authored relative path
+// is lexically clean and contains no `..`: the escape is a filesystem fact
+// ProveContained's EvalSymlinks-based containment check catches, not
+// something a pure string check on the authored path could ever see.
+func TestComputeBoM_SetupHookInputParentSymlinkEscapeIsRefused(t *testing.T) {
+	env := setupHookEnv(t, setupSidecarWithInput, "#!/bin/sh\nexit 0\n")
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "helper.sh"), []byte("# outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(env.Root, "lib")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ComputeBoM(env, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "outside the environment root") {
+		t.Fatalf("an input escaping through a symlinked parent directory must be refused, got %v", err)
+	}
+}
+
+// The identical escape via a symlinked ancestor of a RELATIVE command must
+// also be refused: ProveContained applies the same containment proof to
+// command resolution as it does to inputs.
+func TestComputeBoM_RelativeCommandParentSymlinkEscapeIsRefused(t *testing.T) {
+	env := loadTestEnv(t, "work", minimalSbxenv, `schema = 1
+
+[[setup]]
+id = "tool"
+command = "./bin/setup-tool"
+check_args = ["check"]
+apply_args = ["install"]
+`)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "setup-tool"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(env.Root, "bin")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ComputeBoM(env, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "outside the environment root") {
+		t.Fatalf("a relative command escaping through a symlinked parent directory must be refused, got %v", err)
+	}
+}
+
 func TestComputeBoM_UnfingerprintableSetupHookFailsClosed(t *testing.T) {
 	cases := []struct {
 		name   string

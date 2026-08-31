@@ -45,3 +45,31 @@ func HashBytes(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
+
+// ReadVerifiedFile is HashFile's byte-returning twin: it opens path with
+// O_NOFOLLOW (refusing a symlink at the SAME syscall that does the open,
+// never a separate Lstat beforehand) and then fstats the ALREADY-OPEN
+// descriptor to require a regular file — fstat, not a second Lstat, because
+// a descriptor that is already open cannot itself be raced into following a
+// symlink between the check and the read. A caller that needs the exact
+// bytes it is about to trust — a setup-hook TOCTOU snapshot copy, not just
+// a digest — uses this instead of HashFile plus a second, independent
+// re-read of the same path.
+func ReadVerifiedFile(path string) ([]byte, error) {
+	f, err := openNoFollow(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if fi.IsDir() {
+		return nil, fmt.Errorf("%s: is a directory, not a file", path)
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s: is not a regular file", path)
+	}
+	return io.ReadAll(f)
+}

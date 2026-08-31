@@ -51,12 +51,33 @@ type Sidecar struct {
 //	apply_args = ["install"]    # argv that makes it ready
 //	required = true             # absent = false = optional (warn, never fail)
 //	kind = "install"            # install | auth; absent = install
+//	inputs = ["lib/helper.sh"]  # OPTIONAL companion scripts/data, see below
 //
 // There is no shell, no interpolation, and no env/value injection: argv is
 // executed directly (os/exec), so a `command` is a program, never a script
 // fragment. A bare command name is refused outright (PATH is ambiguous and
 // unfingerprintable); the executable's own content hash is what the trust
 // fingerprint binds to.
+//
+// `inputs` is how a hook declares every companion script or data file it
+// needs besides `command` itself. Each entry must be a RELATIVE path
+// (never absolute, never containing a `..` segment), already `filepath.
+// Clean`-form (no redundant `.`, `//`, or trailing slash), and unique
+// within this one hook's own list. Each is resolved against the
+// environment root exactly like a relative `command`, content-hashed the
+// same way, and rendered in the trust bill alongside it: an `inputs` entry
+// is host execution's companion, reviewed with the same rigor as the
+// executable it rides with.
+//
+// The reason `inputs` exists at all: a hook actually runs from a private,
+// per-execution snapshot directory containing ONLY the reviewed executable
+// and its declared inputs (envsetup.Run's TOCTOU snapshot), with that
+// snapshot's own root as the hook's cwd. A companion file living next to
+// `command` in the environment directory that is NOT declared here is
+// therefore simply not present when the hook runs — a hook must name every
+// sibling script or data file it depends on via `inputs`, using paths
+// relative to that snapshot cwd (the same relative form declared here),
+// or the dependency is unavailable by default.
 type SetupHook struct {
 	ID        string   `toml:"id"`
 	Command   string   `toml:"command"`
@@ -64,6 +85,7 @@ type SetupHook struct {
 	ApplyArgs []string `toml:"apply_args"`
 	Required  bool     `toml:"required"`
 	Kind      string   `toml:"kind"`
+	Inputs    []string `toml:"inputs"`
 }
 
 // Setup hook kinds. A hook that needs a human at a terminal (a browser
@@ -433,6 +455,28 @@ func validateSetupHooks(base, text string, hooks []SetupHook) error {
 		case "", SetupKindInstall, SetupKindAuth:
 		default:
 			return bad("%s (%s): kind %q must be %q or %q", where, h.ID, h.Kind, SetupKindInstall, SetupKindAuth)
+		}
+		seenInput := map[string]bool{}
+		for _, in := range h.Inputs {
+			if in == "" {
+				return bad("%s (%s): inputs entries must not be empty", where, h.ID)
+			}
+			if hasControlChars(in) {
+				return bad("%s (%s): inputs entry %q contains a control character", where, h.ID, in)
+			}
+			if filepath.IsAbs(in) {
+				return bad("%s (%s): inputs entry %q must be relative to the environment root, not absolute", where, h.ID, in)
+			}
+			if hasDotDotSegment(in) {
+				return bad("%s (%s): inputs entry %q must not contain a %q segment", where, h.ID, in, "..")
+			}
+			if filepath.Clean(filepath.ToSlash(in)) != filepath.ToSlash(in) {
+				return bad("%s (%s): inputs entry %q must already be a clean relative path (no %q, %q, or a trailing slash)", where, h.ID, in, "./", "//")
+			}
+			if seenInput[in] {
+				return bad("%s (%s): duplicate inputs entry %q; each companion path is declared once", where, h.ID, in)
+			}
+			seenInput[in] = true
 		}
 	}
 	return nil

@@ -282,6 +282,7 @@ check_args = ["check"]       # readiness probe: exit 0 means ready
 apply_args = ["install"]     # what makes it ready
 required = true              # absent = false = optional
 kind = "install"             # install | auth; absent = install
+inputs = ["lib/helper.sh"]   # optional companion scripts/data this hook reads
 ```
 
 **If you wrote a pack hook, this is where it goes.** A pack's install step
@@ -294,27 +295,49 @@ How a hook runs, exactly:
 1. `pix setup --env NAME` loads one snapshot of the environment and proves
    the trust record matches that snapshot's fingerprint. The fingerprint
    covers each hook's id, command, **the executable's sha256 content hash**,
-   both argv lists, its kind, and its required bit, and the default consent
-   screen prints all of them: you approve the exact argv, not a count.
-2. Immediately before executing, pix re-hashes the executable on disk and
-   refuses if it no longer matches what you accepted.
-3. `command check_args...` runs first. Exit 0 means ready and **nothing is
+   both argv lists, its kind, its required bit, and every declared input's
+   path and content hash, and the default consent screen prints all of
+   them: you approve the exact argv and every companion file, not a count.
+2. Immediately before executing, pix builds a fresh, PRIVATE 0700 directory
+   and re-reads the executable and every declared input with an
+   O_NOFOLLOW-opened, fstat-verified descriptor: the same open that reads
+   the bytes is what checks the content hash, so there is no separate
+   "hash it, then open the same path again to run it" step for a swap to
+   land in between. Only those freshly copied, verified bytes are ever
+   executed; the environment directory's own copy is never run directly.
+   The directory (and everything in it) is removed when the hook finishes,
+   success or failure.
+3. The hook's cwd is that snapshot's own root, which contains ONLY the
+   copied executable and the copied `inputs`, nothing else from the
+   environment directory. A companion script or data file the hook reads
+   must be declared in `inputs` with a path relative to that cwd; an
+   undeclared sibling living next to `command` on disk is simply not
+   present when the hook runs.
+4. `command check_args...` runs first. Exit 0 means ready and **nothing is
    mutated**. That is what makes a rerun idempotent.
-4. A nonzero check runs `command apply_args...`, then the check again. Only
+5. A nonzero check runs `command apply_args...`, then the check again. Only
    that second check can produce a success word: a zero exit from the
    installer proves the installer ran, not that the tool works.
-5. A required hook that is still not ready fails setup. An optional one
+6. A required hook that is still not ready fails setup. An optional one
    prints an honest warning and setup continues.
 
 The grammar is strict and every field is validated: an unknown key, a
 missing `command`/`check_args`/`apply_args`, a duplicate or malformed `id`,
 an unknown `kind`, a control character, or a `..` path segment is a parse
-error naming the file and line. A **bare command name is refused**, because
-PATH is ambiguous and cannot be fingerprinted, and the resolved path must be a
-regular, executable, non-symlink file. There is no shell: argv is executed
-directly, so `;`, `&&`, and `$(...)` are literal characters in an argument,
-never operators. Pix injects no environment variables and interpolates no
-values into a hook.
+error naming the file and line. Each `inputs` entry is validated the same
+way: it must be relative (never absolute), already in clean form (no
+redundant `./`, `//`, or trailing slash), free of `..` segments, and unique
+within that hook's own list. A **bare command name is refused**, because
+PATH is ambiguous and cannot be fingerprinted, and the resolved path, and
+every resolved input, must be a regular, non-symlink file inside the
+environment root; the executable additionally must be executable. A
+RELATIVE command or input whose resolved parent directory sits behind a
+symlinked ancestor pointing outside the environment root is refused even
+though its authored path looks contained: the containment proof resolves
+every ancestor symlink (`filepath.EvalSymlinks`) before comparing. There is
+no shell: argv is executed directly, so `;`, `&&`, and `$(...)` are literal
+characters in an argument, never operators. Pix injects no environment
+variables and interpolates no values into a hook.
 
 `kind = "auth"` needs a human: an auth hook whose check fails on a
 non-interactive terminal refuses and names `pix setup --env NAME` rather

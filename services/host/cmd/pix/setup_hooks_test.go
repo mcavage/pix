@@ -156,6 +156,126 @@ exit 0
 	}
 }
 
+const hookSidecarWithInput = `schema = 1
+
+[[setup]]
+id = "tool"
+command = "./setup-tool"
+check_args = ["check"]
+apply_args = ["install"]
+required = true
+kind = "install"
+inputs = ["lib/helper.sh"]
+`
+
+// A DECLARED input is copied into the hook's execution snapshot at its
+// declared relative path, so a hook that reads it relative to its own cwd
+// (the snapshot root) finds it there.
+func TestSetupEnv_DeclaredInputIsUsableFromTheSnapshotCwd(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p, marker := hookEnvFixture(t, home, "work", hookSidecarWithInput, `#!/bin/sh
+case "$1" in
+  check) [ -f "@MARKER@" ] && exit 0 || exit 1 ;;
+  install)
+    [ -f lib/helper.sh ] || exit 3
+    grep -q COMPANION lib/helper.sh || exit 4
+    touch "@MARKER@"
+    exit 0
+    ;;
+esac
+exit 2
+`)
+	root := p.EnvironmentDir("work")
+	if err := os.MkdirAll(filepath.Join(root, "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "lib", "helper.sh"), []byte("COMPANION\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("the hook never read its declared input from the snapshot cwd: %v\n%s", err, out.String())
+	}
+}
+
+// An UNDECLARED sibling — a file that lives next to setup-tool in the
+// environment directory but was never named in `inputs` — is NOT present
+// in the hook's execution snapshot: the snapshot's cwd contains only the
+// reviewed executable and its declared inputs.
+func TestSetupEnv_UndeclaredSiblingIsUnavailableInTheSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p, _ := hookEnvFixture(t, home, "work", hookSidecar, `#!/bin/sh
+case "$1" in
+  check) exit 1 ;;
+  install) [ -f sibling.txt ] && exit 0 || exit 5 ;;
+esac
+exit 2
+`)
+	root := p.EnvironmentDir("work")
+	// sibling.txt sits right next to setup-tool on disk, but hookSidecar
+	// declares no `inputs` at all.
+	if err := os.WriteFile(filepath.Join(root, "sibling.txt"), []byte("undeclared\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	err := setupSelectedEnvironment(d, p, "work")
+	if err == nil {
+		t.Fatal("a hook that depends on an undeclared sibling must not become ready")
+	}
+	if !strings.Contains(out.String(), "exited 5") && !strings.Contains(err.Error(), "exited 5") {
+		t.Fatalf("want the install step to fail with exit 5 (sibling.txt absent from the snapshot cwd), got err=%v out=%s", err, out.String())
+	}
+}
+
+// A companion input mutated after trust re-gates exactly like the
+// executable itself: the fingerprint moves, so the pre-computed trust
+// record no longer matches and setup refuses before any hook runs.
+func TestSetupEnv_InputMutatedAfterTrust_Refuses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p, marker := hookEnvFixture(t, home, "work", hookSidecarWithInput, `#!/bin/sh
+case "$1" in
+  check) [ -f "@MARKER@" ] && exit 0 || exit 1 ;;
+  install) cat lib/helper.sh > "@MARKER@"; exit 0 ;;
+esac
+exit 2
+`)
+	root := p.EnvironmentDir("work")
+	if err := os.MkdirAll(filepath.Join(root, "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "lib", "helper.sh"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	preTrustSetupEnv(t, p, "work")
+
+	// Mutate the companion AFTER the trust record was written for the
+	// reviewed content.
+	if err := os.WriteFile(filepath.Join(root, "lib", "helper.sh"), []byte("tampered\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false}
+	if err := setupSelectedEnvironment(d, p, "work"); err == nil {
+		t.Fatal("a mutated declared input must refuse setup, not silently run with new content")
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("the hook ran despite the mutated, unreviewed companion input")
+	}
+}
+
 // The consent screen must show every hook fact a human is approving —
 // argv included — by DEFAULT, not only under --verbose.
 func TestRenderTrustBill_ShowsSetupHooksByDefault(t *testing.T) {

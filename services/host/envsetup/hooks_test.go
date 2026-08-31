@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -321,5 +322,100 @@ func TestRun_AuthHookWithATerminal_MayInstallNonInteractivelyIsNotConfused(t *te
 	}
 	if rec.checks != 2 {
 		t.Fatalf("check must run before AND after apply, got %d checks", rec.checks)
+	}
+}
+
+// ── the executable actually runs from a private snapshot, cwd == snapshot ──
+
+// TestRun_ExecutesFromASnapshotDirNotTheEnvironmentRoot proves the exe/cwd
+// a real process sees: the argv[0] path is UNDER a private temp directory
+// (never the environment root path itself), and pwd == that same directory
+// (the snapshot's own root, per the "set cwd to snapshot root" rule).
+func TestRun_ExecutesFromASnapshotDirNotTheEnvironmentRoot(t *testing.T) {
+	dir := t.TempDir()
+	path, sha := script(t, dir, "setup-tool", `
+echo "argv0:$0"
+echo "pwd:$(pwd)"
+exit 0
+`)
+	h := hook("tool", path, sha, true, "install")
+	rec := &capturingExec{}
+
+	var out, errb bytes.Buffer
+	o := opts(&out, &errb, true)
+	o.Exec = rec
+	if _, err := Run(dir, []Hook{h}, o); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rec.dir == "" || rec.dir == dir {
+		t.Fatalf("cwd = %q, want a private snapshot directory distinct from the environment root %q", rec.dir, dir)
+	}
+	if rec.exe == path {
+		t.Fatalf("exe = %q, want a COPY under the snapshot, never the reviewed path itself", rec.exe)
+	}
+	if filepath.Dir(rec.exe) != rec.dir {
+		t.Fatalf("exe %q is not inside the snapshot dir %q passed as cwd", rec.exe, rec.dir)
+	}
+	if _, err := os.Stat(rec.dir); err == nil {
+		t.Fatal("the snapshot directory was not cleaned up after the run")
+	}
+}
+
+// capturingExec records the dir/exe Check was called with, so a test can
+// prove they are the snapshot's, not the caller's original root/path.
+type capturingExec struct {
+	dir, exe string
+}
+
+func (c *capturingExec) Check(dir, exe string, args []string) (int, string, error) {
+	c.dir, c.exe = dir, exe
+	return 0, "", nil
+}
+
+func (c *capturingExec) Apply(dir, exe string, args []string, in io.Reader, out, errw io.Writer) (int, error) {
+	c.dir, c.exe = dir, exe
+	return 0, nil
+}
+
+// ── boundedBuffer must survive concurrent stdout+stderr writers ───────────
+
+// TestBoundedBuffer_ConcurrentWritesAreRaceFree pins the realExecutor.Check
+// shape directly: cmd.Stdout and cmd.Stderr are the SAME *boundedBuffer, and
+// os/exec copies each pipe on its own goroutine, so two Writes can land
+// concurrently on a hook that writes to both descriptors. Run with
+// `go test -race`, this must be clean; without the mutex it is a
+// textbook data race on buf.
+func TestBoundedBuffer_ConcurrentWritesAreRaceFree(t *testing.T) {
+	var buf boundedBuffer
+	buf.limit = checkOutputLimit
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				fmt.Fprintf(&buf, "writer-%d-line-%d\n", n, i)
+			}
+		}(g)
+	}
+	wg.Wait()
+	_ = buf.String()
+}
+
+// TestRealExecutor_Check_ConcurrentStdoutStderrIsRaceFree drives the actual
+// production seam end to end: a real process writing to stdout and stderr
+// from two different underlying pipes, captured through realExecutor.Check.
+func TestRealExecutor_Check_ConcurrentStdoutStderrIsRaceFree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs /bin/sh")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "noisy")
+	body := "#!/bin/sh\nfor i in $(seq 1 200); do echo \"out-$i\"; echo \"err-$i\" >&2; done\nexit 0\n"
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := (realExecutor{}).Check(dir, path, nil); err != nil {
+		t.Fatalf("Check: %v", err)
 	}
 }
