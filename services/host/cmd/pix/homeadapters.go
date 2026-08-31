@@ -37,10 +37,14 @@ import (
 // reconciles/probes against: the release-pinned pix-memory image (when a
 // release manifest is recorded; "" otherwise, which container.Inspect and
 // the doctor probes both already treat as "nothing to compare against" and
-// report absent/no-manifest rather than crashing on), container.
-// DefaultMemoryPort (the ONE canonical port, security/QA re-review MEDIUM
-// finding — this used to be a second, independently duplicated `18080`
-// literal here), this host's data directory, and — read-only, never
+// report absent/no-manifest rather than crashing on), this PIX_HOME's OWN
+// allocated port (container.ReadMemoryPort — QA F4: a single fixed 18080
+// forced two independent PIX_HOME instances into an inevitable collision;
+// this is READ-ONLY here — it never allocates, only `pix setup`'s
+// container.EnsureMemoryPort does that — so it degrades to
+// container.DefaultMemoryPort for display purposes on a host that has never
+// run `pix setup` yet, the same pre-setup posture the auth token below
+// already has), this host's data directory, and — read-only, never
 // generated here — whatever pix-memory bearer token file `pix setup` has
 // already written, bind-mounted read-only at container.AuthTokenMountPath
 // (security re-review round 1 blocker #1: never a literal `-e`/`--env-file`
@@ -56,10 +60,14 @@ func homeContainerSpec(home pixhome.Paths) container.Spec {
 	if m, err := release.LoadInstalled(home.Home); err == nil && m != nil {
 		image = "pix-memory@" + m.PixMemoryDigest
 	}
+	port := container.DefaultMemoryPort
+	if p, err := container.ReadMemoryPort(home); err == nil {
+		port = p
+	}
 	return container.Spec{
 		ContainerName: container.Name,
 		Image:         image,
-		HostPort:      container.DefaultMemoryPort,
+		HostPort:      port,
 		DataDir:       home.StateMemory,
 		AuthTokenFile: container.MemoryAuthTokenPath(home),
 	}

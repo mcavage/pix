@@ -19,8 +19,8 @@
       }
     },
     "pix/host/cmd/pix": {
-      "_prod_loc_note": "Security re-review round 2 (M1/M2/L1): run_trust.go's TOCTOU fix binds both trust-gate calls to ONE in-memory envTrustSnapshot (resolveEnvTrustSnapshot/gateEnvTrust/trustAcceptedForFingerprint) instead of re-resolving the environment from disk on every call, plus its adversarial-swap test; reset_cmd.go deletes the ignored --keep-memory/--keep-sandboxes/--force flags but ADDS the interactive confirmation bill+prompt M2 requires (renderResetBill) and its test coverage; env_cmd.go/run_env.go grow the fingerprint-bound trustAcceptedForFingerprint split and env_cmd_l1_test.go's canary-scan tests for the L1 token-redaction fix. Real security-load-bearing logic and its proof, not accumulation.",
-      "prod_loc": 3746,
+      "_prod_loc_note": "QA F4: homeContainerSpec now reads container.ReadMemoryPort(home) instead of the fixed container.DefaultMemoryPort literal, so doctor/run/env-preview all show this PIX_HOME's own allocated port — a few lines, not accumulation.",
+      "prod_loc": 3754,
       "test_loc": 5024,
       "exports": 5,
       "exports_used_externally": 0,
@@ -36,6 +36,7 @@
       }
     },
     "pix/host/config": {
+      "_prod_loc_note": "QA F5: config.Path/StateDir/DataDir/configDir now delegate to pixhome.Dir() (PIX_HOME) instead of re-deriving PIX_CONFIG/XDG_*/~/.config fallbacks inline — net prod_loc SHRANK (fewer resolution branches) but config now imports pixhome (edges 0 -> 1), closing the last executable-state escape.",
       "prod_loc": 1383,
       "test_loc": 1901,
       "exports": 54,
@@ -44,23 +45,23 @@
       "streams": 0,
       "globals": 17,
       "init": 0,
-      "edges": 0,
+      "edges": 1,
       "parser_families": {
         "core": 5,
         "test": 6
       }
     },
     "pix/host/container": {
-      "_prod_loc_note": "L1 (security re-review): authtoken.go adds RedactMemoryURLToken/RedactedTokenPlaceholder \u2014 the presentation-only redaction `pix env show --effective` uses so the pix-memory bearer token never reaches that display, while the canonical effective document a real launch composes still carries the real value. Real capability change, not accumulation.",
-      "prod_loc": 892,
+      "_prod_loc_note": "L1 (security re-review): authtoken.go adds RedactMemoryURLToken/RedactedTokenPlaceholder — the presentation-only redaction `pix env show --effective` uses so the pix-memory bearer token never reaches that display, while the canonical effective document a real launch composes still carries the real value. QA F4 (this round): memoryport.go adds EnsureMemoryPort/AllocateMemoryPortLocked/ReadMemoryPort/SetupLockPath — per-PIX_HOME port allocation under an advisory lock, replacing the single shared DefaultMemoryPort constant every install used to fight over (globals +1 for setupLockName, edges +1 for the new sys.Lock dependency). Real capability change, not accumulation.",
+      "prod_loc": 1028,
       "test_loc": 618,
-      "exports": 37,
+      "exports": 41,
       "exports_used_externally": 9,
       "exits": 0,
       "streams": 0,
-      "globals": 17,
+      "globals": 18,
       "init": 0,
-      "edges": 1,
+      "edges": 2,
       "parser_families": {
         "core": 3,
         "test": 3
@@ -185,10 +186,10 @@
       }
     },
     "pix/host/pixhome": {
-      "prod_loc": 455,
+      "prod_loc": 465,
       "test_loc": 381,
       "exports": 15,
-      "exports_used_externally": 4,
+      "exports_used_externally": 6,
       "exits": 0,
       "streams": 0,
       "globals": 8,
@@ -197,7 +198,8 @@
       "parser_families": {
         "core": 3,
         "test": 2
-      }
+      },
+      "_prod_loc_note": "QA F4: Machine gains a MemoryPort field (memory_port, setup-owned state) — a documented field addition, not accumulation."
     },
     "pix/host/recreatelog": {
       "prod_loc": 436,
@@ -245,7 +247,7 @@
       }
     },
     "pix/host/secret": {
-      "_prod_loc_note": "SECURITY re-review MEDIUM finding fix: SetRef/RemoveRef in pixhome.go are now lock-protected (secretsEnvLockPath, +1 global for the lock-name const, +1 edge for the new pix/host/sys import) against a concurrent secrets.env writer \u2014 a real correctness fix, not accumulation.",
+      "_prod_loc_note": "SECURITY re-review MEDIUM finding fix: SetRef/RemoveRef in pixhome.go are now lock-protected (secretsEnvLockPath, +1 global for the lock-name const, +1 edge for the new pix/host/sys import) against a concurrent secrets.env writer — a real correctness fix, not accumulation.",
       "prod_loc": 1660,
       "test_loc": 1843,
       "exports": 59,
@@ -321,7 +323,7 @@
       }
     },
     "pix/host/workflow/env": {
-      "_prod_loc_note": "SECURITY/QA re-review follow-up: effective.go's builtinMCPFacts now reads the pix-memory bearer token and the canonical port through pix/host/container (+1 edge) instead of a locally duplicated 18080 literal and a bare fmt.Sprintf \u2014 removes a duplication tripwire, does not add prod_loc net (a constant and its doc comment were deleted).",
+      "_prod_loc_note": "SECURITY/QA re-review follow-up: effective.go's builtinMCPFacts now reads the pix-memory bearer token and the canonical port through pix/host/container (+1 edge) instead of a locally duplicated 18080 literal and a bare fmt.Sprintf — removes a duplication tripwire, does not add prod_loc net (a constant and its doc comment were deleted).",
       "prod_loc": 4420,
       "test_loc": 7493,
       "exports": 94,

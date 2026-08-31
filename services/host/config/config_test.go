@@ -10,8 +10,8 @@ import (
 )
 
 func TestLoadAbsentReturnsDefaults(t *testing.T) {
-	// Point at a path that does not exist.
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
+	// Point PIX_HOME at a fresh dir with no config.toml in it.
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	c, err := Load()
 	if err != nil {
@@ -59,7 +59,7 @@ port = 9000
 	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PIX_CONFIG", path)
+	t.Setenv("PIX_HOME", dir)
 
 	c, err := Load()
 	if err != nil {
@@ -224,7 +224,8 @@ func TestOpRefsTemplateHasNoActiveRefs(t *testing.T) {
 // were retired (all configured/pack MCP servers now preload at sandbox
 // CREATE — no more eager/lazy split), but a config.toml written by an older
 func TestRetiredKeysReportedAndNeverReemitted(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
 	src := `
 mcp = ["slack"]
 mcp_static = ["slack"]
@@ -244,7 +245,7 @@ mcp_dynamic = ["notion"]
 		t.Errorf("MCP = %v, want [slack] (live key still decodes)", c.MCP)
 	}
 
-	t.Setenv("PIX_CONFIG", path)
+	t.Setenv("PIX_HOME", dir)
 	if err := c.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -266,7 +267,7 @@ mcp_dynamic = ["notion"]
 	}
 }
 func TestLoadAbsentReportsNoRetiredOrUnknownKeys(t *testing.T) {
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
+	t.Setenv("PIX_HOME", t.TempDir())
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -282,7 +283,7 @@ func TestLoadAbsentReportsNoRetiredOrUnknownKeys(t *testing.T) {
 func TestSaveAtomic_WriteFailureLeavesPriorFileIntact(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	t.Setenv("PIX_CONFIG", path)
+	t.Setenv("PIX_HOME", dir)
 
 	c, err := Load()
 	if err != nil {
@@ -329,8 +330,9 @@ func TestSaveAtomic_WriteFailureLeavesPriorFileIntact(t *testing.T) {
 }
 
 func TestSaveAndMutators(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "config.toml")
-	t.Setenv("PIX_CONFIG", path)
+	home := filepath.Join(t.TempDir(), "sub")
+	path := filepath.Join(home, "config.toml")
+	t.Setenv("PIX_HOME", home)
 
 	c, err := Load()
 	if err != nil {
@@ -393,11 +395,12 @@ func TestSaveAndMutators(t *testing.T) {
 // knowledge_bundles (the built-in OKF knowledge service, retired W2 U03A)
 // must still Load cleanly — tolerated, never a hard error — and be reported
 func TestKnowledgeBundlesKeyIsRetired(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
 	if err := os.WriteFile(path, []byte("knowledge_bundles = [\"/kb/acme\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PIX_CONFIG", path)
+	t.Setenv("PIX_HOME", dir)
 
 	c, err := LoadFrom(path)
 	if err != nil {
@@ -417,32 +420,33 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// TestDataDirLayout locks the XDG data-root resolution: $XDG_DATA_HOME wins,
-// else ~/.local/share/pix, and every durable default derives from it.
+// TestDataDirLayout locks the PIX_HOME resolution: DataDir is PIX_HOME
+// itself, with NO XDG_DATA_HOME fallback (QA F5 — PIX_HOME is the single
+// root; there is no second XDG data root to win or lose).
 func TestDataDirLayout(t *testing.T) {
-	xdg := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", xdg)
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
 
 	d, err := DataDir()
 	if err != nil {
 		t.Fatalf("DataDir: %v", err)
 	}
-	if want := filepath.Join(xdg, "pix"); d != want {
+	if want := home; d != want {
 		t.Errorf("DataDir = %q, want %q", d, want)
 	}
 }
 
-// TestDataDirDefaultHome checks the ~/.local/share/pix fallback when
-// XDG_DATA_HOME is unset (uses HOME).
+// TestDataDirDefaultHome checks the ~/.pix fallback when PIX_HOME is unset
+// (uses HOME).
 func TestDataDirDefaultHome(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("PIX_HOME", "")
 	t.Setenv("HOME", home)
 	d, err := DataDir()
 	if err != nil {
 		t.Fatalf("DataDir: %v", err)
 	}
-	if want := filepath.Join(home, ".local", "share", "pix"); d != want {
+	if want := filepath.Join(home, ".pix"); d != want {
 		t.Errorf("DataDir = %q, want %q", d, want)
 	}
 }

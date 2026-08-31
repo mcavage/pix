@@ -21,7 +21,7 @@ import (
 
 func seedRunSandbox(t *testing.T, key, instanceID string) string {
 	t.Helper()
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 	t.Setenv("PIX_IDENTITY", "test@fixture")
 	state, err := config.StateDir()
 	if err != nil {

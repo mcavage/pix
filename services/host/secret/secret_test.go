@@ -125,6 +125,11 @@ func TestParseOpRefsNilAllowlistAllowsNothing(t *testing.T) {
 func TestSeededOpRefsHasNoActiveEntries(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+	// config.SeedOpRefs resolves through config.OpRefsPath (PIX_HOME only, QA
+	// F5); PIX_CONFIG above still isolates secret.DefaultOpRefsPath's OWN
+	// resolution for the other callers in this file, but this one needs
+	// PIX_HOME too, pointed at the SAME dir so both resolve identically.
+	t.Setenv("PIX_HOME", dir)
 	path, created, err := config.SeedOpRefs()
 	if err != nil {
 		t.Fatalf("SeedOpRefs: %v", err)
@@ -497,6 +502,10 @@ func TestSecretSetNormalizesPercentEncodedSpaceToLiteral(t *testing.T) {
 func TestSecretSetSeedsFileWhenAbsent(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+	// config.OpRefsPath (read below) resolves through PIX_HOME only (QA F5);
+	// pointed at the SAME dir as PIX_CONFIG above so RunSecretSet's write
+	// (via secret.DefaultOpRefsPath) and this test's read agree on one path.
+	t.Setenv("PIX_HOME", dir)
 	env := hostenv.Env{System: sys.Real{}}
 	var out bytes.Buffer
 	RunSecretSet(env, &out, "SLACK_TOKEN", "op://Private/Slack/credential", nil)

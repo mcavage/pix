@@ -11,8 +11,7 @@ import (
 )
 
 func TestCleanupGeneratedKitDirsRemovesSynthesizedKitsOnly(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	cfg := &config.Config{Inference: config.InferenceConfig{
 		Backends: map[string]config.InferenceBackend{

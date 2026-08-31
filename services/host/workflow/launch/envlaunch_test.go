@@ -16,14 +16,12 @@ import (
 	"pix/host/sys/systest"
 )
 
-// stateHome points config.StateDir at a temp dir so a test never touches
-// the real launcher state.
+// stateHome points config.StateDir/DataDir/Path (all via PIX_HOME) at a temp
+// dir so a test never touches the real launcher state.
 func stateHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
-	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+	t.Setenv("PIX_HOME", filepath.Join(dir, "pixhome"))
 	t.Setenv("HOME", dir)
 	return dir
 }

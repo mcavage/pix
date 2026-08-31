@@ -22,6 +22,16 @@ type Machine struct {
 	// by `pix env default NAME` and read by every launch that does not
 	// pass an explicit --env.
 	DefaultEnvironment string `toml:"default_environment"`
+
+	// MemoryPort is the loopback port the one named pix-memory container
+	// publishes on THIS PIX_HOME, written once by `pix setup`
+	// (container.EnsureMemoryPort, QA F4: two independent PIX_HOME
+	// instances on the same host must never be forced onto the same fixed
+	// port). Zero means "not allocated yet" — a caller that only reads
+	// (doctor, run, env preview) treats that as the pre-setup state and
+	// falls back to container.DefaultMemoryPort for display purposes only;
+	// it never allocates or persists one itself.
+	MemoryPort int `toml:"memory_port,omitempty"`
 }
 
 // LoadMachine reads <home>/config.toml. A missing file is the legitimate

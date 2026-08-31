@@ -19,11 +19,13 @@ import (
 	"pix/host/sys"
 )
 
-// isolateState points config.StateDir at a fresh tempdir for the duration of
-// the test, so lease bookkeeping never touches a real host's state dir.
+// isolateState points config.StateDir (via PIX_HOME) at a fresh tempdir for
+// the duration of the test, so lease bookkeeping never touches a real host's
+// state dir. PIX_HOME is the only override config.StateDir honors in
+// production (QA F5: no XDG_STATE_HOME fallback survives).
 func isolateState(t *testing.T) {
 	t.Helper()
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 	t.Setenv("PIX_IDENTITY", "test@fixture")
 }
 

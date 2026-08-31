@@ -216,7 +216,6 @@ func TestDispatch_BareNonTTY_RefusesWithNoCreate(t *testing.T) {
 func bareLaunchDeps(t *testing.T) (*cli.Deps, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	t.Setenv("PATH", t.TempDir())
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	return rootDeps()
 }
 

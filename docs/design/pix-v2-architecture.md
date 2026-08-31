@@ -205,11 +205,15 @@ Files containing machine state are mode `0600`; their parent directories are
 `0700`. Durable writes use a same-directory temporary file, fsync where loss
 changes authority or ownership, then atomic rename or no-replace link.
 
-`config.toml` contains only the default environment, selected local inference
-backend, and installed release manifest identity. `secrets.env` contains only
-`NAME=op://...` references. Neither is tracked by the initialized Git repository.
+`config.toml` contains only the default environment, the allocated pix-memory
+loopback port (`memory_port`, written once by `pix setup` — see §9.1), selected
+local inference backend, and installed release manifest identity. `secrets.env`
+contains only `NAME=op://...` references. Neither is tracked by the initialized
+Git repository.
 
-There is no XDG fallback in v2. Tests set `PIX_HOME` to a temporary directory.
+There is no XDG fallback in v2: `config.Path`/`StateDir`/`DataDir`/`ContextDir`
+resolve under `PIX_HOME` alone, with no `PIX_CONFIG`/`XDG_*` fallback of any
+kind in production. Tests set `PIX_HOME` to a temporary directory.
 
 ## 6. Environment compilation and launch
 
@@ -404,11 +408,29 @@ mount:       ~/.pix/state/memory:/data
 network:     only the selected llmman/Ollama endpoint when semantic features run
 ```
 
+The port is **per-`PIX_HOME` state, allocated once and persisted**, not a
+process-wide constant: `container.EnsureMemoryPort` (called only by `pix
+setup`, under `container.SetupLockPath`'s advisory lock held through the
+whole allocate-then-reconcile sequence) reads `config.toml`'s `memory_port`
+field if already set, otherwise adopts the historical default (18080) when it
+is actually free right now, or otherwise draws a genuinely free loopback port
+from the OS (bind `127.0.0.1:0`, read back the assignment, close) and persists
+it. This is what lets two independent `PIX_HOME` installs on the same host
+both run `pix setup` without forcing a collision on one fixed port. Every
+other reader — the container spec, the registered MCP URL, `pix run`'s
+effective built-in, `pix env --effective` preview, doctor, reset — reads the
+same persisted value read-only (`container.ReadMemoryPort`) and never
+allocates one itself; a host that has never run `pix setup` shows the
+historical default for display only.
+
 The exact `docker create` configuration is fingerprinted into container labels.
 Setup adopts a healthy matching container, starts a stopped matching container,
 and replaces a mismatched container only after showing the image/config change.
 The `/data` directory is never removed during replacement. Setup reports ready
-only after `/healthz` and an MCP initialization/tool-list probe succeed.
+only after `/healthz` and an MCP initialization/tool-list probe succeed. A port
+already in use when Setup tries to bind it (an unresolved same-host collision,
+or anything else already listening) refuses with the exact remedy: stop
+whatever holds it, then rerun `pix setup`.
 
 Docker restart policy restarts a dead process, not an unhealthy one. Doctor
 therefore performs behavioral probes and prints the exact `docker restart

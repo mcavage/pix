@@ -238,7 +238,7 @@ func TestRunSession_LeaseDirFailure_RefusesAndSpawnsNothing(t *testing.T) {
 	if err := os.WriteFile(blocker, []byte("not a dir"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("XDG_STATE_HOME", blocker)
+	t.Setenv("PIX_HOME", blocker)
 	spawned := 0
 	err := RunSession(SessionSpec{
 		Key: "pix-demo", Name: "pix-demo", Creating: true,

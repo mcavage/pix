@@ -36,7 +36,6 @@ func envCmdTestHome(t *testing.T) string {
 func TestEnvShowEffective_NeverPrintsTheRealMemoryToken(t *testing.T) {
 	home := envCmdTestHome(t)
 	t.Setenv("PIX_HOME", home)
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	var out, errb bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &errb}
 
@@ -69,7 +68,6 @@ func TestEnvShow_JSONAndPlain_NeverPrintTheRealMemoryToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PIX_HOME", home)
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 
 	for _, args := range [][]string{
 		{"env", "show", "work"},

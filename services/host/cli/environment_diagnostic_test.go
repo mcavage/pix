@@ -27,7 +27,7 @@ func TestConfig_WarnsAboutHandEditedEnvironmentBeforeAnySave(t *testing.T) {
 	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PIX_CONFIG", path)
+	t.Setenv("PIX_HOME", dir)
 
 	var errBuf bytes.Buffer
 	d := &Deps{Err: &errBuf}

@@ -22,7 +22,7 @@ import (
 //     directory can live in git. Mounting only skills/ hid AGENTS.md entirely.
 func TestPersonalContextIsMountedWritableFromColdStart(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dir)
+	t.Setenv("PIX_HOME", dir)
 	root := config.ContextDir()
 
 	cfg := &config.Config{}

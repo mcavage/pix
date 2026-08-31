@@ -24,8 +24,7 @@ import (
 // else in the agent dir) in the same test so a future rename cannot silently
 // reintroduce either half of the bug.
 func TestSynthesizeInferenceKitMixinLayout(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	cfg := &config.Config{Inference: config.InferenceConfig{
 		Backends: map[string]config.InferenceBackend{

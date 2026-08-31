@@ -38,7 +38,6 @@ func resetTestDeps(t *testing.T, home string) (*cli.Deps, *bytes.Buffer, *bytes.
 	t.Helper()
 	t.Setenv("PATH", t.TempDir()) // sbx forced absent: a sweep that runs anyway is provably attempted, never silently skipped
 	t.Setenv("PIX_HOME", home)
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	var out, errb bytes.Buffer
 	return &cli.Deps{Out: &out, Err: &errb}, &out, &errb
 }

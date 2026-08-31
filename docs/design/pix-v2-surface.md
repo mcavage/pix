@@ -375,6 +375,9 @@ behalf.
 environments cannot own:
 
 - the default environment name, written by `pix env default NAME`;
+- the allocated pix-memory loopback port (`memory_port`), written once by
+  `pix setup` on first run — a per-`PIX_HOME` allocation, never a shared
+  constant, so two independent `PIX_HOME` installs on one host never collide;
 - the selected local inference backend, written by `pix setup`;
 - the pinned Pix image set and kit version, written by install or upgrade.
 

@@ -9,12 +9,12 @@ import (
 	"pix/host/config"
 )
 
-// setRunHintState points config.StateDir at a fresh temp dir for this test,
-// the same XDG_STATE_HOME seam every other launcher-state test in this tree
-// uses (see workflow/pack's fixture_test.go).
+// setRunHintState points config.StateDir (via PIX_HOME) at a fresh temp dir
+// for this test, the same PIX_HOME seam every other launcher-state test in
+// this tree uses.
 func setRunHintState(t *testing.T) {
 	t.Helper()
-	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	t.Setenv("PIX_HOME", t.TempDir())
 }
 
 func writeSbxenv(t *testing.T, dir string) {

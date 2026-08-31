@@ -19,7 +19,7 @@ import (
 // reference at the exact directory workflow/launch's own lease already
 // uses for this sessionKey.
 func TestHoldInteractiveRootNow_RecordsTreeNodeAndHold(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	r, err := holdInteractiveRootNow("pix-proj-1234abcd", "pix-proj-1234abcd", "/w", "work", "anthropic/claude-sonnet-5", "inst-1")
 	if err != nil {
@@ -58,7 +58,7 @@ func TestHoldInteractiveRootNow_RecordsTreeNodeAndHold(t *testing.T) {
 // whole feature exists to enforce: two `pix run` processes must never both
 // believe they own the SAME sandbox's interactive session.
 func TestHoldInteractiveRootNow_RefusesSecondLiveRoot(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	first, err := holdInteractiveRootNow("pix-proj-dupe", "pix-proj-dupe", "/w", "work", "", "inst-1")
 	if err != nil {
@@ -77,7 +77,7 @@ func TestHoldInteractiveRootNow_RefusesSecondLiveRoot(t *testing.T) {
 // SAME session tree rather than starting a fresh one — the tree survives a
 // `pix run` exit and re-attach the way the sandbox itself does.
 func TestHoldInteractiveRootNow_ResumesTheSameTreeOnReattach(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	first, err := holdInteractiveRootNow("pix-proj-resume", "pix-proj-resume", "/w", "work", "", "inst-1")
 	if err != nil {
@@ -101,7 +101,7 @@ func TestHoldInteractiveRootNow_ResumesTheSameTreeOnReattach(t *testing.T) {
 // marks it "finished", and both always drop the lock — including the
 // nil-safe zero value a caller reaches when no Hold was ever attempted.
 func TestInteractiveRootRelease_AdvancesNodeState(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	r, err := holdInteractiveRootNow("pix-proj-fail", "pix-proj-fail", "/w", "work", "", "inst-1")
 	if err != nil {
@@ -162,7 +162,7 @@ func sbxListingJSON(name, instanceUUID, status string) string {
 // positively identified, running instance appears the Hold is taken and
 // returned — without the caller ever blocking the create itself.
 func TestAwaitInteractiveRootHold_PicksUpTheFirstPositiveReceipt(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	calls := 0
 	env := hostenv.Env{System: fakeSbxLsEnv{ls: func() (string, error) {
@@ -193,7 +193,7 @@ func TestAwaitInteractiveRootHold_PicksUpTheFirstPositiveReceipt(t *testing.T) {
 // RunSession itself has already returned) must leave no goroutine spinning
 // forever.
 func TestAwaitInteractiveRootHold_CancelledBeforeAnyReceiptReturnsCtxErr(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 	env := hostenv.Env{System: fakeSbxLsEnv{ls: func() (string, error) { return `{"sandboxes":[]}`, nil }}}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -205,7 +205,7 @@ func TestAwaitInteractiveRootHold_CancelledBeforeAnyReceiptReturnsCtxErr(t *test
 }
 
 func TestInteractiveRootSandboxDir_MatchesLeaseIdentity(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 	dir, err := interactiveRootSandboxDir("pix-abc")
 	if err != nil {
 		t.Fatalf("interactiveRootSandboxDir: %v", err)

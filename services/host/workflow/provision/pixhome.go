@@ -7,6 +7,7 @@ import (
 	"pix/host/envinfo"
 	"pix/host/pixhome"
 	"pix/host/release"
+	"pix/host/sys"
 )
 
 // pixhome.go is this unit's `pix setup` v2 path (docs/design/
@@ -102,16 +103,41 @@ func Setup(d Deps) (Result, error) {
 		res.ReleaseInstalled = true
 	}
 
-	cres, err := container.Reconcile(d.ContainerRunner, d.ContainerSpec, d.Prober, container.ReconcileOptions{
-		ConfirmReplace: d.ConfirmReplace,
+	// The whole allocate-the-port-then-reconcile-the-container sequence runs
+	// under ONE lock (QA F4: "hold the setup lock through container
+	// create/reconcile"). Without it, two concurrent `pix setup` runs against
+	// the SAME PIX_HOME could each finish allocating (container.
+	// AllocateMemoryPortLocked's own critical section is short) and only THEN
+	// race each other's `docker create` of the identically-named container.
+	// d.ContainerSpec's own HostPort is overridden here with whatever this
+	// PIX_HOME actually has allocated — never a value the caller merely
+	// guessed at (homeadapters.go's homeContainerSpec reads, never allocates).
+	resolvedSpec := d.ContainerSpec
+	err = sys.Lock(container.SetupLockPath(d.Home), func() error {
+		port, perr := container.AllocateMemoryPortLocked(d.Home)
+		if perr != nil {
+			return fmt.Errorf("allocate pix-memory port: %w", perr)
+		}
+		resolvedSpec.HostPort = port
+		cres, cerr := container.Reconcile(d.ContainerRunner, resolvedSpec, d.Prober, container.ReconcileOptions{
+			ConfirmReplace: d.ConfirmReplace,
+		})
+		if cerr != nil {
+			return fmt.Errorf("reconcile pix-memory container: %w", cerr)
+		}
+		res.Container = cres
+		return nil
 	})
 	if err != nil {
-		return res, fmt.Errorf("reconcile pix-memory container: %w", err)
+		return res, err
 	}
-	res.Container = cres
 
+	// The Gateway registration URL carries the SAME resolved port the
+	// container was just reconciled against — never d.ContainerSpec's
+	// possibly-stale HostPort (QA F4: registration must never disagree with
+	// what the container actually publishes).
 	if d.MCP != nil {
-		matched, err := d.MCP.EnsureMemoryRemote(envinfo.MCPMemoryName, container.MemoryMCPURL(d.ContainerSpec, d.MemoryAuthToken))
+		matched, err := d.MCP.EnsureMemoryRemote(envinfo.MCPMemoryName, container.MemoryMCPURL(resolvedSpec, d.MemoryAuthToken))
 		if err != nil {
 			return res, fmt.Errorf("register %s with the sbx Gateway: %w", envinfo.MCPMemoryName, err)
 		}

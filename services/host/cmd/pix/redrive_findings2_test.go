@@ -133,8 +133,7 @@ func TestVerifyCatalogMCPReady_NonCatalogNamesNeverProbed(t *testing.T) {
 }
 func TestReconcileOnboarding_CatalogGateLeavesFileAndConfig(t *testing.T) {
 	ws := t.TempDir()
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	t.Setenv("PIX_CONFIG", cfgPath)
+	t.Setenv("PIX_HOME", t.TempDir())
 	t.Setenv("PIX_PROFILE", "")
 	dir := filepath.Join(ws, ".pix")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

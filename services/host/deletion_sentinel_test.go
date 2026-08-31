@@ -5,10 +5,14 @@
 // use. It does not need to understand Go — it only needs the named
 // symbols/imports/dependencies to never reappear.
 //
-// What this file does NOT claim: the old XDG config-path-splitting fallback
-// in package config (the ledger's "old config XDG" item) is NOT deleted by
-// this sweep — see the handoff report for that gap. This sentinel only pins
-// what this sweep actually removed.
+// What this file does NOT claim: it does not re-prove QA F5 (the old XDG
+// config-path-splitting fallback in package config, the ledger's "old config
+// XDG" item). That gap is closed separately — config.Path/StateDir/DataDir/
+// ContextDir now resolve under PIX_HOME alone, with no PIX_CONFIG/XDG_*
+// fallback in production — and pinned by config's own tests plus
+// workflow/launch's TestFullLifecycle_EverythingResolvesUnderPIX_HOME_NoXDGEscape
+// integration test, not by this sentinel. This sentinel only pins what the
+// v2 deletion sweep itself removed.
 package main
 
 import (

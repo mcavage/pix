@@ -206,8 +206,7 @@ func TestRuntimeManifest_RosterErrorPropagates(t *testing.T) {
 // never heard of the field either way — sees byte-for-byte the same shape
 // it always has.
 func TestSynthesizeInferenceKit_NoRosterOmitsKey(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	dir, err := SynthesizeInferenceKit(testCfg(), RosterInput{})
 	if err != nil {
@@ -229,8 +228,7 @@ func TestSynthesizeInferenceKit_NoRosterOmitsKey(t *testing.T) {
 // additive v1 shape end to end: version/backends/models are unchanged, and
 // "roster" appears with exactly {main, agents{}}.
 func TestSynthesizeInferenceKit_WithRosterWritesAdditiveField(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	in := RosterInput{Main: "zai/glm-5", Agents: map[string]string{"engineer": "zai/glm-5"}, ShippedAgents: []string{"engineer"}}
 	dir, err := SynthesizeInferenceKit(testCfg(), in)

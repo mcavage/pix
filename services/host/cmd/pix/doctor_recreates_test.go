@@ -35,7 +35,7 @@ func TestDoctorRecreatesDoesNotAddAnEnvVerb(t *testing.T) {
 // `pix doctor --recreates` at count zero: no probes run, exit 0, the file
 // path named, never an error.
 func TestDoctorCmd_RecreatesFlagZeroCount(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 	var out bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &out}
 	c := &doctorCmd{Recreates: true}

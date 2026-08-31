@@ -12,12 +12,13 @@ import (
 // first `pix config set <anything>` used to freeze the then-current
 // defaults (applied in memory by Load/applyDefaults) into config.toml forever,
 
-// tempConfig points PIX_CONFIG at a fresh temp file and returns its path.
+// tempConfig points PIX_HOME at a fresh temp dir and returns config.toml's
+// path under it (the only file config.Path resolves in production now).
 func tempConfig(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "config.toml")
-	t.Setenv("PIX_CONFIG", path)
-	return path
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	return filepath.Join(home, "config.toml")
 }
 
 func rawFile(t *testing.T, path string) string {

@@ -270,19 +270,23 @@ var pkgLayer = map[string]int{
 }
 
 // l0Order breaks ties inside L0, which is the one layer with internal
-// structure: sys and config are the true bottom, and cli/hostenv are allowed to
-// build on them. Without this, "equal layers may not import each other" would
-// forbid cli from importing sys, which is nonsense.
-// Ranks, lowest first: config is a pure file format with no dependencies at
-// all; sys sits above it because sys.Real.StateDir delegates
-// to config, which is correct — the OS seam should not re-derive the launcher's
-// data layout.
+// structure: pixhome, sys, and config are the true bottom, and cli/hostenv
+// are allowed to build on them. Without this, "equal layers may not import
+// each other" would forbid cli from importing sys, which is nonsense.
+// Ranks, lowest first: pixhome is PIX_HOME resolution with no dependencies at
+// all (stdlib only, docs/design ledger item "old config XDG fallback" — QA
+// F5); config is a pure file format that now delegates its own path
+// resolution to pixhome (config.Path/StateDir/DataDir all route through
+// PIX_HOME, never a second XDG root) so it sits one rank above; sys sits
+// above that because sys.Real.StateDir delegates to config, which is
+// correct — the OS seam should not re-derive the launcher's data layout.
 var l0Order = map[string]int{
-	"config": 0,
-	"sys": 1, "launcher": 1,
-	"workspace":   2,
-	"sys/systest": 2, "hostenv": 3,
-	"cli": 4,
+	"pixhome": 0,
+	"config":  1,
+	"sys": 2, "launcher": 2,
+	"workspace":   3,
+	"sys/systest": 3, "hostenv": 4,
+	"cli": 5,
 }
 
 // drainingPackages was the ONLY exemption, and it is now EMPTY: cmd/pix was

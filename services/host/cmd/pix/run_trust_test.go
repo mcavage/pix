@@ -49,7 +49,6 @@ func trustGateDeps(t *testing.T, home string) (*cli.Deps, *bytes.Buffer, *bytes.
 	t.Helper()
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("PIX_HOME", home)
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	var out, errb bytes.Buffer
 	return &cli.Deps{Out: &out, Err: &errb}, &out, &errb
 }

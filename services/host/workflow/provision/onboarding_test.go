@@ -65,7 +65,7 @@ func fakeReadyEnv(t *testing.T, ready ...string) hostenv.Env {
 // writeProposal writes <ws>/.pix/onboarding.json against a temp config file.
 func writeProposal(t *testing.T, ws, body string) string {
 	t.Helper()
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("PIX_HOME", t.TempDir())
 	t.Setenv("PIX_PROFILE", "")
 	if err := os.MkdirAll(filepath.Join(ws, ".pix"), 0o755); err != nil {
 		t.Fatal(err)

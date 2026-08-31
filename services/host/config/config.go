@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"pix/host/pixhome"
 )
 
 // Defaults applied when a config file is absent or a field is unset.
@@ -240,29 +242,18 @@ func unknownIn(keys []toml.Key) []string {
 	return unknown
 }
 
-// configDir resolves the directory that holds config.toml and the broker token.
-// It honors $PIX_CONFIG's parent when set, then $XDG_CONFIG_HOME/pix,
-// then ~/.config/pix.
+// configDir resolves the directory that holds config.toml and the broker
+// token: PIX_HOME itself (pixhome.Dir). There is NO $PIX_CONFIG, no
+// $XDG_CONFIG_HOME, and no ~/.config/pix fallback in production — PIX_HOME
+// is the single root every Pix-owned file lives under (AGENTS.md safety
+// invariant 1; QA F5 closed the last XDG/PIX_CONFIG escape here).
 func configDir() (string, error) {
-	if p := os.Getenv("PIX_CONFIG"); p != "" {
-		return filepath.Dir(p), nil
-	}
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "pix"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "pix"), nil
+	return pixhome.Dir()
 }
 
-// Path resolves the config file path: $PIX_CONFIG override, else
-// <config-dir>/config.toml.
+// Path resolves the config file path: <PIX_HOME>/config.toml. No override
+// env var of any kind — set $PIX_HOME itself to redirect it (tests do this).
 func Path() string {
-	if p := os.Getenv("PIX_CONFIG"); p != "" {
-		return p
-	}
 	dir, err := configDir()
 	if err != nil {
 		// Fall back to a relative path; Load() will treat a missing file as
@@ -272,34 +263,25 @@ func Path() string {
 	return filepath.Join(dir, "config.toml")
 }
 
-// StateDir resolves the per-user state dir: $XDG_STATE_HOME/pix, else
-// ~/.local/state/pix. Runtime state and serve.log live here, never config.
+// StateDir resolves the per-user state dir: <PIX_HOME>/state. Runtime state
+// lives here, never config. No $XDG_STATE_HOME fallback in production.
 func StateDir() (string, error) {
-	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
-		return filepath.Join(xdg, "pix"), nil
-	}
-	home, err := os.UserHomeDir()
+	home, err := pixhome.Dir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "state", "pix"), nil
+	return filepath.Join(home, "state"), nil
 }
 
-// DataDir resolves the per-user DATA dir: $XDG_DATA_HOME/pix, else
-// ~/.local/share/pix — the durable root for the memory store, backups, routing.
+// DataDir resolves the per-user DATA dir: PIX_HOME itself — the durable root
+// for anything that is not runtime state (a hand-authored model catalog
+// override, personal context). No $XDG_DATA_HOME fallback in production.
 func DataDir() (string, error) {
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
-		return filepath.Join(xdg, "pix"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".local", "share", "pix"), nil
+	return pixhome.Dir()
 }
 
-// ContextDir is the always-on, user-authored context layer: DATA (durable
-// AGENTS.md + skills), personal — team context belongs in a pack.
+// ContextDir is the always-on, user-authored context layer: <PIX_HOME>/context
+// (durable AGENTS.md + skills), personal — team context belongs in a pack.
 func ContextDir() string { return filepath.Join(dataDirOr(), "context") }
 
 // dataDirOr returns DataDir() or, if HOME cannot be resolved, a relative
@@ -622,8 +604,8 @@ func removeValue(list *[]string, value string) bool {
 	return changed
 }
 
-// OpRefsPath resolves the absolute XDG path of op-refs.env (the 1Password refs file
-// the sbx gateway resolves via `op run --env-file`): <config-dir>/op-refs.env.
+// OpRefsPath resolves the absolute path of op-refs.env (the 1Password refs file
+// the sbx gateway resolves via `op run --env-file`): <PIX_HOME>/op-refs.env.
 func OpRefsPath() string {
 	dir, err := configDir()
 	if err != nil {

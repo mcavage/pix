@@ -53,8 +53,7 @@ func TestExternalPackage_RuntimeManifestAndSynthesizeInferenceKit(t *testing.T) 
 		t.Fatal("RuntimeManifest() produced no models from a one-backend, one-model config")
 	}
 
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 	dir, err := inference.SynthesizeInferenceKit(cfg, roster)
 	if err != nil {
 		t.Fatalf("SynthesizeInferenceKit() error = %v", err)
