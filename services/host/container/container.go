@@ -48,9 +48,18 @@ const DefaultMemoryPort = 18080
 // unrelated container someone else named "pix-memory" is never touched.
 // FingerprintLabel lets a later reconciliation compare configuration without
 // re-deriving one from docker inspect's full, unstable-shaped config.
+//
+// StackLabel and HomeLabel are the coexistence ownership labels (Wave B):
+// StackLabel records the exact stack.ID this container belongs to, HomeLabel
+// records the canonical PIX_HOME path that id was derived from. Together
+// they are the proof Reconcile checks BEFORE it will adopt, start, or
+// replace a same-name container — never the mere fact that the name (which
+// now already embeds the stack id: stack.MemoryContainerName) matches.
 const (
 	ManagedLabel     = "pix.managed"
 	FingerprintLabel = "pix.fingerprint"
+	StackLabel       = "pix.stack.id"
+	HomeLabel        = "pix.home"
 )
 
 // Spec is the exact container configuration setup wants running. Name is a
@@ -86,6 +95,19 @@ type Spec struct {
 	// secret. "" omits the mount entirely. DataDir remains the only WRITABLE
 	// mount this container ever receives; this one is always :ro.
 	AuthTokenFile string
+	// StackID is the owning stack.ID (Wave B coexistence: "one PIX_HOME = one
+	// stack") this container belongs to. Production ALWAYS sets it — there is
+	// no unscoped fallback — so Reconcile can refuse a same-name container
+	// that carries a foreign or missing stack-ownership label rather than
+	// ever adopting, starting, or replacing it. A test that does not care
+	// about stack ownership may leave it empty, which disables that check
+	// (see Reconcile's own doc comment).
+	StackID string
+	// Home is the canonical PIX_HOME path StackID was derived from — stamped
+	// alongside StackID as HomeLabel, purely as human-readable corroboration
+	// on `docker inspect`; the STACK ID is the value Reconcile actually
+	// compares.
+	Home string
 }
 
 // AuthTokenMountPath is the fixed in-container path AuthTokenFile is
@@ -120,6 +142,12 @@ func (s Spec) Fingerprint() string {
 		// readable by anything with `docker inspect` access, so the secret
 		// itself must never be derivable from it.
 		"authtokenfile=" + s.AuthTokenFile,
+		// StackID: two PIX_HOME stacks that otherwise resolved to identical
+		// image/port/data/token facts (a config coincidence, not a real
+		// collision — their container NAMES already differ under scoped
+		// naming) must still carry distinguishable fingerprints, since a
+		// fingerprint is also compared across a rename/re-derive boundary.
+		"stack=" + s.StackID,
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
 	return "sha256:" + hex.EncodeToString(sum[:])
@@ -138,6 +166,12 @@ func (s Spec) CreateArgs() []string {
 		"--label", FingerprintLabel + "=" + s.Fingerprint(),
 		"-p", fmt.Sprintf("127.0.0.1:%d:8080", s.HostPort),
 		"-v", s.DataDir + ":/data",
+	}
+	if s.StackID != "" {
+		args = append(args, "--label", StackLabel+"="+s.StackID)
+	}
+	if s.Home != "" {
+		args = append(args, "--label", HomeLabel+"="+s.Home)
 	}
 	if s.AuthTokenFile != "" {
 		// :ro — DataDir above stays this container's ONLY writable mount.
@@ -343,6 +377,15 @@ const (
 	// ReconcileOptions.ConfirmReplace declined the replace. The old container
 	// is left exactly as it was.
 	ActionRefusedReplace Action = "refused-replace"
+	// ActionRefusedForeignStack: a container already exists under this name,
+	// but Spec.StackID is set and the container's StackLabel does not match
+	// it (a different stack's id) or is absent entirely (no label at all —
+	// an unmanaged or pre-scoping container). Reconcile refuses to adopt,
+	// start, or replace it and does NOT even consult ConfirmReplace: a
+	// namespace collision between two independent PIX_HOME stacks, or a
+	// non-Pix container squatting the name, must never be resolved by a
+	// user clicking through a replace prompt.
+	ActionRefusedForeignStack Action = "refused-foreign-stack"
 )
 
 // Result reports what Reconcile did and its final probed state.
@@ -355,6 +398,10 @@ type Result struct {
 	// drift before or after the decision.
 	PreviousImage       string
 	PreviousFingerprint string
+	// ForeignStackID is set on ActionRefusedForeignStack: the OTHER stack id
+	// the existing container's StackLabel actually carries, or "" when it
+	// carries no such label at all (missing, not merely different).
+	ForeignStackID string
 	// ProbeErr is set when reconciliation itself succeeded (the container is
 	// running the right image) but the post-reconcile readiness probe did
 	// not: setup must not report ready in that case. nil on ActionCreated/
@@ -486,6 +533,25 @@ func Reconcile(runner Runner, spec Spec, prober Prober, opts ReconcileOptions) (
 	info, err := Inspect(runner, name)
 	if err != nil {
 		return Result{}, err
+	}
+
+	// Stack ownership is checked BEFORE anything else, and before
+	// ConfirmReplace is ever consulted: a same-name container that does not
+	// carry THIS Spec's own stack id is refused outright, whether it is
+	// unmanaged, managed by a different stack, or even carries an identical
+	// fingerprint by coincidence. A caller that does not care about stack
+	// ownership (StackID left empty — existing tests, mainly) never trips
+	// this: the check only activates when the caller actually asked for it.
+	if info.Exists && spec.StackID != "" {
+		if owner := info.Labels[StackLabel]; owner != spec.StackID {
+			return Result{
+				Action:              ActionRefusedForeignStack,
+				ID:                  info.ID,
+				PreviousImage:       info.Image,
+				PreviousFingerprint: info.Fingerprint(),
+				ForeignStackID:      owner,
+			}, nil
+		}
 	}
 
 	switch {

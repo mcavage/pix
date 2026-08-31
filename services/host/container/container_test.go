@@ -264,6 +264,122 @@ func TestReconcile_UnmanagedContainerIsTreatedAsMismatch(t *testing.T) {
 	}
 }
 
+// TestReconcile_RefusesForeignStackOwner_EvenWithFingerprintMatch proves the
+// ownership check runs even when the container would otherwise be adopted.
+func TestReconcile_RefusesForeignStackOwner_EvenWithFingerprintMatch(t *testing.T) {
+	spec := testSpec()
+	spec.StackID = "aaaaaaaaaaaaaaaa"
+	r := &fakeRunner{}
+	// A DIFFERENT stack's own healthy, matching, running container: same
+	// fingerprint (coincidentally identical image/port/data), but its
+	// StackLabel names another stack entirely.
+	r.script("inspect", inspectJSON("other1", spec.Image, true, map[string]string{
+		ManagedLabel: "true", FingerprintLabel: spec.Fingerprint(), StackLabel: "bbbbbbbbbbbbbbbb",
+	}), nil)
+
+	res, err := Reconcile(r, spec, nil, ReconcileOptions{ConfirmReplace: func(Info, Spec) bool {
+		t.Fatal("ConfirmReplace must never be consulted for a foreign-stack-owned container")
+		return true
+	}})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.Action != ActionRefusedForeignStack {
+		t.Fatalf("Action = %s, want refused-foreign-stack", res.Action)
+	}
+	if res.ForeignStackID != "bbbbbbbbbbbbbbbb" {
+		t.Fatalf("ForeignStackID = %q, want the other stack's id", res.ForeignStackID)
+	}
+	if res.Ready() {
+		t.Fatal("a foreign-stack refusal must never report Ready")
+	}
+	for _, c := range r.calls {
+		if c[0] != "inspect" {
+			t.Errorf("zero mutations expected, got docker %s", c[0])
+		}
+	}
+}
+
+// TestReconcile_RefusesMissingStackOwnerLabel_EvenIfConfirmReplaceSaysYes
+// closes the exact gap the coexistence design calls out: an unmanaged (or
+// pre-scoping) container squatting the scoped name must never be replaced
+// just because a confirmation prompt said yes.
+func TestReconcile_RefusesMissingStackOwnerLabel_EvenIfConfirmReplaceSaysYes(t *testing.T) {
+	spec := testSpec()
+	spec.StackID = "aaaaaaaaaaaaaaaa"
+	r := &fakeRunner{}
+	r.script("inspect", inspectJSON("stray1", spec.Image, true, map[string]string{}), nil)
+
+	res, err := Reconcile(r, spec, nil, ReconcileOptions{ConfirmReplace: func(Info, Spec) bool { return true }})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.Action != ActionRefusedForeignStack {
+		t.Fatalf("Action = %s, want refused-foreign-stack", res.Action)
+	}
+	if res.ForeignStackID != "" {
+		t.Fatalf("ForeignStackID = %q, want empty (missing label)", res.ForeignStackID)
+	}
+	for _, c := range r.calls {
+		if c[0] != "inspect" {
+			t.Errorf("zero mutations expected, got docker %s", c[0])
+		}
+	}
+}
+
+// TestReconcile_AdoptsOwnStack proves the matching-stack path still adopts
+// normally: StackID being SET is not itself a reason to refuse, only a
+// MISMATCH is.
+func TestReconcile_AdoptsOwnStack(t *testing.T) {
+	spec := testSpec()
+	spec.StackID = "aaaaaaaaaaaaaaaa"
+	r := &fakeRunner{}
+	r.script("inspect", inspectJSON("mine1", spec.Image, true, map[string]string{
+		ManagedLabel: "true", FingerprintLabel: spec.Fingerprint(), StackLabel: spec.StackID,
+	}), nil)
+	prober := &stubProber{}
+
+	res, err := Reconcile(r, spec, prober, ReconcileOptions{})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.Action != ActionAdopted {
+		t.Fatalf("Action = %s, want adopted", res.Action)
+	}
+	if !res.Ready() {
+		t.Fatal("Ready() = false")
+	}
+}
+
+// TestCreateArgs_StampsStackAndHomeLabels proves the two ownership labels
+// actually reach the create argv.
+func TestCreateArgs_StampsStackAndHomeLabels(t *testing.T) {
+	spec := testSpec()
+	spec.StackID = "aaaaaaaaaaaaaaaa"
+	spec.Home = "/home/agent/.pix"
+	args := spec.CreateArgs()
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, StackLabel+"=aaaaaaaaaaaaaaaa") {
+		t.Errorf("create argv missing stack label: %q", joined)
+	}
+	if !strings.Contains(joined, HomeLabel+"=/home/agent/.pix") {
+		t.Errorf("create argv missing home label: %q", joined)
+	}
+}
+
+// TestFingerprint_ChangesWithStackID proves StackID participates in the
+// fingerprint: two otherwise-identical specs for two different stacks must
+// never fingerprint identically.
+func TestFingerprint_ChangesWithStackID(t *testing.T) {
+	a := testSpec()
+	a.StackID = "aaaaaaaaaaaaaaaa"
+	b := testSpec()
+	b.StackID = "bbbbbbbbbbbbbbbb"
+	if a.Fingerprint() == b.Fingerprint() {
+		t.Fatal("two different stack ids must not fingerprint identically")
+	}
+}
+
 func TestReconcile_ProbeFailureIsNotReady(t *testing.T) {
 	spec := testSpec()
 	r := &fakeRunner{}

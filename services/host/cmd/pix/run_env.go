@@ -16,6 +16,7 @@ import (
 	"pix/host/envinfo"
 	"pix/host/pixhome"
 	"pix/host/sandbox"
+	"pix/host/stack"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/models"
 
@@ -166,6 +167,13 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 func builtinMCPFacts() envinfo.BuiltinMCPFacts {
 	var facts envinfo.BuiltinMCPFacts
 	if home, err := pixhome.Resolve(); err == nil {
+		// This PIX_HOME's own scoped built-in names (Wave B coexistence): a
+		// stack id that cannot be derived degrades to omitting BOTH
+		// built-ins, never a bare legacy-name fallback.
+		if id, ierr := stack.ID(home.Home); ierr == nil {
+			facts.MemoryName, _ = stack.MCPMemoryName(id)
+			facts.SessionName, _ = stack.MCPSessionName(id)
+		}
 		// Read-only: a launch never GENERATES the token (that is `pix setup`'s
 		// job alone, container.EnsureMemoryAuthToken) — a missing token here
 		// degrades the same way an unresolvable session command already does,

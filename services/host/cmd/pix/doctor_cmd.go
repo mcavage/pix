@@ -13,6 +13,7 @@ import (
 	"pix/host/container"
 	"pix/host/health"
 	"pix/host/pixhome"
+	"pix/host/stack"
 	"pix/host/workflow/doctor"
 	"pix/host/workspace"
 )
@@ -55,6 +56,14 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 		if hc, cerr := config.LoadFrom(config.PathAt(home.Home)); cerr == nil {
 			defaultEnv = hc.DefaultEnvironment
 		}
+		// MCPServerName is THIS PIX_HOME's own scoped pix-memory MCP name
+		// (Wave B coexistence) — wired even though MCPLister stays unset
+		// below, so the probe's own name is never wrong the day a lister
+		// adapter is added.
+		var mcpServerName string
+		if id, ierr := stack.ID(home.Home); ierr == nil {
+			mcpServerName, _ = stack.MCPMemoryName(id)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), health.DefaultBudget)
 		snap := doctor.CheckHome(ctx, doctor.HomeDeps{
 			Home:               home.Home,
@@ -63,6 +72,7 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 			ContainerSpec:      spec,
 			Prober:             httpProber{},
 			DefaultEnvironment: defaultEnv,
+			MCPServerName:      mcpServerName,
 			// MCPLister is deliberately unset: sbx has no machine-readable MCP
 			// listing (homeadapters.go's own doc comment), so this probe
 			// reports StatusUnknown rather than guessing a URL match.

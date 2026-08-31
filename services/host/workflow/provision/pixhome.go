@@ -4,9 +4,9 @@ import (
 	"fmt"
 
 	"pix/host/container"
-	"pix/host/envinfo"
 	"pix/host/pixhome"
 	"pix/host/release"
+	"pix/host/stack"
 	"pix/host/sys"
 )
 
@@ -199,6 +199,18 @@ func Setup(d Deps) (Result, error) {
 		res.DefaultEnvCreated = created
 	}
 
+	// stackID is THIS PIX_HOME's own coexistence identity (Wave B: "one
+	// PIX_HOME = one stack") — derived here, once, and used for BOTH the
+	// container's ownership labels and the reserved MCP name Setup
+	// registers, so the two can never independently drift onto different
+	// scoping. There is no unscoped fallback: a home whose id cannot be
+	// derived refuses rather than silently reconciling/registering under a
+	// bare legacy name.
+	stackID, err := stack.ID(d.Home.Home)
+	if err != nil {
+		return res, fmt.Errorf("derive this PIX_HOME's stack id: %w", err)
+	}
+
 	// The whole generate-token, allocate-port, reconcile-container sequence
 	// runs under ONE lock (QA F4: "hold the setup lock through container
 	// create/reconcile"; round-4 security: the auth token is generated in
@@ -207,8 +219,13 @@ func Setup(d Deps) (Result, error) {
 	// against). d.ContainerSpec's own HostPort is overridden with whatever
 	// this PIX_HOME actually has allocated — never a value the caller
 	// merely guessed at (homeadapters.go's homeContainerSpec reads, never
-	// allocates).
+	// allocates). StackID/Home are ALWAYS stamped here too, authoritatively,
+	// regardless of what the caller's ContainerSpec already carried: Setup is
+	// the one place that actually creates/reconciles this container, so it
+	// is the one place that must guarantee the ownership labels are correct.
 	resolvedSpec := d.ContainerSpec
+	resolvedSpec.StackID = stackID
+	resolvedSpec.Home = d.Home.Home
 	var token string
 	retries := d.MaxPortRetries
 	if retries <= 0 {
@@ -263,9 +280,13 @@ func Setup(d Deps) (Result, error) {
 	// what the container actually publishes), and the SAME token generated
 	// under the lock above.
 	if d.MCP != nil {
-		state, err := d.MCP.EnsureMemoryRemote(envinfo.MCPMemoryName, container.MemoryMCPURL(resolvedSpec, token))
+		memoryName, nerr := stack.MCPMemoryName(stackID)
+		if nerr != nil {
+			return res, fmt.Errorf("derive this PIX_HOME's scoped pix-memory MCP name: %w", nerr)
+		}
+		state, err := d.MCP.EnsureMemoryRemote(memoryName, container.MemoryMCPURL(resolvedSpec, token))
 		if err != nil {
-			return res, fmt.Errorf("register %s with the sbx Gateway: %w", envinfo.MCPMemoryName, err)
+			return res, fmt.Errorf("register %s with the sbx Gateway: %w", memoryName, err)
 		}
 		res.MCPRegistered = true
 		res.MCPState = state

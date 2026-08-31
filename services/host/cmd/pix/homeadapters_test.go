@@ -11,6 +11,7 @@ import (
 	"pix/host/pixhome"
 	"pix/host/release"
 	"pix/host/workflow/provision"
+	"pix/host/workflow/reset"
 )
 
 func TestHomeContainerSpecUsesCanonicalReleaseImageReference(t *testing.T) {
@@ -22,6 +23,57 @@ func TestHomeContainerSpecUsesCanonicalReleaseImageReference(t *testing.T) {
 	}
 	if got, want := homeContainerSpec(home).Image, provision.MemoryImageRef(manifest); got != want {
 		t.Fatalf("container image = %q, want canonical release reference %q", got, want)
+	}
+}
+
+// TestHomeContainerSpec_TwoHomesYieldDistinctScopedNames is the Wave B U4
+// TDD anchor at the actual production caller: two different PIX_HOME roots
+// must resolve to two different, non-legacy pix-memory container names.
+func TestHomeContainerSpec_TwoHomesYieldDistinctScopedNames(t *testing.T) {
+	homeA := pixhome.New(t.TempDir())
+	homeB := pixhome.New(t.TempDir())
+	nameA := homeContainerSpec(homeA).ContainerName
+	nameB := homeContainerSpec(homeB).ContainerName
+	if nameA == "" || nameB == "" {
+		t.Fatalf("expected non-empty scoped names, got %q and %q", nameA, nameB)
+	}
+	if nameA == nameB {
+		t.Fatalf("two different PIX_HOME roots must yield distinct container names, both got %q", nameA)
+	}
+	if nameA == container.Name || nameB == container.Name {
+		t.Fatalf("a scoped container name must never equal the bare legacy name %q", container.Name)
+	}
+	if !strings.HasPrefix(nameA, "pix-memory-") || !strings.HasPrefix(nameB, "pix-memory-") {
+		t.Fatalf("expected pix-memory-<stack id> shaped names, got %q and %q", nameA, nameB)
+	}
+	// StackID/Home must be stamped on the spec too, since Reconcile's foreign-
+	// owner check reads them, not just the ContainerName string.
+	if homeContainerSpec(homeA).StackID == "" || homeContainerSpec(homeA).StackID == homeContainerSpec(homeB).StackID {
+		t.Fatalf("expected distinct, non-empty StackID per home")
+	}
+}
+
+// TestBuiltinMCPFactsUsesScopedNames proves run_env.go's own builtinMCPFacts
+// resolves THIS PIX_HOME's own scoped names, never a bare legacy fallback,
+// and that two different PIX_HOMEs diverge exactly the way
+// TestHomeContainerSpec_TwoHomesYieldDistinctScopedNames proves for the
+// container name.
+func TestBuiltinMCPFactsUsesScopedNames(t *testing.T) {
+	homeA := t.TempDir()
+	t.Setenv("PIX_HOME", homeA)
+	factsA := builtinMCPFacts()
+	if factsA.MemoryName == "" || factsA.SessionName == "" {
+		t.Fatalf("expected resolved scoped names, got %+v", factsA)
+	}
+	if factsA.MemoryName == "pix-memory" || factsA.SessionName == "pix-session" {
+		t.Fatalf("builtinMCPFacts must never fall back to the bare legacy names, got %+v", factsA)
+	}
+
+	homeB := t.TempDir()
+	t.Setenv("PIX_HOME", homeB)
+	factsB := builtinMCPFacts()
+	if factsA.MemoryName == factsB.MemoryName || factsA.SessionName == factsB.SessionName {
+		t.Fatalf("two different PIX_HOME roots must diverge, both got %+v", factsA)
 	}
 }
 
@@ -60,6 +112,79 @@ printf '%s\n' "$@" > "$d/argv"
 	want := []string{"mcp", "add", "pix-memory", "--url", endpoint, "--skip-ssrf-check", "--skip_auth"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sbx argv = %#v, want %#v", got, want)
+	}
+}
+
+// TestSbxMemoryRegistrarRefusesMismatchedEndpointForSameScopedName proves
+// the Wave B U4 requirement: a same scoped name already registered at a
+// DIFFERENT endpoint refuses rather than being reported as present.
+func TestSbxMemoryRegistrarRefusesMismatchedEndpointForSameScopedName(t *testing.T) {
+	const scopedName = "pix-memory-0123456789abcdef"
+	installSbxRegistrarFixture(t, `
+if [ "$1 $2" = "mcp ls" ]; then echo "`+scopedName+` remote"; exit 0; fi
+if [ "$1 $2" = "mcp inspect" ]; then echo '{"url":"http://127.0.0.1:9999/mcp"}'; exit 0; fi
+exit 1
+`)
+	_, err := (sbxMemoryRegistrar{}).EnsureMemoryRemote(scopedName, "http://127.0.0.1:18080/mcp")
+	if err == nil {
+		t.Fatal("expected a refusal for a mismatched endpoint under the same scoped name")
+	}
+	if !strings.Contains(err.Error(), scopedName) || !strings.Contains(err.Error(), "different endpoint") {
+		t.Fatalf("error = %q, want it to name the scoped name and the mismatch", err.Error())
+	}
+}
+
+// TestSbxMemoryRegistrarPresentWhenEndpointMatches proves a same scoped name
+// registered at the SAME endpoint is reported present (not re-added, not
+// refused).
+func TestSbxMemoryRegistrarPresentWhenEndpointMatches(t *testing.T) {
+	const scopedName = "pix-memory-0123456789abcdef"
+	installSbxRegistrarFixture(t, `
+if [ "$1 $2" = "mcp ls" ]; then echo "`+scopedName+` remote"; exit 0; fi
+if [ "$1 $2" = "mcp inspect" ]; then echo '{"url":"http://127.0.0.1:18080/mcp"}'; exit 0; fi
+exit 1
+`)
+	state, err := (sbxMemoryRegistrar{}).EnsureMemoryRemote(scopedName, "http://127.0.0.1:18080/mcp")
+	if err != nil {
+		t.Fatalf("EnsureMemoryRemote: %v", err)
+	}
+	if state != provision.MCPRegistrationPresent {
+		t.Fatalf("state = %v, want present", state)
+	}
+}
+
+// TestSbxMemoryDeregistrar_RemovesOnlyWhenPresent proves the reset-side
+// production adapter proves presence before ever calling `mcp rm`, and
+// reports absence honestly rather than guessing.
+func TestSbxMemoryDeregistrar_RemovesOnlyWhenPresent(t *testing.T) {
+	const scopedName = "pix-memory-0123456789abcdef"
+	dir := installSbxRegistrarFixture(t, `
+if [ "$1 $2" = "mcp ls" ]; then echo "`+scopedName+` remote"; exit 0; fi
+if [ "$1 $2" = "mcp rm" ]; then printf '%s\n' "$@" > "$d/rmargv"; exit 0; fi
+exit 1
+`)
+	state, err := (sbxMemoryDeregistrar{}).RemoveIfRegistered(scopedName)
+	if err != nil {
+		t.Fatalf("RemoveIfRegistered: %v", err)
+	}
+	if state != reset.MCPRemovalRemoved {
+		t.Fatalf("state = %v, want Removed", state)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "rmargv")); statErr != nil {
+		t.Fatal("expected `sbx mcp rm` to have run")
+	}
+
+	// A name absent from `mcp ls` must never reach `mcp rm` at all.
+	installSbxRegistrarFixture(t, `
+if [ "$1 $2" = "mcp ls" ]; then echo unrelated-name; exit 0; fi
+exit 1
+`)
+	state, err = (sbxMemoryDeregistrar{}).RemoveIfRegistered(scopedName)
+	if err != nil {
+		t.Fatalf("RemoveIfRegistered: %v", err)
+	}
+	if state != reset.MCPRemovalAbsent {
+		t.Fatalf("state = %v, want Absent", state)
 	}
 }
 

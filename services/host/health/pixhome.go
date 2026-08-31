@@ -129,9 +129,13 @@ func (MemoryContainerProbe) Name() string   { return "pix-memory" }
 func (MemoryContainerProbe) Required() bool { return true }
 
 func (p MemoryContainerProbe) Check(ctx context.Context) Result {
-	name := p.Spec.ContainerName
-	if strings.TrimSpace(name) == "" {
-		name = container.Name
+	name := strings.TrimSpace(p.Spec.ContainerName)
+	if name == "" {
+		// No unscoped fallback: an empty ContainerName means this PIX_HOME's
+		// stack id could not be derived (homeContainerSpec's own posture), not
+		// "assume the bare legacy pix-memory" — that could probe a totally
+		// unrelated stack's container.
+		return Result{Status: StatusUnknown, Detail: "no container name configured"}
 	}
 	info, err := container.Inspect(p.Runner, name)
 	if err != nil {
@@ -179,9 +183,10 @@ func (MemoryMCPRegistrationProbe) Name() string   { return "pix-memory-mcp" }
 func (MemoryMCPRegistrationProbe) Required() bool { return true }
 
 func (p MemoryMCPRegistrationProbe) Check(ctx context.Context) Result {
-	name := p.ServerName
-	if strings.TrimSpace(name) == "" {
-		name = container.Name
+	name := strings.TrimSpace(p.ServerName)
+	if name == "" {
+		// No unscoped fallback — see MemoryContainerProbe's own comment.
+		return Result{Status: StatusUnknown, Detail: "no MCP server name configured"}
 	}
 	if p.Lister == nil {
 		return Result{Status: StatusUnknown, Detail: "no sbx MCP lister configured"}
