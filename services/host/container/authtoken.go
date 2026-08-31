@@ -122,3 +122,33 @@ func MemoryMCPURL(spec Spec, token string) string {
 	}
 	return u
 }
+
+// RedactedTokenPlaceholder is what a DISPLAY-ONLY renderer substitutes for
+// the real bearer token value in a printed MemoryMCPURL "?token=" query
+// parameter (L1, security re-review: a credential must never reach a
+// terminal, a diagnostic, or a log). It is deliberately NOT a valid token
+// shape (no hex digest could equal this literal), so a golden/failure diff
+// that ever shows the real value instead is unmistakable at a glance.
+const RedactedTokenPlaceholder = "REDACTED"
+
+// RedactMemoryURLToken replaces a "?token=<value>" query parameter's VALUE
+// with RedactedTokenPlaceholder, leaving every other byte of u — scheme,
+// host, port, path, and the "token=" key itself — untouched, so a reviewer
+// can still see THAT a credential is attached without ever seeing it. A url
+// with no such parameter (no token generated yet, or an unrelated URL) is
+// returned unchanged. This is presentation-only: nothing that composes a
+// real launch's effective document ever calls it, so the canonical
+// executable bytes `sbx env create` reads always carry the real token.
+func RedactMemoryURLToken(u string) string {
+	const key = "token="
+	idx := strings.Index(u, key)
+	if idx < 0 {
+		return u
+	}
+	start := idx + len(key)
+	end := start
+	for end < len(u) && u[end] != '&' {
+		end++
+	}
+	return u[:start] + RedactedTokenPlaceholder + u[end:]
+}

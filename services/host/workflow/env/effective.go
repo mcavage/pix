@@ -156,13 +156,38 @@ func ComputeEffective(home pixhome.Paths, explicit string) (envinfo.RuntimeFacts
 }
 
 // RenderEffectiveDocument is `pix env [NAME] --effective`'s ONE call site
-// into envinfo.RenderEffective (F17, this file's own doc comment).
+// into envinfo.RenderEffective (F17, this file's own doc comment). It is a
+// DISPLAY path only — env_cmd.go's --effective is its one caller, and it
+// writes the returned bytes straight to a terminal/pipe; a real launch
+// composes its own effective document through a completely separate call
+// chain (workflow/launch's RenderEffectiveEnvironment) and never reads
+// these bytes. L1 (security re-review): the pix-memory bearer token must
+// never reach that display, so the pix-memory server's URL is redacted at
+// its token VALUE only, after ComputeEffective has resolved every fact
+// (including the real token) exactly as a real launch would — the
+// redaction is presentation-only, applied to the copy this function
+// returns, never to what any other caller computes or persists.
 func RenderEffectiveDocument(home pixhome.Paths, explicit string) ([]byte, error) {
 	facts, err := ComputeEffective(home, explicit)
 	if err != nil {
 		return nil, err
 	}
+	redactBuiltinMemoryToken(&facts)
 	return envinfo.RenderEffective(facts)
+}
+
+// redactBuiltinMemoryToken replaces the reserved pix-memory MCP server's
+// URL with a token-redacted copy, in place, on facts.MCPServers — the ONE
+// entry WithBuiltinMCPServers ever names envinfo.MCPMemoryName. Every other
+// server (an authored environment's own) is left untouched: this function
+// redacts Pix's OWN generated credential, never anything a reviewer
+// authored themselves and can already see in their own file.
+func redactBuiltinMemoryToken(facts *envinfo.RuntimeFacts) {
+	for i := range facts.MCPServers {
+		if facts.MCPServers[i].Name == envinfo.MCPMemoryName {
+			facts.MCPServers[i].URL = container.RedactMemoryURLToken(facts.MCPServers[i].URL)
+		}
+	}
 }
 
 // builtinMCPFacts resolves docs/design/pix-v2-architecture.md §10's two

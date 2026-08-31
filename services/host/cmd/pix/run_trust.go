@@ -24,16 +24,34 @@
 //     env trust` would, so this environment is trusted on every subsequent
 //     run (interactive or not) until its BOM fingerprint changes again.
 //
-// runLaunchAttempt calls this TWICE: once immediately after the environment
-// is resolved (fail fast, before any config load, provider-key probe, or
-// sbx side effect), and again immediately before the actual sbx mutation
-// (RunSession, which performs the real `sbx env create`/`sbx exec`) —
-// recomputed fresh each time rather than trusting the first call's answer,
-// closing the TOCTOU window where the environment directory changes (a
-// symlink swap, a concurrent edit under ~/.pix/envs) between the two
-// checks. The second call is cheap: an already-trusted environment (the
-// overwhelmingly common case, including immediately after the first call
-// accepted it) returns instantly with no re-prompt.
+// M1 (security re-review, TOCTOU): the ORIGINAL two-call shape resolved the
+// environment from disk AGAIN on every call (name in, a fresh
+// nativeenv.ResolveIn + LoadHome out), so the two checks — one right after
+// selection, one immediately before the actual `sbx env create`/`sbx exec`
+// mutation — could each observe a DIFFERENT on-disk environment. An
+// attacker able to write the environment directory between the two calls
+// (a symlink repoint, a concurrent edit under ~/.pix/envs) could present a
+// malicious `.sbxenv.yaml` at the moment runLaunchAttempt actually COMPILES
+// the effective document and resolves it (T0), then swap in a byte-for-byte
+// BENIGN, already-trusted environment before the second gate re-reads disk
+// (T1) — the second call would see only the benign T1 content, find it
+// trusted, and wave the T0-compiled, already-malicious effective document
+// through to `sbx env create`.
+//
+// The fix: resolveEnvTrustSnapshot reads the environment from disk EXACTLY
+// ONCE per launch attempt (folded into resolveRunEnvironment, run_env.go),
+// producing an envTrustSnapshot whose bom/fingerprint are bound to the
+// SAME in-memory *nativeenv.Environment (bomForLoaded) that
+// runEffectiveInput/RenderEffectiveEnvironment compiles the actual launch
+// from — never re-derived from a second LoadHome. Both gate calls take
+// that ONE snapshot. The second call's checkDrift re-reads the environment
+// directory (the one remaining legitimate disk read: proving nothing
+// changed between resolution and mutation), but it exists ONLY to compare
+// that fresh read's digest against the SNAPSHOT's own fingerprint — a
+// mismatch refuses unconditionally, regardless of whether the fresh
+// content would itself be independently trusted. The fresh read's own
+// trust conclusion is never consulted; only its identity against the
+// snapshot is.
 package main
 
 import (
@@ -49,28 +67,64 @@ import (
 	nativeenv "pix/host/workflow/env"
 )
 
-// gateEnvTrust is the whole fail-closed decision. name is the SELECTED
-// environment's name ("" for D17 none). It never resolves --env itself —
-// the caller already did that — so a name here is always the exact
-// registered environment this launch is about to use.
-func gateEnvTrust(d *cli.Deps, name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
+// envTrustSnapshot is the exact in-memory environment state a launch
+// resolved ONCE (resolveEnvTrustSnapshot, called from resolveRunEnvironment
+// before anything else reads the environment). Every trust decision this
+// launch attempt makes binds to snap.fingerprint — never a fresh,
+// independently re-derived one — so a benign swap-in after this point
+// cannot launder an already-captured malicious snapshot into `sbx env
+// create`, and a malicious swap-in after an accepted benign snapshot
+// cannot launch under that acceptance either. A zero value (sel.Name == "")
+// means D17 `none`: nothing was selected, so every gate call on it is a
+// no-op.
+type envTrustSnapshot struct {
+	home        pixhome.Paths
+	sel         nativeenv.Selected
+	bom         nativeenv.BillOfMaterials
+	fingerprint string
+}
+
+// resolveEnvTrustSnapshot loads name's CURRENT bill of materials and
+// fingerprint from ITS OWN already-resolved *nativeenv.Environment
+// (loaded) — the SAME value resolveRunEnvironment hands to
+// runEffectiveInput to compile this launch's actual effective document.
+// This is the ONE disk read gateEnvTrust's decisions are bound to; nothing
+// past this point re-derives the fingerprint independently.
+func resolveEnvTrustSnapshot(home pixhome.Paths, sel nativeenv.Selected, loaded *nativeenv.Environment) (envTrustSnapshot, error) {
+	if sel.Name == "" {
+		return envTrustSnapshot{}, nil
+	}
+	bom, fp, err := bomForLoaded(loaded)
+	if err != nil {
+		return envTrustSnapshot{}, err
+	}
+	return envTrustSnapshot{home: home, sel: sel, bom: bom, fingerprint: fp}, nil
+}
+
+// gateEnvTrust is the whole fail-closed decision, bound to snap — the ONE
+// in-memory selection this launch attempt resolved. checkDrift is true
+// only for the SECOND, immediately-pre-mutation call: it re-reads the
+// environment directory fresh and refuses outright if that fresh
+// fingerprint no longer matches snap.fingerprint (identity/digest compare
+// against the snapshot), rather than trusting whatever the fresh read
+// happens to say about ITSELF.
+func gateEnvTrust(d *cli.Deps, snap envTrustSnapshot, checkDrift bool) error {
+	if snap.sel.Name == "" {
 		return nil
 	}
-	home, err := pixhome.Resolve()
-	if err != nil {
-		return err
+	name := snap.sel.Name
+	if checkDrift {
+		_, freshFP, err := environmentBoM(snap.sel)
+		if err != nil {
+			return fmt.Errorf("environment %q: could not verify it is unchanged since being resolved for this launch: %w", name, err)
+		}
+		if freshFP != snap.fingerprint {
+			return fmt.Errorf(
+				"environment %q changed on disk after this launch resolved it (fingerprint mismatch); refusing rather than re-evaluating the new content mid-launch; re-run `pix run`",
+				name)
+		}
 	}
-	sel, err := nativeenv.ResolveIn(home, name)
-	if err != nil {
-		return err
-	}
-	trusted, fp, bomErr := trustAccepted(home, sel)
-	if bomErr != nil {
-		return fmt.Errorf("environment %q: could not verify trust: %w", name, bomErr)
-	}
-	if trusted {
+	if trustAcceptedForFingerprint(snap.home, snap.sel, snap.fingerprint) {
 		return nil
 	}
 	if !d.Interactive {
@@ -79,19 +133,9 @@ func gateEnvTrust(d *cli.Deps, name string) error {
 			name, name)
 	}
 
-	bom, fp2, err := environmentBoM(sel)
-	if err != nil {
-		return fmt.Errorf("environment %q: could not verify trust: %w", name, err)
-	}
-	// fp2 recomputes the SAME fingerprint trustAccepted just derived; both
-	// calls read the identical environment state a moment apart, so they
-	// agree barring a concurrent edit — in which case fp2 (freshest) is what
-	// gets recorded below, never the earlier fp.
-	fp = fp2
-
 	fmt.Fprintln(d.Err, "pix run: this environment has not been reviewed.")
-	renderTrustBill(d.Err, sel.Name, bom, false)
-	fmt.Fprintf(d.Err, "  fingerprint: %s\n\n", fp)
+	renderTrustBill(d.Err, name, snap.bom, false)
+	fmt.Fprintf(d.Err, "  fingerprint: %s\n\n", snap.fingerprint)
 	fmt.Fprint(d.Err, "Accept this host-execution footprint? [y/N] ")
 	reader := bufio.NewReader(d.In)
 	line, _ := reader.ReadString('\n')
@@ -99,23 +143,23 @@ func gateEnvTrust(d *cli.Deps, name string) error {
 		return fmt.Errorf("not accepted; run `pix env trust %s` when ready, or launch with a different --env", name)
 	}
 
-	if err := os.MkdirAll(home.StateTrustEnvironments, 0o700); err != nil {
+	if err := os.MkdirAll(snap.home.StateTrustEnvironments, 0o700); err != nil {
 		return err
 	}
-	rec := envTrustRecord{Root: sel.Root, Fingerprint: fp, AcceptedAt: time.Now().UTC().Format(time.RFC3339)}
+	rec := envTrustRecord{Root: snap.sel.Root, Fingerprint: snap.fingerprint, AcceptedAt: time.Now().UTC().Format(time.RFC3339)}
 	b, _ := json.MarshalIndent(rec, "", "  ")
-	if err := os.WriteFile(trustRecordPath(home, sel.Name), b, 0o600); err != nil {
+	if err := os.WriteFile(trustRecordPath(snap.home, name), b, 0o600); err != nil {
 		return err
 	}
-	fmt.Fprintf(d.Err, "pix run: environment %q trusted.\n", sel.Name)
+	fmt.Fprintf(d.Err, "pix run: environment %q trusted.\n", name)
 	return nil
 }
 
 // runTrustGate wraps gateEnvTrust in run's own fail-closed exit shape: a
 // SilentError so the root exit-code mapper never re-prefixes or re-renders
 // an already-complete message.
-func runTrustGate(d *cli.Deps, name string) error {
-	if terr := gateEnvTrust(d, name); terr != nil {
+func runTrustGate(d *cli.Deps, snap envTrustSnapshot, checkDrift bool) error {
+	if terr := gateEnvTrust(d, snap, checkDrift); terr != nil {
 		fmt.Fprintln(d.Err, "pix run: "+terr.Error())
 		return cli.SilentError{Code: 1}
 	}

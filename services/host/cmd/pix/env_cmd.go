@@ -290,6 +290,18 @@ func environmentBoM(sel nativeenv.Selected) (nativeenv.BillOfMaterials, string, 
 	if err != nil {
 		return nativeenv.BillOfMaterials{}, "", err
 	}
+	return bomForLoaded(loaded)
+}
+
+// bomForLoaded is environmentBoM's other half: a caller that ALREADY holds
+// an *nativeenv.Environment (run_trust.go's launch-time snapshot, resolved
+// exactly once) computes its BOM/fingerprint from THAT in-memory value —
+// never a second LoadHome re-read of the same environment directory. This
+// is the M1 security re-review fix (trust TOCTOU): the fingerprint a gate
+// decision binds to must be the exact bytes/tree already compiled into the
+// launch, not a fresh, independently-re-read copy that could disagree with
+// it.
+func bomForLoaded(loaded *nativeenv.Environment) (nativeenv.BillOfMaterials, string, error) {
 	bom, err := nativeenv.ComputeBoM(loaded, nil, nil)
 	if err != nil {
 		return nativeenv.BillOfMaterials{}, "", err
@@ -315,15 +327,29 @@ func trustAccepted(home pixhome.Paths, sel nativeenv.Selected) (bool, string, er
 	if err != nil {
 		return false, "", err
 	}
+	return trustAcceptedForFingerprint(home, sel, fp), fp, nil
+}
+
+// trustAcceptedForFingerprint reports whether fp — the caller's OWN,
+// already-computed fingerprint for sel — matches sel's recorded
+// acceptance. Unlike trustAccepted above (the env_cmd.go list/show/trust
+// path, which is not part of a launch's TOCTOU-sensitive gate and may
+// freely compute its own fresh fingerprint), this NEVER recomputes the
+// BOM/fingerprint itself: the caller supplies it, so a launch's trust
+// decision always compares the ONE in-memory fingerprint it resolved once
+// (run_trust.go's envTrustSnapshot) against the accepted record — never a
+// second, independent disk read standing in as "the" fingerprint (M1,
+// security re-review: trust TOCTOU).
+func trustAcceptedForFingerprint(home pixhome.Paths, sel nativeenv.Selected, fp string) bool {
 	data, err := os.ReadFile(trustRecordPath(home, sel.Name))
 	if err != nil {
-		return false, fp, nil
+		return false
 	}
 	var rec envTrustRecord
 	if json.Unmarshal(data, &rec) != nil {
-		return false, fp, nil
+		return false
 	}
-	return rec.Fingerprint == fp && rec.Root == sel.Root, fp, nil
+	return rec.Fingerprint == fp && rec.Root == sel.Root
 }
 
 type envTrustCmd struct {

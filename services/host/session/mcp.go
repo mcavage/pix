@@ -41,11 +41,16 @@ type ServerContext struct {
 type Spawner func(ctx ServerContext, treeID, nodeID string, req ChildRequest) error
 
 // Server is the stdio MCP server. NewID is overridable so a test can pin a
-// deterministic node id instead of reading crypto/rand.
+// deterministic node id instead of reading crypto/rand. Limits is L2's
+// (security re-review) delegate cap, enforced atomically per tree
+// (Store.WithTreeLock/CheckDelegateCaps) — NewServer sets it to
+// DefaultLimits so a caller that never touches this field still gets a
+// bounded server, never an accidentally-unbounded one.
 type Server struct {
 	Ctx    ServerContext
 	Spawn  Spawner
 	NewID  func() (string, error)
+	Limits Limits
 	in     io.Reader
 	out    io.Writer
 	outMu  sync.Mutex
@@ -53,7 +58,7 @@ type Server struct {
 }
 
 func NewServer(ctx ServerContext, spawn Spawner, in io.Reader, out io.Writer) *Server {
-	return &Server{Ctx: ctx, Spawn: spawn, NewID: NewID, in: in, out: out}
+	return &Server{Ctx: ctx, Spawn: spawn, NewID: NewID, Limits: DefaultLimits(), in: in, out: out}
 }
 
 const toolName = "pix_session_delegate"
@@ -197,27 +202,53 @@ func (s *Server) Delegate(raw json.RawMessage) (*DelegateResult, error) {
 	if err := CheckTarget(Target(req.Target)); err != nil {
 		return nil, err
 	}
-	nodeID, err := s.NewID()
-	if err != nil {
-		return nil, fmt.Errorf("pix: session delegate could not allocate a node id: %w", err)
-	}
 	store := Store{Root: s.Ctx.StoreRoot}
-	node := Node{
-		ID:         nodeID,
-		Parent:     s.Ctx.ParentID,
-		Model:      req.Model,
-		Target:     Target(req.Target),
-		Sandbox:    s.Ctx.Sandbox,
-		InstanceID: s.Ctx.InstanceID,
-		State:      StateStarting,
+	limits := s.Limits
+	if limits == (Limits{}) {
+		limits = DefaultLimits()
 	}
-	if err := store.PutNode(s.Ctx.TreeID, node); err != nil {
-		return nil, fmt.Errorf("pix: session delegate could not record the child node: %w", err)
+	// L2 (security re-review): the cap check and the node write that
+	// reserves the slot it approves run under ONE per-tree lock, so a
+	// concurrent delegate call against the SAME tree is refused before
+	// EITHER spawns or holds anything, never a race where both pass the
+	// same check.
+	var nodeID string
+	if lerr := store.WithTreeLock(s.Ctx.TreeID, func() error {
+		if cerr := store.CheckDelegateCaps(s.Ctx.TreeID, s.Ctx.ParentID, limits); cerr != nil {
+			return cerr
+		}
+		id, nerr := s.NewID()
+		if nerr != nil {
+			return fmt.Errorf("pix: session delegate could not allocate a node id: %w", nerr)
+		}
+		node := Node{
+			ID:         id,
+			Parent:     s.Ctx.ParentID,
+			Model:      req.Model,
+			Target:     Target(req.Target),
+			Sandbox:    s.Ctx.Sandbox,
+			InstanceID: s.Ctx.InstanceID,
+			State:      StateStarting,
+		}
+		if perr := store.PutNode(s.Ctx.TreeID, node); perr != nil {
+			return fmt.Errorf("pix: session delegate could not record the child node: %w", perr)
+		}
+		nodeID = id
+		return nil
+	}); lerr != nil {
+		return nil, lerr
 	}
 	if s.Spawn != nil {
 		if err := s.Spawn(s.Ctx, s.Ctx.TreeID, nodeID, req); err != nil {
-			node.State = StateFailed
-			_ = store.PutNode(s.Ctx.TreeID, node)
+			// Marking the reserving node Failed (a terminal state) is what
+			// frees its live-child slot immediately — LiveNodeCount only
+			// counts non-terminal nodes — rather than holding it until some
+			// later cleanup notices the spawn never happened.
+			failed := Node{
+				ID: nodeID, Parent: s.Ctx.ParentID, Model: req.Model, Target: Target(req.Target),
+				Sandbox: s.Ctx.Sandbox, InstanceID: s.Ctx.InstanceID, State: StateFailed,
+			}
+			_ = store.PutNode(s.Ctx.TreeID, failed)
 			return nil, fmt.Errorf("pix: session delegate could not start the child runner: %w", err)
 		}
 	}

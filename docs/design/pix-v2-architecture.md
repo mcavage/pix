@@ -679,8 +679,26 @@ The PR is ready to merge only after one supported host proves:
    used because neither `.sbxenv.yaml`'s `mcp.servers` schema nor `sbx mcp
    add` can express a custom header (envinfo.MCPServer is name/url/command/
    args only). The token must never appear in `pix env trust`'s bill of
-   materials, `pix env show --json`'s output, `docker inspect`'s `Config.Env`,
-   or any `pix` log line.
+   materials, `pix env show --json`'s output, **`pix env show --effective`'s
+   output (L1, security re-review: the display path redacts the token
+   query-parameter VALUE to a fixed marker — workflow/env's
+   RenderEffectiveDocument/redactBuiltinMemoryToken — while the canonical
+   effective document a real `sbx env create` actually reads still carries
+   the real value; this is presentation-only, never applied to executable
+   bytes)**, `docker inspect`'s `Config.Env`, or any `pix` log line.
+
+   **Accepted upstream limitation (host UAT risk, not a code defect):** the
+   token DOES reach `sbx mcp add`'s own argv and whatever `sbx mcp ls`/the
+   Gateway's own registry storage retains, because registering a
+   loopback-URL-credentialed MCP server with sbx has no header-bearing
+   alternative (same schema limit as above) and sbx's own registry is a
+   host-global, same-user store outside Pix's control. Any other local
+   process running as the SAME host user could in principle read it back
+   out of that store or a process listing at the moment of registration.
+   Host UAT must confirm this is an accepted, documented risk (not
+   silently rediscovered later) rather than attempt to "fix" it inside
+   Pix: the fix would require an upstream sbx capability (a header-bearing
+   MCP declaration, or per-registration ACLs) this project does not own.
 4. Pi lists and calls all memory tools;
 5. deterministic recall and capture hooks call MCP through a second Gateway
    client connection;

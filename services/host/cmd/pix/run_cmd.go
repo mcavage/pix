@@ -312,7 +312,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// to no default — a typo silently launching the wrong credential set is the
 	// worst outcome this feature can produce. Nothing on this path writes
 	// config: `--env` selects for THIS run only (AC-22).
-	selection, serr := resolveRunEnvironment(o.Env)
+	selection, trustSnap, serr := resolveRunEnvironment(o.Env)
 	if serr != nil {
 		fmt.Fprintln(d.Err, strings.TrimRight(serr.Error(), "\n"))
 		return cli.SilentError{Code: 2}
@@ -325,8 +325,11 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// closed on a non-interactive terminal, first-use BOM/default-No on an
 	// interactive one (run_trust.go). This is the FIRST of two checks; the
 	// second, immediately before the actual sbx mutation, closes the TOCTOU
-	// window between resolving the environment and using it.
-	if terr := runTrustGate(d, selection.Name); terr != nil {
+	// window between resolving the environment and using it. Both calls
+	// bind to trustSnap, the ONE in-memory snapshot resolveRunEnvironment
+	// resolved above (M1, security re-review: trust TOCTOU) — never a
+	// fresh, independent re-read of the environment by name.
+	if terr := runTrustGate(d, trustSnap, false); terr != nil {
 		return terr
 	}
 
@@ -721,16 +724,19 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			return cmd
 		},
 	}
-	// CRITICAL (security re-review), SECOND check: recomputed fresh,
-	// immediately before the one call that actually mutates sbx
-	// (RunSession: `sbx env create`/`sbx exec`). Closes the TOCTOU window
-	// between the first gate (right after the environment was resolved,
-	// above) and this exact moment — an environment trusted a moment ago
-	// and unchanged since costs nothing here (an ordinary file read plus a
-	// fingerprint compare); one that changed out from under this launch (a
-	// symlink swap, a concurrent edit) is refused here even though the
-	// first check let it through.
-	if terr := runTrustGate(d, selection.Name); terr != nil {
+	// CRITICAL (security re-review), SECOND check: bound to the SAME
+	// trustSnap the first gate checked, immediately before the one call
+	// that actually mutates sbx (RunSession: `sbx env create`/`sbx exec`).
+	// checkDrift=true re-reads the environment directory ONE more time —
+	// the one legitimate remaining disk read — but only to compare its
+	// fingerprint against trustSnap.fingerprint (identity/digest, never a
+	// substitute independent read): unchanged costs nothing here and
+	// proceeds on the SAME acceptance the first gate already confirmed;
+	// anything that changed since resolution (a symlink swap, a concurrent
+	// edit) is refused outright, regardless of whether the new content
+	// would itself be independently trusted (M1, security re-review: trust
+	// TOCTOU).
+	if terr := runTrustGate(d, trustSnap, true); terr != nil {
 		releaseRoot(true)
 		return terr
 	}

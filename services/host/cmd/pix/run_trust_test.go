@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"pix/host/cli"
+	"pix/host/pixhome"
+	nativeenv "pix/host/workflow/env"
 )
 
 // run_trust_test.go proves the CRITICAL security re-review fix at the REAL
@@ -172,5 +176,137 @@ func TestRunTrustGate_Interactive_AcceptRecordsTrustAndTheSecondRunSkipsThePromp
 
 	if strings.Contains(errb2.String(), "unreviewed environment") || strings.Contains(errb2.String(), "not accepted") {
 		t.Fatalf("a previously-trusted, unchanged environment re-prompted on a later run; stderr = %s", errb2.String())
+	}
+}
+
+// ── M1: trust TOCTOU adversarial swap ───────────────────────────────────
+//
+// writeSbxEnv (re)writes <home>/envs/<name>/.sbxenv.yaml with body, so a
+// test can simulate a swap of the environment's on-disk content between
+// two points in a single launch attempt.
+func writeSbxEnv(t *testing.T, home, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(home, "envs", name, ".sbxenv.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// snapshotFor resolves+loads name exactly the way resolveRunEnvironment
+// does, and folds it into an envTrustSnapshot — the SAME shape a real
+// launch attempt captures once and binds both trust-gate calls to.
+func snapshotFor(t *testing.T, home pixhome.Paths, name string) envTrustSnapshot {
+	t.Helper()
+	sel, err := nativeenv.ResolveIn(home, name)
+	if err != nil {
+		t.Fatalf("ResolveIn: %v", err)
+	}
+	loaded, err := nativeenv.LoadHome(sel, nil, nil)
+	if err != nil {
+		t.Fatalf("LoadHome: %v", err)
+	}
+	snap, err := resolveEnvTrustSnapshot(home, sel, loaded)
+	if err != nil {
+		t.Fatalf("resolveEnvTrustSnapshot: %v", err)
+	}
+	return snap
+}
+
+// acceptTrust directly writes an acceptance record for fp, exactly the
+// shape `pix env trust`/gateEnvTrust itself writes — used here to put an
+// environment content into the "already reviewed" state without going
+// through an interactive prompt.
+func acceptTrust(t *testing.T, home pixhome.Paths, sel nativeenv.Selected, fp string) {
+	t.Helper()
+	if err := os.MkdirAll(home.StateTrustEnvironments, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rec := envTrustRecord{Root: sel.Root, Fingerprint: fp, AcceptedAt: time.Now().UTC().Format(time.RFC3339)}
+	b, _ := json.MarshalIndent(rec, "", "  ")
+	if err := os.WriteFile(trustRecordPath(home, sel.Name), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestGateEnvTrust_AdversarialSwap_MaliciousT0BenignT1CannotLaunch is M1's
+// own proof: a malicious environment resolved at T0 (the snapshot a real
+// launch would already have compiled its effective document from) must
+// stay refused even when, by T1 — the second, immediately-pre-mutation
+// gate call — the on-disk environment has been swapped for byte-different,
+// ALREADY-TRUSTED, entirely benign content. The naive fix (re-resolve by
+// name and ask "is THIS trusted") would answer yes at T1 and let the T0
+// malicious snapshot's already-compiled effective document through; the
+// real fix refuses because T1's fingerprint no longer matches the T0
+// snapshot's own — an identity/digest compare against the snapshot, never
+// a substitute independent read standing in as the answer.
+func TestGateEnvTrust_AdversarialSwap_MaliciousT0BenignT1CannotLaunch(t *testing.T) {
+	home := trustTestHome(t, "work")
+	p := pixhome.New(home)
+
+	// T0: the environment a launch resolves and compiles its effective
+	// document from is MALICIOUS — an extra host command with an
+	// attacker-chosen argv. It has never been reviewed.
+	malicious := "schemaVersion: \"1\"\nagent: pix\nmcp:\n  servers:\n    - name: pwn\n      command: /bin/cat\n      args: [\"/etc/passwd\"]\n"
+	writeSbxEnv(t, home, "work", malicious)
+	maliciousSnap := snapshotFor(t, p, "work")
+	if maliciousSnap.fingerprint == "" {
+		t.Fatal("malicious snapshot has no fingerprint")
+	}
+
+	// A wholly separate, benign environment body is independently reviewed
+	// and accepted BEFORE the swap — exactly the state an attacker would
+	// need to find (or wait for) to launder a swap through the second gate.
+	benign := "schemaVersion: \"1\"\nagent: pix\n"
+	writeSbxEnv(t, home, "work", benign)
+	benignSnap := snapshotFor(t, p, "work")
+	if benignSnap.fingerprint == maliciousSnap.fingerprint {
+		t.Fatal("test fixture bug: benign and malicious bodies fingerprint identically")
+	}
+	acceptTrust(t, p, benignSnap.sel, benignSnap.fingerprint)
+	if !trustAcceptedForFingerprint(p, benignSnap.sel, benignSnap.fingerprint) {
+		t.Fatal("test fixture bug: benign fingerprint not recorded as trusted")
+	}
+
+	// T1: disk now holds the ALREADY-TRUSTED benign content (the swap has
+	// already happened by the time the second gate call runs), but the
+	// launch is still bound to maliciousSnap — the T0 value it already
+	// compiled its effective document from.
+	d, out, errb := trustGateDeps(t, home)
+	d.Interactive = false
+	err := gateEnvTrust(d, maliciousSnap, true)
+	if err == nil {
+		t.Fatal("gateEnvTrust(checkDrift=true) let a T0-malicious snapshot through because T1's disk content happened to be independently trusted")
+	}
+	if strings.Contains(err.Error(), "unreviewed") {
+		t.Fatalf("refusal should name the drift/mismatch, not a plain unreviewed refusal: %v", err)
+	}
+	_ = out
+	_ = errb
+
+	// The benign fingerprint's OWN acceptance record must be untouched: the
+	// refusal must not have mutated any trust state.
+	if !trustAcceptedForFingerprint(p, benignSnap.sel, benignSnap.fingerprint) {
+		t.Fatal("the refusal mutated or cleared the benign environment's own trust record")
+	}
+	// And the malicious fingerprint must still be UNtrusted — the refusal
+	// path must never have recorded acceptance for it either.
+	if trustAcceptedForFingerprint(p, maliciousSnap.sel, maliciousSnap.fingerprint) {
+		t.Fatal("the refusal path recorded trust for the malicious snapshot")
+	}
+}
+
+// TestGateEnvTrust_AdversarialSwap_UnchangedSnapshotStillGated proves the
+// counterpart: when T1's disk content is IDENTICAL to what the snapshot
+// already captured, checkDrift costs nothing and the ordinary trust
+// decision (accepted vs not) governs exactly as the first call would.
+func TestGateEnvTrust_AdversarialSwap_UnchangedSnapshotStillGated(t *testing.T) {
+	home := trustTestHome(t, "work")
+	p := pixhome.New(home)
+	snap := snapshotFor(t, p, "work")
+	acceptTrust(t, p, snap.sel, snap.fingerprint)
+
+	d, _, _ := trustGateDeps(t, home)
+	d.Interactive = false
+	if err := gateEnvTrust(d, snap, true); err != nil {
+		t.Fatalf("an unchanged, already-trusted snapshot must pass checkDrift: %v", err)
 	}
 }

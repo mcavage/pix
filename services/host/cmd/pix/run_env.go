@@ -35,14 +35,14 @@ import (
 // pixhome-based ResolveIn — there is no config.Environments registry left in
 // this path, and no fallback to one. Nothing here writes config: `--env`
 // selects for this run only (AC-22).
-func resolveRunEnvironment(explicit string) (launch.EnvSelection, error) {
+func resolveRunEnvironment(explicit string) (launch.EnvSelection, envTrustSnapshot, error) {
 	home, err := pixhome.Resolve()
 	if err != nil {
-		return launch.EnvSelection{}, err
+		return launch.EnvSelection{}, envTrustSnapshot{}, err
 	}
 	machine, err := pixhome.LoadMachine(home)
 	if err != nil {
-		return launch.EnvSelection{}, err
+		return launch.EnvSelection{}, envTrustSnapshot{}, err
 	}
 	name := strings.TrimSpace(explicit)
 	if name == "" {
@@ -52,17 +52,25 @@ func resolveRunEnvironment(explicit string) (launch.EnvSelection, error) {
 		// D17's `none`: no environment registered or selected. The built-in
 		// effective document still renders; a launch is never blocked by the
 		// absence of an environment.
-		return launch.EnvSelection{}, nil
+		return launch.EnvSelection{}, envTrustSnapshot{}, nil
 	}
 	sel, err := nativeenv.ResolveIn(home, name)
 	if err != nil {
-		return launch.EnvSelection{}, err
+		return launch.EnvSelection{}, envTrustSnapshot{}, err
 	}
 	loaded, err := nativeenv.LoadHome(sel, nil, nil)
 	if err != nil {
-		return launch.EnvSelection{}, err
+		return launch.EnvSelection{}, envTrustSnapshot{}, err
 	}
-	reviewed, _, _ := trustAccepted(home, sel)
+	// M1 (security re-review, trust TOCTOU): the snapshot's bom/fingerprint
+	// are computed from THIS loaded value, once — the exact bytes/tree
+	// runEffectiveInput compiles the launch from below — never a second,
+	// independent re-read of the environment directory.
+	snap, err := resolveEnvTrustSnapshot(home, sel, loaded)
+	if err != nil {
+		return launch.EnvSelection{}, envTrustSnapshot{}, err
+	}
+	reviewed := trustAcceptedForFingerprint(home, sel, snap.fingerprint)
 	return launch.EnvSelection{
 		Name:     loaded.Name,
 		Root:     loaded.Root,
@@ -70,7 +78,7 @@ func resolveRunEnvironment(explicit string) (launch.EnvSelection, error) {
 		Sidecar:  loaded.Sidecar,
 		Tree:     loaded.Tree,
 		Reviewed: reviewed,
-	}, nil
+	}, snap, nil
 }
 
 // runEffectiveInput is the launch's real RuntimeFacts input: the ACTUAL
