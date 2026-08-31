@@ -1,5 +1,12 @@
 # Onboarding v3: inference-first progressive setup
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: IMPLEMENTED. This document is the delivery contract; readiness claims
 must follow live probes, not configuration presence. HISTORICAL NOTE: where
 this doc says "route compiler", read nothing — Wave F deleted the router

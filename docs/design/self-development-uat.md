@@ -1,5 +1,12 @@
 # Self-development UAT
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: PROPOSED
 
 ## Problem
@@ -9,7 +16,7 @@ that matters most: a real host build followed by real `pix` and `sbx` lifecycle
 operations. Docker, the sbx image store, OAuth callbacks, and the host browser
 all live outside the sandbox.
 
-The current release check, `scripts/macos/verify-pix-lifecycle.sh`, therefore
+The current release check, `scripts/host-uat.sh` (the deleted `scripts/macos/verify-pix-lifecycle.sh` is gone), therefore
 requires a person to build, load, run, observe, and clean up the host-side test.
 That breaks the autonomous development loop.
 

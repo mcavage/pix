@@ -184,6 +184,36 @@ test("the pix-agent Dockerfile keeps the vendored patch toolchain (scripts/patch
 	}
 });
 
+test("install packages ONE binary plus its adjacent release bundle, in the right order", () => {
+	// `pix setup` discovers release-manifest.json and pix-runtime-<version>.tar.gz
+	// NEXT TO the resolved pix binary, so `make install` must produce all three in
+	// out/ before symlinking — a symlinked binary with no bundle beside its target
+	// is exactly the broken installation setup now refuses.
+	assert.match(makefile, /^bundle: launcher release-manifest/m);
+	assert.match(makefile, /^install: bundle/m);
+	assert.match(makefile, /^release-manifest: build-agent build-memory runtime-archive/m);
+	const bundleBlock = makefile.slice(makefile.indexOf("\nbundle:"), makefile.indexOf("\ninstall:"));
+	for (const artifact of ["out/pix", "out/release-manifest.json", "out/pix-runtime-$(VERSION).tar.gz"]) {
+		assert.ok(bundleBlock.includes(artifact), `make bundle must produce ${artifact}`);
+	}
+});
+
+test("the Makefile no longer references removed commands or removed targets", () => {
+	for (const gone of [/\bpix config get\b/, /\bpix mcp \w/, /\bpix models\b/, /pix-host/, /^serve:/m, /^pack:/m, /^mcp-register:/m, /^mcp-auth:/m, /^pull-models:/m, /^doctor:/m]) {
+		assert.doesNotMatch(makefile.replace(/`pix config get` does not exist in v2/g, "").replace(/There is no `pix config get`/g, ""), gone, `Makefile still offers removed behavior: ${gone}`);
+	}
+});
+
+test("the launcher's bundle file names match what the release targets actually write", () => {
+	const bundleGo = fs.readFileSync(path.join(repoRoot, "services/host/release/bundle.go"), "utf8");
+	assert.match(bundleGo, /BundleManifestFile = "release-manifest\.json"/);
+	assert.match(bundleGo, /return "pix-runtime-" \+ version \+ "\.tar\.gz"/);
+	assert.match(makefile, /out\/release-manifest\.json/);
+	assert.match(makefile, /out\/pix-runtime-\$\(VERSION\)\.tar\.gz/);
+	const archiveScript = fs.readFileSync(path.join(repoRoot, "scripts/release/build-runtime-archive.sh"), "utf8");
+	assert.match(archiveScript, /pix-runtime-\$\{VERSION\}\.tar\.gz/);
+});
+
 test("install.sh and the Homebrew formula install exactly the pix binary, no pix-host", () => {
 	const installSh = fs.readFileSync(path.join(repoRoot, "install.sh"), "utf8");
 	const formula = fs.readFileSync(path.join(repoRoot, "packaging/homebrew/pix.rb"), "utf8");

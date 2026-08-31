@@ -1,5 +1,12 @@
 # Packs — design doc
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: SHIPPED (v1 + v2). This is the design rationale behind the pack
 architecture described for users in `docs/reference.md` §5 and built out
 further in `docs/design/packs-v2.md` / `packs-v2-impl.md`.

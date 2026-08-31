@@ -1,5 +1,12 @@
 # Onboarding v2 — product spec (FOR REVIEW, rev 2)
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 > **Historical, superseded.** The owner decided against this draft's "land in a
 > real task first, no upfront tour" shape (§3-§4). The current, shipped design
 > is the opposite: ONE thorough, hyper-opinionated upfront message that names

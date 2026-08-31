@@ -1,5 +1,12 @@
 # pix CLI redesign — make it usable by a new human
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: IMPLEMENTED (Shape B shipped — `state` grouping noun, tiered `help` / `help --all` with per-noun `help <verb>`, staged `setup`; all legacy verb spellings retained as aliases)
 Authors: pi + crew (dx-consultant, product-manager, architect, ux-copywriter), reviewed by cross-vendor `review`
 

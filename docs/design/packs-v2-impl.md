@@ -1,5 +1,12 @@
 # Packs v2 — implementation design (BUILD-READY)
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: BUILD SPEC. Validated against the real tree (`pack.go`, `config/config.go`,
 `sbxargs.go`, `hostrun.go`, `mcp.go`, `knowledge.go`, `run.go`, `serve_plugin.go`,
 `extensions/memory-recall.ts`). North star: `docs/design/packs.md`. Delivery PRD:

@@ -1,5 +1,12 @@
 # Packs v2 — portable capability context (DELIVERY PRD)
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: BUILD TARGET (facets shipped; historical below — see note). North star is
 `docs/design/packs.md` (the locked design); this is the delivery spec for the
 facets v1 deferred, with a concrete owner use case as the acceptance test. v1

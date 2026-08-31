@@ -1,5 +1,12 @@
 # Self-learning loop
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 **Status:** built and working (steps 1 to 3), plus `memory_capture`'s admission modes (see docs/memory.md's "How capture works"): capture is `explicit` by default (no automatic observation at all), with an opt-in `experimental-auto` (direct writes under one fixed daily budget). Automatic capture is the experiment; a review-before-store workflow is deferred until evidence says it's needed (see "Rejected" below). Remaining work in [Remaining (TODO)](#remaining-todo).
 
 The prior memory system stored things only when the model remembered to call

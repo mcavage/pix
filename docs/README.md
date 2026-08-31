@@ -5,7 +5,12 @@ harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
 
 ## For adopters
 
-- [design/packs.md](design/packs.md) — the pack design: private company context
+- [design/pix-v2-surface.md](design/pix-v2-surface.md) and
+  [design/pix-v2-architecture.md](design/pix-v2-architecture.md) — the ACCEPTED
+  v2 product surface and code architecture. Start here.
+- [design/environments.md](design/environments.md) — environments: the native
+  `.sbxenv.yaml` + thin `pix.toml` an adopter actually authors.
+- HISTORICAL — [design/packs.md](design/packs.md) — the deleted pack design: private company context
   ships as a **pack** (plus container/host MCP integrations), never a
   forked/recompiled tree.
 - [gworkspace.md](gworkspace.md) — why Google Workspace is **not** a pix
@@ -23,7 +28,7 @@ harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
 These document the reasoning behind subsystems. They are reference, not
 tutorials.
 
-- [onboarding-v3.md](design/onboarding-v3.md) — the proposed one-path setup,
+- HISTORICAL — [onboarding-v3.md](design/onboarding-v3.md) — the proposed one-path setup,
   dependency, OAuth, pack, doctor, and provider-routing design.
 - [slack-setup.md](design/slack-setup.md) — MERGE-BLOCKED migration reference:
   Slack's built-in implementation was deleted (W2/U02a); this names the

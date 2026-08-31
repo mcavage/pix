@@ -217,13 +217,13 @@
       }
     },
     "pix/host/release": {
-      "prod_loc": 230,
-      "test_loc": 228,
-      "exports": 6,
+      "prod_loc": 688,
+      "test_loc": 700,
+      "exports": 19,
       "exports_used_externally": 3,
       "exits": 0,
       "streams": 0,
-      "globals": 2,
+      "globals": 8,
       "init": 0,
       "edges": 0,
       "parser_families": {

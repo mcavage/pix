@@ -64,7 +64,24 @@ type Deps struct {
 	// Manifest is the release this setup call installs. Empty
 	// (zero-value) means "do not touch the release record" — a caller
 	// still iterating on the container/MCP steps need not fabricate one.
+	// A production caller ALWAYS passes a nonzero manifest, discovered
+	// from the installed release bundle before any Docker or Gateway
+	// mutation (architecture §12 steps 3-4).
 	Manifest release.Manifest
+
+	// Bundle is the discovered release bundle whose runtime archive this
+	// call installs under PIX_HOME (architecture §12 step 3). nil skips
+	// the runtime install; when non-nil its manifest must equal Manifest.
+	Bundle *release.Bundle
+
+	// Prereqs verifies Docker/sbx/Git BEFORE anything is mutated. nil
+	// skips the check (a test driving only later steps).
+	Prereqs PrereqChecker
+
+	// EnsureImages verifies/pulls both digest-pinned images. nil skips
+	// it; production wires it to the package's EnsureImages against the
+	// same Docker runner the container steps use.
+	EnsureImages func(m release.Manifest) error
 
 	// ContainerSpec is the pix-memory container Reconcile targets. Its
 	// Image is normally derived from Manifest.PixMemoryDigest by the
@@ -99,6 +116,15 @@ const DefaultPortRetries = 3
 type Result struct {
 	Init             pixhome.InitResult
 	ReleaseInstalled bool
+	// Runtime is what the runtime-archive install did (architecture §12
+	// step 3). Its zero value means no bundle was supplied.
+	Runtime release.RuntimeInstall
+	// DefaultEnvCreated is true only when this run created the `default`
+	// environment because the host had none (step 5).
+	DefaultEnvCreated bool
+	// KitRevision is the strict kit identity the installed manifest pins,
+	// carried here so a caller need not re-read the manifest to report it.
+	KitRevision string
 	Container        container.Result
 	MCPRegistered    bool
 	// MCPState is what the registrar observed; meaningful only when
@@ -117,6 +143,17 @@ type Result struct {
 func Setup(d Deps) (Result, error) {
 	var res Result
 
+	// Step 1: prerequisites, before ANY mutation. A host missing Docker
+	// must not first acquire a half-initialized home, a bearer token, and
+	// a Gateway registration nothing can serve.
+	if err := CheckPrereqs(d.Prereqs); err != nil {
+		return res, err
+	}
+
+	if d.Bundle != nil && d.Bundle.Manifest != d.Manifest {
+		return res, fmt.Errorf("internal: setup was given a release bundle (%s) and a different manifest (%s)", d.Bundle.Manifest.Version, d.Manifest.Version)
+	}
+
 	initRes, err := pixhome.Init(d.Home, d.GitRunner)
 	if err != nil {
 		return res, fmt.Errorf("initialize pix home: %w", err)
@@ -127,10 +164,39 @@ func Setup(d Deps) (Result, error) {
 		if err := d.Manifest.Validate(); err != nil {
 			return res, fmt.Errorf("release manifest: %w", err)
 		}
+		// Step 3: install the runtime archive FIRST, then record the
+		// manifest. The recorded manifest is what doctor and every later
+		// launch treat as "what is installed", so it must never claim a
+		// release whose runtime content failed to land.
+		if d.Bundle != nil {
+			rt, err := release.InstallRuntime(d.Home.Home, *d.Bundle)
+			if err != nil {
+				return res, fmt.Errorf("install the runtime archive: %w", err)
+			}
+			res.Runtime = rt
+		}
 		if err := release.SaveInstalled(d.Home.Home, d.Manifest); err != nil {
 			return res, fmt.Errorf("record release manifest: %w", err)
 		}
 		res.ReleaseInstalled = true
+		res.KitRevision = runtimeKitRevision(d.Manifest)
+
+		// Step 4: both digest-pinned images must be obtainable before the
+		// container step tries to run one of them.
+		if d.EnsureImages != nil {
+			if err := d.EnsureImages(d.Manifest); err != nil {
+				return res, err
+			}
+		}
+
+		// Step 5: a host with no environment at all gets exactly one
+		// minimal, runnable `default`. An existing environment is never
+		// touched, merged, or rewritten.
+		created, err := EnsureDefaultEnvironment(d.Home, d.Manifest)
+		if err != nil {
+			return res, fmt.Errorf("create the default environment: %w", err)
+		}
+		res.DefaultEnvCreated = created
 	}
 
 	// The whole generate-token, allocate-port, reconcile-container sequence

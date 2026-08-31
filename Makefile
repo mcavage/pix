@@ -35,102 +35,39 @@ KIT         ?= ./pi-kit
 # Gateway. Consumers who `sbx run --kit git+...` never hit this
 # target, so they get the baked set (Mode A). See AGENTS.md.
 DEV_SKILLS = --no-skills --skill $(CURDIR)/skills
-# Runtime config — the SINGLE source of truth is ~/.config/pix/config.toml,
-# managed by `pix config set` and read here via `pix config get`
-# (profile-aware, list keys space-separated). The `?=` assignments are DEFERRED:
-# they only shell out when a target actually expands the value, and a
-# command-line/env override (`make run MCP=google-workspace`) still wins. Targets that need
-# these values depend on `require-launcher`, which fails loudly if
-# $(PIX_BIN) isn't built — never silently runs with empty config.
+# The launcher binary this Makefile drives. There is no `pix config get`:
+# machine defaults live in ~/.pix/config.toml with ONE named writer each
+# (`pix env default`, `pix setup`, `pix secret set`), so nothing here shells
+# out to read configuration — a Make target that needs a value takes it as a
+# variable override.
 PIX_BIN ?= $(CURDIR)/out/pix
 
-# MCP enablement for `make run` (config.toml `mcp`, `pix config set mcp
-# <name>`). NOTE: `make run` execs `sbx run` DIRECTLY, so MCP_FLAGS attaches every
-# listed server STATICALLY (`--static-mcp <name>`) at sandbox CREATE — the dev
-# flow gets all tools. Every configured server preloads this way, with no
-# eager/lazy or static/dynamic split (the retired `mcp_static`/`mcp_dynamic`
-# knobs are gone): the `pix run` launcher resolves the exact same set via
-# allPreloadedMCP, which is what consumers use. sbx's local data-plane gateway
-# serves them (no SBX_MCP_URL). Attach one to an ALREADY-RUNNING sandbox with
-# `pix mcp load <name>`. `MCP=all` = everything registered.
-MCP         ?= $(shell "$(PIX_BIN)" config get mcp 2>/dev/null)
-MCP_FLAGS   = $(foreach server,$(MCP),--static-mcp $(server))
-# The local stdio MCP servers `make mcp-register` can register (the ones you
-# actually use — i.e. those listed in MCP). `google-workspace` is the
-# host-side Google Workspace CLI's MCP mode. Slack was externalized (W2/U02a;
-# see docs/design/slack-setup.md) — it is no longer a pix-host subcommand, and
-# ships (if at all) as a pinned, on-demand pack integration instead. Additional
-# integrations are packs: remote catalog servers, or containers the gateway runs.
-LOCAL_STDIO_MCP = google-workspace
-REGISTER        = $(filter $(LOCAL_STDIO_MCP),$(MCP))
-
-# Host MCP server credentials all come from 1Password via one file of op:// refs
-# (config/op-refs.env), resolved by `op run` when the sbx gateway spawns a server.
-# OP_BIN is op's absolute path (the sbx daemon's PATH may not include it).
-OP_REFS := $(CURDIR)/config/op-refs.env
-OP_BIN  := $(shell command -v op 2>/dev/null)
-
-
-# Local-model deps for the self-learning memory (host Ollama). The watcher model
-# turns your messages into durable facts (capture); the embed model powers
-# semantic recall. `make pull-models` fetches them. Override with `pix
-# config set memory_watcher_model <m>`. The default is small on purpose: it runs
-# resident on the HOST during `make serve`, so a big model OOMs a 16GB laptop.
-MEMORY_WATCHER_MODEL ?= $(shell "$(PIX_BIN)" config get memory_watcher_model 2>/dev/null)
-MEMORY_EMBED_MODEL   ?= $(shell "$(PIX_BIN)" config get memory_embed_model 2>/dev/null)
-# OLLAMA_BRIDGE_MODEL: the local model the sandbox's ollama-bridge exposes to pi
-# (interactive Alt+P cycle) AND the router's local option. Loads on demand (not
-# resident), so it can be bigger than the watcher. `pix run` reads this from
-# ~/.config/pix/config.toml (ollama_bridge_model); `make run` writes it into
-# the workspace so dev runs pick it up the same way. Keep in sync with the router
-# catalog id in services/host/inference/catalog/models.json.
-OLLAMA_BRIDGE_MODEL ?= $(shell "$(PIX_BIN)" config get ollama_bridge_model 2>/dev/null)
-
-# SERVICES: which host services `make serve` runs (config.toml `services`,
-# `pix config set services <name>`). MCP (top of file): which MCP servers
-# `make run` auto-attaches and `make mcp-register` registers. config.toml is
-# the SINGLE place to configure the stack — you never pass flags by hand.
-SERVICES ?= $(shell "$(PIX_BIN)" config get services 2>/dev/null)
-
-# SERVE_ENV: extra `KEY=VALUE` pairs injected into the environment of the host
-# services `make serve` starts. The stack sets nothing here by default. Values are
-# expanded into the shell UNQUOTED, so each entry must be a single shell token: no
-# spaces or shell metacharacters. For a value that needs them (e.g. a connection
-# string with `&` or spaces), have the service read an env FILE instead of passing
-# it here.
-# VALIDATION NOTE: SERVE_ENV is passed unquoted and untested — the Makefile
-# cannot validate its content. Ensure each entry is a safe shell token before
-# setting it (e.g. `SERVE_ENV="KEY=value"` where value has no spaces or &).
-SERVE_ENV ?=
+# The local model `make run` hands the in-sandbox ollama bridge. Overridable
+# on the command line (`make run OLLAMA_BRIDGE_MODEL=qwen3:8b`); it is not
+# read from any config file.
+OLLAMA_BRIDGE_MODEL ?= qwen3:4b
 
 # out/ is gitignored, so it's absent on a fresh clone. Several targets (load,
-# launcher, serve, mcp-register, pack, …) write into it and would otherwise fail
+# launcher, runtime-archive, release-manifest, bundle) write into it and would otherwise fail
 # with "invalid output path: stat out: no such file or directory". Create it once
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build build-agent build-memory load publish publish-agent publish-memory validate inspect run run-published run-no-mcp doctor mcp-register mcp-auth pull-models secrets pack install clean launcher require-launcher gate runtime-archive release-manifest
+.PHONY: help build build-agent build-memory load publish publish-agent publish-memory validate inspect run run-published run-no-mcp secrets install clean launcher require-launcher gate runtime-archive release-manifest bundle
 
-# Bare `make` builds the launcher binaries (the one thing require-launcher
-# demands as a prerequisite for run/serve/doctor), so a dev iterating on the
+# Bare `make` builds the launcher binary (the one thing require-launcher
+# demands as a prerequisite for `make run`), so a dev iterating on the
 # host never hits the "must be built first" guard on a fresh checkout. Pin the
 # default goal explicitly: require-launcher is the first target, so without
 # this GNU make would make the guard the default and error out.
 .DEFAULT_GOAL := launcher
 
-# Guard for every target that sources runtime config (SERVICES/MCP/
-# models) from config.toml: the launcher binary MUST exist, and `config get`
-# MUST work — otherwise the $(shell …) sourcing above yields silently-empty
-# values. Fail loudly instead.
+# Guard for every target that execs the launcher: the binary MUST exist.
+# It does NOT probe configuration — `pix config get` does not exist in v2 —
+# so this checks exactly one thing and says exactly one thing.
 require-launcher:
 	@[ -x "$(PIX_BIN)" ] || { \
-		echo "ERROR: $(PIX_BIN) not found. Runtime config (SERVICES/MCP/models) is"; \
-		echo "       sourced from ~/.config/pix/config.toml via 'pix config get',"; \
-		echo "       so the launcher must be built first: make launcher  (or: make install)"; \
-		exit 1; }
-	@"$(PIX_BIN)" config get services >/dev/null || { \
-		echo "ERROR: '$(PIX_BIN) config get' failed — cannot source runtime config from config.toml."; \
-		echo "       Run 'pix config show' to diagnose (bad profile? corrupt config.toml?)."; \
+		echo "ERROR: $(PIX_BIN) not found. Build it first: make launcher  (or: make install)"; \
 		exit 1; }
 
 
@@ -138,9 +75,8 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "Runtime, agent, and parallel-task commands live in the launcher,"
-	@echo "not make:  pix help --all  (e.g. pix task new, pix env,"
-	@echo "pix doctor)."
+	@echo "Everything a user runs lives in the launcher, not make:"
+	@echo "  pix help --all   (pix setup, pix run, pix task new, pix env, pix doctor)"
 
 build: build-agent ## Alias for build-agent (the sandbox image consumers pull; pix-memory is built separately, see build-memory)
 
@@ -241,89 +177,10 @@ run-published: ## Run the latest PUBLISHED image via the git kit (always fresh �
 run-no-mcp: ## Launch with NO MCP servers attached (debugging MCP setup failures)
 	@sbx run pix --kit $(KIT) .
 
-launcher: ## Build the ONE pix binary (out/pix), version-stamped (local builds stamp $(VERSION)+local so the launcher uses the local kit, not a nonexistent v$(VERSION) tag). There is no pix-host: services/host/cmd/pix is the only build target.
+launcher: ## Build the ONE pix binary (out/pix), version-stamped (local builds stamp $(VERSION)+local so the launcher uses the local kit, not a nonexistent v$(VERSION) tag). services/host/cmd/pix is the only build target, and the only binary a release ships.
 	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix ./cmd/pix)
 	@echo "Built out/pix (version $(LAUNCHER_VERSION))."
 	@echo "Install: ln -sf $(CURDIR)/out/pix ~/.local/bin/pix"
-
-mcp-auth: ## (Re)authorize all registered remote OAuth MCP servers. Opens a browser per server.
-	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }
-	@echo "1/3 refreshing the control-plane session (sbx login)…"
-	sbx login
-	@echo "2/3 authorizing all registered remote OAuth servers…"
-	sbx mcp auth --all
-	@echo "3/3 status:"
-	-sbx mcp auth status --all
-	@echo ""
-	@echo "If all show authorized, attach them LIVE to a running sandbox (no recreate):"
-	@echo "  pix mcp load <server>   # or: sbx mcp load <server> --sandbox pix-pix"
-	@echo "A fresh 'make run' also picks them up."
-
-mcp-register: require-launcher ## Register the local stdio MCP servers you use (the mcp list in config.toml) with sbx's local data-plane gateway (no SBX_MCP_URL needed). Servers come from your active pack; the gateway runs each as the pack declared it, wrapped in `op run --no-masking --env-file=<op-refs.env>` when that server declares credentials, so creds come from 1Password at spawn (nothing stored in the registration). Needs op + config/op-refs.env.
-	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }
-	@[ -n "$(strip $(REGISTER))" ] || { echo "Nothing to register: no local stdio servers ($(LOCAL_STDIO_MCP)) are in MCP. Run: pix config set mcp <name>."; exit 0; }
-	@[ -n "$(OP_BIN)" ] || { echo "ERROR: 1Password CLI 'op' not found on PATH."; exit 1; }
-	@[ -f "$(OP_REFS)" ] || { echo "ERROR: $(OP_REFS) missing. Create it:  cp config/op-refs.env.example config/op-refs.env  then fill in your refs."; exit 1; }
-	@(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .)
-	@BIN="$(CURDIR)/out/pix-host"; \
-	for s in $(REGISTER); do \
-		case "$$s" in \
-		google-workspace) \
-			: 'gog has no built-in guided setup (that wizard is retired); it registers'; \
-			: 'the same generic way every other local stdio server does, via pix mcp'; \
-			: 'register (mcp.GogHardenedArgv bakes in --readonly/--gmail-no-send/'; \
-			: '--wrap-untrusted). Delegate instead of hand-rolling the sbx add here.'; \
-			"$(PIX_BIN)" mcp register google-workspace && echo "  registered: google-workspace" || echo "  FAILED to register: google-workspace" ;; \
-		*) \
-			sbx mcp add $$s --command "$(OP_BIN)" \
-				--args run --args --no-masking --args "--env-file=$(OP_REFS)" --args -- --args "$$BIN" --args mcp --args "$$s" \
-				&& echo "  registered: $$s" || echo "  FAILED to register: $$s" ;; \
-		esac; \
-	done
-	@echo "Verify: sbx mcp ls"
-	@echo "Attach: registration is NOT enough — a sandbox gets a server at CREATE via --static-mcp."
-	@echo "        \`make run\` does this for you (MCP=$(MCP) from config.toml, passing --static-mcp for each)."
-	@echo "        To attach one to an ALREADY-RUNNING sandbox live (no recreate): pix mcp load <name>"
-	@echo "Note: each server resolves its creds from config/op-refs.env via op run when the gateway spawns it — make sure those refs are filled + valid."
-
-pull-models: require-launcher ## Pull the local Ollama models the stack uses (memory watcher + embed, and the bridge/router local model)
-	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture + the local model)"; exit 1; }
-	@echo "Pulling watcher model: $(MEMORY_WATCHER_MODEL)"; ollama pull $(MEMORY_WATCHER_MODEL)
-	@echo "Pulling embed model:   $(MEMORY_EMBED_MODEL)";   ollama pull $(MEMORY_EMBED_MODEL)
-	@echo "Pulling local model:   $(OLLAMA_BRIDGE_MODEL)";   ollama pull $(OLLAMA_BRIDGE_MODEL)
-	@echo "Done. 'make doctor' will now show capture + semantic recall as ready."
-
-doctor: require-launcher ## Show models + each optional integration: set up? service running?
-	@port() { nc -z localhost "$$1" >/dev/null 2>&1 && echo "up" || echo "down"; }; \
-	sset() { sbx secret ls 2>/dev/null | grep -qw "$$1" && echo "sbx secret set" || echo "TODO: sbx secret set -g $$1"; }; \
-	model() { command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | grep -q "^$$1\b" && echo "pulled" || echo "TODO: ollama pull $$1 (or make pull-models)"; }; \
-	echo "Config (config.toml via 'pix config get' — the single source of truth):"; \
-	printf "  %-9s %s\n" "SERVICES" "$(SERVICES)   (make serve runs these)"; \
-	printf "  %-9s %s\n" "MCP"      "$(if $(strip $(MCP)),$(MCP),<empty: none configured>)   (configured MCPs preload at sandbox creation via make run)"; \
-	echo ""; \
-	echo "Models / providers (proxy-injected, never in the VM):"; \
-	printf "  %-9s %s\n" "anthropic" "$$(sset anthropic)"; \
-	printf "  %-9s %s\n" "openai"    "$$(sset openai)"; \
-	printf "  %-9s %s\n" "google"    "$$(sset google)"; \
-	printf "  %-9s %s\n" "ollama"    "$$(command -v ollama >/dev/null 2>&1 && echo installed, :11434 $$(port 11434) || echo 'not installed (optional, for local models)')"; \
-	printf "  %-9s %s\n" "  watcher" "$$(model $(MEMORY_WATCHER_MODEL)) — fact capture [$(MEMORY_WATCHER_MODEL)]"; \
-	printf "  %-9s %s\n" "  embed"   "$$(model $(MEMORY_EMBED_MODEL)) — semantic recall [$(MEMORY_EMBED_MODEL)]"; \
-	echo ""; \
-	echo "Data tools (host side):"; \
-	printf "  %-7s setup: %-30s serving: %s\n" "gh"    "$$(sset github)" "proxy-injected (no service)"; \
-	printf "  %-7s setup: %-30s serving: %s\n" "gwork" "$$(command -v gog >/dev/null 2>&1 && echo 'dependency installed' || echo 'TODO: brew install openclaw/tap/gogcli, then pix mcp register')" "MCP via gateway (pix mcp register)"; \
-	printf "  %-7s setup: %-30s serving: %s\n" "memory" "watcher+embed above" ":11435 $$(port 11435) (capture needs the watcher model)"; \
-	echo ""; \
-	echo "MCP servers (local stdio, run by the sbx gateway — register with 'make mcp-register', attach with 'make run'):"; \
-	reg() { sbx mcp ls 2>/dev/null | grep -qw "$$1" && echo "registered" || echo "TODO: make mcp-register"; }; \
-	printf "  %-7s %-14s %s\n" "gwork" "$$(reg google-workspace)" "$(if $(filter google-workspace,$(MCP)),auto-attached on make run,NOT set up — 'pix config set mcp google-workspace' then 'pix mcp register' to use)"; \
-	echo "  gateway catalog (atlassian/notion/granola/linear/...): sbx mcp add … then pix config set mcp <name>"; \
-	echo "  slack: externalized (W2/U02a) — not a pix-host subcommand; wired only via a pinned, on-demand pack integration if your pack ships one (see docs/design/slack-setup.md)"; \
-	echo ""; \
-	echo "pix-memory (docs/design/pix-v2-architecture.md §9) is reconciled by 'pix setup', not by make. All of the above is configured in ~/.config/pix/config.toml (pix config set). Start it: pix setup (host) + make run (sandbox)."
-
-pack: ## Package the kit as a distributable zip
-	sbx kit pack $(KIT) -o out/pix-kit.zip
 
 runtime-archive: ## Build the runtime archive (skills/agents/settings/keybindings/themes, canonical runtime/<version>/ layout) WITHOUT touching the live repo layout dev `make run` reads
 	bash scripts/release/build-runtime-archive.sh $(VERSION) out/pix-runtime-$(VERSION).tar.gz
@@ -345,14 +202,18 @@ release-manifest: build-agent build-memory runtime-archive ## Emit out/release-m
 		--runtime-archive out/pix-runtime-$(VERSION).tar.gz \
 		--write out/release-manifest.json
 
-install: launcher ## Build + put the ONE Go binary (out/pix) on your PATH (~/.local/bin)
+bundle: launcher release-manifest ## Assemble the installable release bundle in out/: the ONE pix binary + release-manifest.json + pix-runtime-$(VERSION).tar.gz
+	@ls -l out/pix out/release-manifest.json out/pix-runtime-$(VERSION).tar.gz
+
+install: bundle ## Build the release bundle and put the ONE pix binary on your PATH (~/.local/bin)
 	mkdir -p $(HOME)/.local/bin
 	ln -sf $(CURDIR)/out/pix $(HOME)/.local/bin/pix
 	@echo "Installed: pix -> $(CURDIR)/out/pix"
-	@# The man page is RETIRED (W1 U01a): `pix help --all` is the one verb map,
-	@# so install drops nothing on the manpath.
-	@echo "Runtime config lives in ~/.config/pix/config.toml — manage it with"
-	@echo "'pix config set <key> <value>' (or 'pix setup' for the guided flow)."
+	@# `pix setup` discovers the release bundle NEXT TO THE RESOLVED binary, so
+	@# this symlink is fine: it resolves into out/, where release-manifest.json
+	@# and pix-runtime-$(VERSION).tar.gz were just written by release-manifest.
+	@echo "Bundle:    out/release-manifest.json + out/pix-runtime-$(VERSION).tar.gz"
+	@echo "Next:      pix setup   (installs the runtime under ~/.pix and reconciles pix-memory)"
 	@echo "Ensure ~/.local/bin is on your PATH, then: cd <any project> && pix"
 
 clean: ## Remove both built images
