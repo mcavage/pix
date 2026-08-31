@@ -3,8 +3,8 @@
 // reap.go — the LAST-SHELL TEARDOWN and the orphan reaper: the half of the
 // lifecycle session.go leaves out. The safety argument, in enforcement order:
 //
-//	this shell's refs SH is CLOSED first  ->  lease.TryReapProof (lifecycle EX +
-//	refs EX, both NON-BLOCKING: zero live references, no transition in flight)
+//	this shell's refs SH is CLOSED first  ->  lease.TryReapProof (refs EX +
+//	lifecycle EX, both NON-BLOCKING: zero live references, no transition in flight)
 //	->  under that proof: a valid creation record, fingerprint and invocation;
 //	the SAME immutable instance id re-probed from the runtime; no valid
 //	identity-bound keep; a pix-* name this domain owns  ->  a bounded
