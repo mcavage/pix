@@ -179,12 +179,14 @@ validate: ## Validate the sandbox kit
 inspect: ## Inspect the kit
 	sbx kit inspect $(KIT)
 
-secrets: ## Store provider keys + GitHub token as global sbx service secrets
-	@echo "Store once (read by the host proxy, never stored in the VM):"
-	@echo '  echo "$$ANTHROPIC_API_KEY" | sbx secret set anthropic'
-	@echo '  echo "$$OPENAI_API_KEY"    | sbx secret set openai'
-	@echo '  echo "$$GEMINI_API_KEY"    | sbx secret set google'
-	@echo '  gh auth token             | sbx secret set github      # gh in-sandbox, no GH_TOKEN export needed'
+secrets: ## Show the per-PIX_HOME 1Password refs Pix can scope to each sandbox
+	@echo "Store 1Password references in this stack's secrets.env:"
+	@echo '  pix secret set ANTHROPIC_API_KEY op://vault/item/field'
+	@echo '  pix secret set OPENAI_API_KEY    op://vault/item/field'
+	@echo '  pix secret set GEMINI_API_KEY    op://vault/item/field'
+	@echo '  pix secret set GITHUB_TOKEN      op://vault/item/field'
+	@echo "Pix resolves configured refs on each run and refreshes sandbox-scoped sbx secrets."
+	@echo "Host-global sbx secrets are ignored and never removed automatically."
 
 # NAME is an OPTIONAL override. It is deliberately EMPTY by default: the
 # launcher derives the sandbox name itself (services/host/sandbox.Name —
@@ -194,21 +196,11 @@ secrets: ## Store provider keys + GitHub token as global sbx service secrets
 # name: the second stack's `make run` found the first stack's sandbox and
 # either refused or attached to it.
 #
-# NOTE: when you DO pass one, NAME must not contain spaces or shell
-# metacharacters — the awk -v assignment below is not quoted against them.
+# NAME, when set, is a short logical name. The launcher validates and expands
+# it to pix-<stack-id>-<name>; make never tries to interpret that scoped name.
 NAME ?=
-run: require-launcher ## Launch a pix sandbox NAME. If NAME is stopped it's recreated (workspace + .pi-sessions are host-mounted, so nothing is lost); if it's already running this refuses rather than clobber a live session. `make run NAME=pix-2` opens a second parallel sandbox in another window. (Kit-defined agents can't be re-attached, hence recreate.)
+run: require-launcher ## Launch this checkout with its stack-scoped sandbox name; NAME is an optional short logical override
 	@N="$(NAME)"; \
-	if [ -n "$$N" ]; then \
-		status=$$(sbx ls 2>/dev/null | awk -v n="$$N" '$$1==n{print $$3}'); \
-		if [ "$$status" = "running" ]; then \
-			echo "ERROR: sandbox $$N is already running (a live pi). Use a different name (make run NAME=pix-2) or 'pix rm $$N' first."; exit 1; \
-		fi; \
-		if [ -n "$$status" ]; then \
-			echo "(sandbox $$N exists [$$status] — recreating; workspace + .pi-sessions persist on the host)"; \
-			"$(PIX_BIN)" rm "$$N" >/dev/null; \
-		fi; \
-	fi; \
 	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
 	LABEL="$${N:-the launcher-derived stack-scoped name}"; \
 	[ -n "$$TAG" ] && echo "(sandbox $$LABEL, local build :$$TAG)" || echo "(sandbox $$LABEL, kit-pinned image)"; \

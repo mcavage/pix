@@ -3,10 +3,10 @@
 Memory is a separate service, **`pix-memory`**: a Go MCP server, built and
 tagged independently of the `pix-agent` sandbox image
 (`docs/design/pix-v2-architecture.md` section 9). `pix setup` reconciles it
-as one named Docker container:
+as one Docker container for the active `PIX_HOME` stack:
 
 ```text
-name:    pix-memory
+name:    pix-memory-<stack-id>
 image:   the immutable digest from the release manifest
 restart: unless-stopped
 publish: 127.0.0.1:<port>:8080   (host loopback only)
@@ -14,8 +14,9 @@ mount:   ~/.pix/state/memory:/data
 ```
 
 The sandbox never dials that container directly. The sbx MCP Gateway
-registers its `/mcp` Streamable HTTP endpoint as an ordinary remote MCP
-server, the same as any other integration; `/healthz` is a separate,
+registers its `/mcp` Streamable HTTP endpoint under the matching
+`pix-memory-<stack-id>` name. The registry is host-global, but the scoped name
+lets multiple `PIX_HOME` stacks coexist; `/healthz` is a separate,
 non-MCP liveness/readiness endpoint `pix doctor` probes.
 
 **Pix has no top-level `memory` command in v2.** Memory is operated
@@ -106,8 +107,8 @@ dump.
 
 ## Trust model and scope
 
-Memory runs as one personal, per-machine service; it is not shared across
-your laptop and your desktop, and not shared with teammates. Profiles are
+Memory runs as one personal service per `PIX_HOME` stack; it is not shared
+between two stacks, across your laptop and desktop, or with teammates. Profiles are
 organizational scopes in this local service, not security tenants: the
 server enforces query/write scope on every request, but the same trusted
 Gateway client can request another profile. A future multi-user or cloud
@@ -122,12 +123,12 @@ blocks the conversation). `pix doctor` reports the memory container's
 health, storage, embeddings, capture mode, and scope isolation as one of its
 probes; a wedged (but Docker-alive) container is the case Docker's
 `unless-stopped` policy cannot catch on its own, so doctor prints the exact
-`docker restart pix-memory` recovery command.
+`docker restart pix-memory-<stack-id>` recovery command for the active stack.
 
 ## Storage
 
 Data lives at `~/.pix/state/memory` (`PIX_HOME`-relative), mounted into the
-`pix-memory` container: SQLite plus FTS5, with embeddings on disk when a
+stack-scoped `pix-memory-<stack-id>` container: SQLite plus FTS5, with embeddings on disk when a
 local backend is configured. `memory_snapshot`/`memory_restore` are the
 supported backup path; there is no separate `pix` CLI verb for it.
 

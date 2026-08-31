@@ -167,8 +167,9 @@ bash scripts/gate.sh # the fast PR gate CI runs (build, vet, go test, node test,
   A published consumer run gets the baked-in set instead.
 - A running sandbox keeps its creation-time image; recreate (`pix rm NAME &&
   pix run`) to pick up an image change.
-- **Testing:** never create/remove a sandbox named `pix-pix`, that's what
-  `make run` uses; use `--name pix-test`.
+- **Testing:** use a separate `PIX_HOME` for each stack. `make run` leaves
+  naming to the launcher; `NAME=test` is a short logical override that expands
+  inside the current stack namespace.
 
 ## Safety invariants
 

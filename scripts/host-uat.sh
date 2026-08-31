@@ -52,7 +52,6 @@ docker info >/dev/null 2>&1 || fail "docker is installed but not reachable (star
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PIX_HOME="$(mktemp -d "${TMPDIR:-/tmp}/pix-uat-home.XXXXXX")"
 export PIX_HOME
-SANDBOX="pix-uat"
 
 # stack_id_for HOME derives the same 16-hex stack id the launcher derives
 # (services/host/stack: sha256 of the canonical, symlink-resolved PIX_HOME
@@ -66,6 +65,7 @@ stack_id_for() {
 }
 
 STACK_ID="$(stack_id_for "$PIX_HOME")"
+SANDBOX="pix-$STACK_ID-uat"
 MEMORY_CONTAINER="pix-memory-$STACK_ID"
 MEMORY_MCP="pix-memory-$STACK_ID"
 SESSION_MCP="pix-session-$STACK_ID"
@@ -218,7 +218,7 @@ test -f "$PIX_HOME/envs/hooked/.installed" || fail "U4b: the setup hook's apply 
 pix setup --env hooked || fail "U4b: rerunning setup --env is not idempotent"
 
 step "U5 launch this checkout's own image, list, remove"
-pix run --dev --env uat --name "$SANDBOX" -- --version || fail "U5: pix run --dev failed"
+pix run --dev --env uat --name "$SANDBOX" --keep -- --version || fail "U5: pix run --dev failed"
 CREATED_SANDBOX=1
 pix ls | grep -q "$SANDBOX" || fail "U5: pix ls does not list the sandbox it just created"
 pix rm "$SANDBOX" || fail "U5: pix rm refused the sandbox it created"
@@ -257,7 +257,7 @@ PORT_B="$(grep -E '^memory_port' "$HOME_B/config.toml" | tr -dc '0-9')"
 [ "$PORT_A" != "$PORT_B" ] || fail "U8: both PIX_HOMEs allocated the SAME loopback memory port ($PORT_A)"
 sbx mcp ls | grep -q "$MEMORY_MCP_B" || fail "U8: the second stack's $MEMORY_MCP_B registration is missing (the MCP registry is host-global but namespaced)"
 sbx mcp ls | grep -q "$MEMORY_MCP" || fail "U8: registering the second stack dropped the first stack's $MEMORY_MCP registration"
-( cd "$REPO" && PIX_HOME="$HOME_B" pix run --dev --name "b-uat" -- --version ) || fail "U8: pix run failed under the second PIX_HOME"
+( cd "$REPO" && PIX_HOME="$HOME_B" pix run --dev --name "b-uat" --keep -- --version ) || fail "U8: pix run failed under the second PIX_HOME"
 sbx ls | grep -q "pix-$STACK_ID_B-" || fail "U8: the second stack's sandbox does not carry its own stack id"
 ( PIX_HOME="$HOME_B" pix rm --all --yes ) || fail "U8: pix rm --all failed under the second PIX_HOME"
 sbx ls | grep -q "pix-$STACK_ID_B-" && fail "U8: the second stack's own sandbox survived its own pix rm --all"

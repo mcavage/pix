@@ -24,9 +24,10 @@ reserved MCP servers, so a second `PIX_HOME` on the same host runs alongside
 the first without either one touching the other's resources. See
 `docs/reference.md` §2 and §12 for what that means for memory and cleanup.
 
-There is no setup interview: it never asks how models should run. Add a
-direct API key with `pix secret set` (1Password reference only, never a
-value on disk); an already-credentialed backend needs none. Local inference
+Setup never chooses how models should run. On an interactive first run it can
+offer to record provider `op://` references; the explicit path is `pix secret
+set` (references only, never values on disk). An already-credentialed backend
+needs none. Local inference
 (llmman or Ollama, over native or OpenAI-compatible transport) is authored
 directly in an environment's own `pix.toml`, not chosen in setup. Your first
 sandbox launches once a callable model is confirmed.
@@ -61,8 +62,8 @@ pix doctor    # full readiness evidence + exact fix commands
 ## 4. Clean up
 
 ```bash
-pix rm pix-some-repo          # remove one, non-force (needs zero live holders)
-pix rm --all --keep pix-pix   # remove every pix-* sandbox but one
+pix rm pix-<stack-id>-some-repo-<digest>  # remove one (needs zero live holders)
+pix rm --all --keep pix-<stack-id>-project-<digest>  # keep one sandbox in this stack
 pix rm --orphans              # remove only pix-owned sandboxes nothing still holds
 ```
 

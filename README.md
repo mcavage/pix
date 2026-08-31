@@ -70,13 +70,14 @@ pix setup
 Use the `mcavage/tap/` prefix. Bare `brew install pix` matches no formula,
 and Homebrew will suggest `pixi`, which is a different tool.
 
-`pix setup` is repeatable and idempotent, not interactive: it checks Docker
-and `sbx`, initializes `PIX_HOME` (default `~/.pix`) as a Git repository,
+`pix setup` is repeatable and idempotent. It checks Docker and `sbx`,
+initializes `PIX_HOME` (default `~/.pix`) as a Git repository,
 installs the pinned `pix-agent` image and strict kit, creates and selects a
 default environment if none exists, and reconciles the `pix-memory`
-container. It never interviews you for a model provider or a local inference
-backend; a provider key is added with `pix secret set`, and local inference
-(if any) is authored directly in an environment's own `pix.toml` (section 5).
+container. On an interactive first run it offers to record provider `op://`
+references, without choosing a provider for you; the explicit path is
+`pix secret set`. Local inference is authored directly in an environment's
+own `pix.toml` (section 5).
 A gap it cannot repair is printed with the exact command that fixes it.
 
 ## 3. How to tell it worked
@@ -95,8 +96,8 @@ failure otherwise, `2` on a usage error.
 ## 4. Do I need a model provider API key?
 
 Usually yes, for a direct key. One key for any one of Anthropic, OpenAI, or
-Google is enough; you do not need all three. `pix setup` is the one place a
-1Password reference is solicited, and it proves the key with a live request.
+Google is enough; you do not need all three. Interactive `pix setup` can offer
+to record a 1Password reference; `pix secret check` proves it with a live read.
 If your environment's backends carry their own auth (a credentialed gateway,
 for example), doctor reports no provider key needed and means it.
 
