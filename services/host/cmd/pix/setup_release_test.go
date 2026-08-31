@@ -67,6 +67,9 @@ func (p setupFakePrereqs) Check(name string, args ...string) (string, error) {
 	if name == p.missing {
 		return "", errors.New("executable file not found in $PATH")
 	}
+	if name == "sbx" {
+		return "sbx version: v0.39.0 test", nil
+	}
 	return name + " ok", nil
 }
 

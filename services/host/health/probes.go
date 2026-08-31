@@ -345,6 +345,24 @@ func sbxVersionAtLeast(v, min string) bool {
 	return true
 }
 
+// ValidateSbxVersionOutput validates the banner returned by `sbx version` for
+// callers that already own process execution, such as `pix setup`'s
+// mutation-before-preflight gate. It shares the exact parser and minimum with
+// SbxProbe so setup, run, and doctor cannot disagree about a host release.
+func ValidateSbxVersionOutput(out string) error {
+	match, ok := parseSbxVersion(out)
+	if !ok {
+		return fmt.Errorf("unrecognized sbx version output")
+	}
+	if match.prerelease {
+		return fmt.Errorf("sbx %s is a prerelease/build-tagged version; stable %s or later is required", match.raw, SbxMinVersion)
+	}
+	if !sbxVersionAtLeast(match.number, SbxMinVersion) {
+		return fmt.Errorf("sbx %s is too old; %s or later is required", match.number, SbxMinVersion)
+	}
+	return nil
+}
+
 func sbxVersionParts(v string) []int {
 	fields := strings.Split(v, ".")
 	out := make([]int, 0, len(fields))

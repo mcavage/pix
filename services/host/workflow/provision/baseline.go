@@ -19,6 +19,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/container"
+	"pix/host/health"
 	"pix/host/pixhome"
 	"pix/host/release"
 )
@@ -42,7 +43,9 @@ var requiredPrereqs = []struct {
 	purpose string
 }{
 	{"docker", []string{"version", "--format", "{{.Server.Version}}"}, "install Docker Desktop (or start the daemon): https://docs.docker.com/get-docker/", "runs the pix-memory container"},
-	{"sbx", []string{"--version"}, "install the sbx CLI: https://docs.docker.com/ai/sandboxes/", "creates sandboxes and owns the MCP Gateway"},
+	// sbx 0.39+ rejects the root --version flag. `sbx version` is the
+	// observed supported grammar and its banner is validated below.
+	{"sbx", []string{"version"}, "install or upgrade the sbx CLI: https://docs.docker.com/ai/sandboxes/", "creates sandboxes and owns the MCP Gateway"},
 	{"git", []string{"--version"}, "install Git (xcode-select --install, or your package manager)", "initializes ~/.pix as an ordinary repo"},
 }
 
@@ -56,12 +59,16 @@ func CheckPrereqs(c PrereqChecker) error {
 	}
 	var problems []string
 	for _, p := range requiredPrereqs {
-		if _, err := c.Check(p.name, p.args...); err != nil {
+		out, err := c.Check(p.name, p.args...)
+		if err == nil && p.name == "sbx" {
+			err = health.ValidateSbxVersionOutput(out)
+		}
+		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s is required (%s): %v\n    fix: %s", p.name, p.purpose, err, p.remedy))
 		}
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("pix setup: unmet prerequisites, nothing was changed:\n  - %s", strings.Join(problems, "\n  - "))
+		return fmt.Errorf("setup prerequisites are unmet; nothing was changed:\n  - %s", strings.Join(problems, "\n  - "))
 	}
 	return nil
 }
