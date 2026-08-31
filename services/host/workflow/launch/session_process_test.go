@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -91,11 +92,13 @@ env)
 	exit 0
 	;;
 run)
-	touch "$d/created"` + awaitRelease + `
+	touch "$d/created"
+	printf '%s\n' $$ > "$d/session.pid.tmp" && mv "$d/session.pid.tmp" "$d/session.pid"` + awaitRelease + `
 	exit 0
 	;;
 exec)
-	if [ "$2" = "-it" ]; then touch "$d/attached-it"; else touch "$d/attached"; fi` + awaitRelease + `
+	if [ "$2" = "-it" ]; then touch "$d/attached-it"; else touch "$d/attached"; fi
+	printf '%s\n' $$ > "$d/session.pid.tmp" && mv "$d/session.pid.tmp" "$d/session.pid"` + awaitRelease + `
 	exit 0
 	;;
 esac
@@ -145,6 +148,43 @@ func release(t *testing.T, dir string) {
 	if err := os.WriteFile(filepath.Join(dir, "release"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// waitForFixtureProcessExit handles both legitimate Linux outcomes after the
+// creator is SIGKILLed: the detached fixture may observe release and write the
+// exited marker, or it may already have died with its parent and never write
+// that marker. Waiting only for the marker made CI fail on the second outcome;
+// not waiting at all raced testing.TempDir cleanup on the first.
+func waitForFixtureProcessExit(t *testing.T, dir string, within time.Duration) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "session.pid"))
+	if err != nil {
+		t.Fatalf("read fixture pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		t.Fatalf("invalid fixture pid %q: %v", data, err)
+	}
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(dir, "exited")); err == nil {
+			return
+		}
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// A wedged test fixture must not survive the test or keep touching the
+	// TempDir. This PID came from the fixture itself, never from production.
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	for i := 0; i < 100; i++ {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("fixture process %d did not exit after release or SIGKILL", pid)
 }
 
 // waitForRecordedCreateState blocks until every create-time artifact this
@@ -437,7 +477,7 @@ func TestRunSession_KilledCreator_LeavesTheRecord(t *testing.T) {
 		// orphaned. Wait for that child to observe the release barrier before
 		// testing.TempDir removes the fixture directory; otherwise cleanup can
 		// race the child's final path lookup and flake with "directory not empty".
-		waitForFile(t, filepath.Join(fixture, "exited"), 5*time.Second)
+		waitForFixtureProcessExit(t, fixture, 5*time.Second)
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	})
@@ -446,6 +486,11 @@ func TestRunSession_KilledCreator_LeavesTheRecord(t *testing.T) {
 	// keep binding the helper's spec asks for — not just record.json, so the
 	// kill lands strictly AFTER every write this test checks, never mid-write.
 	waitForRecordedCreateState(t, leaseDir, key, true, 20*time.Second)
+	// The record is written by the creator immediately after spawn; the child
+	// may not yet have run its first shell instruction. Wait for its atomic PID
+	// receipt too, so cleanup can distinguish "child already died" from "child
+	// is still consuming the release barrier" without racing an empty file.
+	waitForFile(t, filepath.Join(fixture, "session.pid"), 5*time.Second)
 	if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
 		t.Fatalf("SIGKILL: %v", err)
 	}
