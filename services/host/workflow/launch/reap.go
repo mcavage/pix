@@ -55,6 +55,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/lease"
 	"pix/host/sandbox"
+	"pix/host/stack"
 )
 
 // The teardown budget, as three bounds that compose to one ceiling:
@@ -455,7 +456,14 @@ func existingLeaseDir(key string) (string, error) {
 
 // ── the orphan sweep ────────────────────────────────────────────────────────
 
-func orphanCandidates() ([]string, error) {
+// orphanCandidates lists every lease-recorded session key under THIS
+// PIX_HOME's own lease root, narrowed to keys SCOPED TO stackID
+// (stack.IsScopedSandboxName). The lease root itself already lives under
+// this PIX_HOME's own state dir, so it can never contain a DIFFERENT
+// stack's recorded session — this filter is defense in depth against a
+// leftover pre-scoping (legacy) directory or one somehow copied in from
+// elsewhere, not the primary isolation mechanism.
+func orphanCandidates(stackID string) ([]string, error) {
 	root, err := leaseRoot()
 	if err != nil {
 		return nil, err
@@ -472,14 +480,21 @@ func orphanCandidates() ([]string, error) {
 		if !e.IsDir() || lease.ValidateInstanceID(e.Name()) != nil {
 			continue
 		}
+		if !stack.IsScopedSandboxName(stackID, e.Name()) {
+			continue
+		}
 		keys = append(keys, e.Name())
 	}
 	return keys, nil
 }
 
-// sweepOrphans runs the automatic teardown over every lease-recorded session:
-func sweepOrphans(env hostenv.Env, out io.Writer, opts TeardownOptions) ([]TeardownResult, error) {
-	keys, err := orphanCandidates()
+// sweepOrphans runs the automatic teardown over every lease-recorded session
+// scoped to stackID — see orphanCandidates. A foreign stack's own lease
+// state (which, by construction, never lives under this PIX_HOME's own
+// lease root anyway) is never a candidate at all, so it is never touched by
+// this sweep, let alone reported removed.
+func sweepOrphans(env hostenv.Env, out io.Writer, stackID string, opts TeardownOptions) ([]TeardownResult, error) {
+	keys, err := orphanCandidates(stackID)
 	if err != nil {
 		return nil, fmt.Errorf("could not list lease state: %w", err)
 	}

@@ -22,6 +22,7 @@ import (
 
 	"pix/host/lease"
 	"pix/host/sandbox"
+	"pix/host/stack"
 )
 
 // fastTeardown is the production teardown shape on a test budget: the same
@@ -703,17 +704,23 @@ func TestAppendTeardownJournal_ConcurrentAppendsLoseNoEntries(t *testing.T) {
 // proof. An unowned lease dir is reported and left alone.
 func TestSweepOrphans_OnlyOwnedZeroLeaseSessions(t *testing.T) {
 	isolateState(t)
-	installFakeSbx(t, `
+	id, err := stack.Current()
+	if err != nil {
+		t.Fatalf("stack.Current: %v", err)
+	}
+	ownedName := "pix-" + id + "-owned"
+	unownedName := "pix-" + id + "-unowned"
+	installFakeSbx(t, fmt.Sprintf(`
 d="$(dirname "$0")"
 echo "$@" >> "$d/argv.log"
 case "$1" in
 ls)
 	[ -f "$d/removed" ] && exit 0
 	if [ "$2" = "--json" ]; then
-		echo '[{"name":"pix-owned","state":"running","instance_id":"inst-1"},{"name":"pix-unowned","state":"running","instance_id":"inst-2"}]'
+		echo '[{"name":"%s","state":"running","instance_id":"inst-1"},{"name":"%s","state":"running","instance_id":"inst-2"}]'
 	else
-		echo "pix-owned  img  running"
-		echo "pix-unowned  img  running"
+		echo "%s  img  running"
+		echo "%s  img  running"
 	fi
 	exit 0
 	;;
@@ -725,14 +732,14 @@ rm)
 	touch "$d/removed"; exit 0 ;;
 esac
 exit 0
-`)
-	owned := seedRecordedSession(t, "pix-owned", "inst-1")
-	unownedDir, err := leaseDirFor("pix-unowned")
+`, ownedName, unownedName, ownedName, unownedName))
+	owned := seedRecordedSession(t, ownedName, "inst-1")
+	unownedDir, err := leaseDirFor(unownedName)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	results, err := sweepOrphans(realEnv(), &out, fastTeardown(t))
+	results, err := sweepOrphans(realEnv(), &out, id, fastTeardown(t))
 	if err != nil {
 		t.Fatalf("SweepOrphans: %v", err)
 	}
@@ -740,11 +747,11 @@ exit 0
 	for _, r := range results {
 		byName[r.Sandbox] = r.Verdict
 	}
-	if byName["pix-owned"] != TeardownRemoved {
-		t.Errorf("owned zero-lease session = %q, want %q", byName["pix-owned"], TeardownRemoved)
+	if byName[ownedName] != TeardownRemoved {
+		t.Errorf("owned zero-lease session = %q, want %q", byName[ownedName], TeardownRemoved)
 	}
-	if byName["pix-unowned"] != TeardownKeptUnowned {
-		t.Errorf("unowned session = %q, want %q", byName["pix-unowned"], TeardownKeptUnowned)
+	if byName[unownedName] != TeardownKeptUnowned {
+		t.Errorf("unowned session = %q, want %q", byName[unownedName], TeardownKeptUnowned)
 	}
 	if _, err := os.Stat(owned); !os.IsNotExist(err) {
 		t.Errorf("the swept session's state survived: %v", err)
@@ -752,8 +759,54 @@ exit 0
 	if _, err := os.Stat(unownedDir); err != nil {
 		t.Errorf("an unowned lease dir must be left alone: %v", err)
 	}
-	if !strings.Contains(out.String(), "pix-unowned: kept-unowned") {
+	if !strings.Contains(out.String(), unownedName+": kept-unowned") {
 		t.Errorf("sweep output = %q, want it to report every candidate's verdict", out.String())
+	}
+}
+
+// TestSweepOrphans_SkipsForeignStackLeaseDirs: a lease-state directory whose
+// KEY is not scoped to the current stack (a pre-scoping legacy name, or one
+// scoped to a different stack id) is never a sweep candidate at all — it is
+// left completely alone, not merely reported kept.
+func TestSweepOrphans_SkipsForeignStackLeaseDirs(t *testing.T) {
+	isolateState(t)
+	id, err := stack.Current()
+	if err != nil {
+		t.Fatalf("stack.Current: %v", err)
+	}
+	installFakeSbx(t, `
+d="$(dirname "$0")"
+echo "$@" >> "$d/argv.log"
+case "$1" in
+ls) echo '[]'; exit 0 ;;
+rm) echo "fixture: rm must never be called for a foreign-stack candidate" >&2; exit 1 ;;
+esac
+exit 0
+`)
+	foreign := "pix-fedcba9876543210-other"
+	legacy := "pix-legacy-nodigest"
+	foreignDir, err := leaseDirFor(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDir, err := leaseDirFor(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	results, err := sweepOrphans(realEnv(), &out, id, fastTeardown(t))
+	if err != nil {
+		t.Fatalf("SweepOrphans: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("sweepOrphans considered %d candidates, want 0 (both lease dirs are outside this stack): %+v", len(results), results)
+	}
+	if _, err := os.Stat(foreignDir); err != nil {
+		t.Errorf("a foreign-stack lease dir must be left alone: %v", err)
+	}
+	if _, err := os.Stat(legacyDir); err != nil {
+		t.Errorf("a legacy unscoped lease dir must be left alone: %v", err)
 	}
 }
 
@@ -796,29 +849,39 @@ func TestRm_FlagShapeRefusals(t *testing.T) {
 // ONE seam that skips that proof and removes regardless.
 func TestRm_NamedNonForceRequiresProofButForceBypassesIt(t *testing.T) {
 	isolateState(t)
-	fixture := installFakeSbx(t, removableFixture)
-	seedRecordedSession(t, "pix-demo", "inst-1")
+	id, err := stack.Current()
+	if err != nil {
+		t.Fatalf("stack.Current: %v", err)
+	}
+	name := "pix-" + id + "-demo"
+	fixture := installFakeSbx(t, scopedRemovableFixture(name))
+	seedRecordedSession(t, name, "inst-1")
 	var out, errOut strings.Builder
-	if err := Rm(realEnv(), &out, &errOut, RmOptions{Names: []string{"pix-demo"}, Interactive: true, Teardown: fastTeardown(t)}); err != nil {
+	if err := Rm(realEnv(), &out, &errOut, RmOptions{Names: []string{name}, Interactive: true, Teardown: fastTeardown(t)}); err != nil {
 		t.Fatalf("Rm: %v (stderr %q)", err, errOut.String())
 	}
-	if !strings.Contains(out.String(), "removed pix-demo") {
+	if !strings.Contains(out.String(), "removed "+name) {
 		t.Errorf("stdout = %q, want it to report the removal", out.String())
 	}
-	assertSawRmArgv(t, fixture, "rm -f pix-demo")
+	assertSawRmArgv(t, fixture, "rm -f "+name)
 
 	// A held reference still refuses the default (non-force) path outright:
 	// pix's own zero-holder proof, not sbx's confirmation flag, is what
 	// decides this.
 	isolateState(t)
-	fixture2 := installFakeSbx(t, removableFixture)
-	leaseDir := seedRecordedSession(t, "pix-demo", "inst-1")
+	id2, err2id := stack.Current()
+	if err2id != nil {
+		t.Fatalf("stack.Current: %v", err2id)
+	}
+	name = "pix-" + id2 + "-demo"
+	fixture2 := installFakeSbx(t, scopedRemovableFixture(name))
+	leaseDir := seedRecordedSession(t, name, "inst-1")
 	_, stdin := startRefHolder(t, leaseDir)
 	out.Reset()
 	errOut.Reset()
-	err := Rm(realEnv(), &out, &errOut, RmOptions{Names: []string{"pix-demo"}, Interactive: true, Teardown: fastTeardown(t)})
-	if err == nil || !strings.Contains(errOut.String(), "pass --force to remove it anyway") {
-		t.Fatalf("Rm with a held reference = %v (stderr %q), want a refusal naming --force", err, errOut.String())
+	err2 := Rm(realEnv(), &out, &errOut, RmOptions{Names: []string{name}, Interactive: true, Teardown: fastTeardown(t)})
+	if err2 == nil || !strings.Contains(errOut.String(), "pass --force to remove it anyway") {
+		t.Fatalf("Rm with a held reference = %v (stderr %q), want a refusal naming --force", err2, errOut.String())
 	}
 	if _, serr := os.Stat(filepath.Join(fixture2, "removed")); serr == nil {
 		t.Fatal("a held reference did not stop the default (non-force) path from removing the sandbox")
@@ -828,12 +891,121 @@ func TestRm_NamedNonForceRequiresProofButForceBypassesIt(t *testing.T) {
 	// reference does not stop it.
 	out.Reset()
 	errOut.Reset()
-	if err := Rm(realEnv(), &out, &errOut, RmOptions{Names: []string{"pix-demo"}, Force: true, Interactive: true, Teardown: fastTeardown(t)}); err != nil {
+	if err := Rm(realEnv(), &out, &errOut, RmOptions{Names: []string{name}, Force: true, Interactive: true, Teardown: fastTeardown(t)}); err != nil {
 		t.Fatalf("Rm --force: %v (stderr %q)", err, errOut.String())
 	}
-	assertSawRmArgv(t, fixture2, "rm -f pix-demo")
+	assertSawRmArgv(t, fixture2, "rm -f "+name)
 	if _, serr := os.Stat(filepath.Join(fixture2, "removed")); serr != nil {
 		t.Fatalf("--force did not remove the sandbox despite the held reference: %v", serr)
 	}
 	fmt.Fprintln(stdin, "release")
+}
+
+// scopedRemovableFixture is removableFixture parameterized on name, for the
+// Rm-level tests that must exercise a STACK-SCOPED name (Rm refuses anything
+// else — see sandbox.go's scope check).
+func scopedRemovableFixture(name string) string {
+	return fmt.Sprintf(`
+d="$(dirname "$0")"
+echo "$@" >> "$d/argv.log"
+case "$1" in
+ls)
+	[ -f "$d/removed" ] && exit 0
+	if [ "$2" = "--json" ]; then
+		echo '[{"name":"%s","state":"running","instance_id":"inst-1"}]'
+	else
+		echo "%s  img  running"
+	fi
+	exit 0
+	;;
+rm)
+	if [ "$2" != "-f" ]; then
+		echo "fixture: sbx v0.38 refuses a bare rm with no TTY attached; pass --force to skip confirmation" >&2
+		exit 3
+	fi
+	touch "$d/removed"
+	exit 0
+	;;
+esac
+exit 0
+`, name, name)
+}
+
+// multiListFixture lists every name in names (both the plain `ls` and `ls
+// --json` shapes) until its own `rm -f <name>` marks it removed, tracked
+// per-name so a bulk sweep's discovery listing reflects exactly which of
+// several boxes have actually been torn down.
+func multiListFixture(names ...string) string {
+	var plain, jsonRows strings.Builder
+	for i, n := range names {
+		fmt.Fprintf(&plain, "\t[ ! -f \"$d/removed-%s\" ] && echo \"%s  img  running\"\n", n, n)
+		if i > 0 {
+			jsonRows.WriteString(",")
+		}
+		fmt.Fprintf(&jsonRows, `{"name":"%s","state":"running","instance_id":"inst-%d"}`, n, i)
+	}
+	return fmt.Sprintf(`
+d="$(dirname "$0")"
+echo "$@" >> "$d/argv.log"
+case "$1" in
+ls)
+	if [ "$2" = "--json" ]; then
+		rows='%s'
+		echo "[$rows]"
+	else
+%s	fi
+	exit 0
+	;;
+rm)
+	if [ "$2" != "-f" ]; then
+		echo "fixture: sbx v0.38 refuses a bare rm with no TTY attached" >&2
+		exit 3
+	fi
+	touch "$d/removed-$3"
+	exit 0
+	;;
+esac
+exit 0
+`, jsonRows.String(), plain.String())
+}
+
+// TestRm_AllOnlyRemovesCurrentStack: `pix rm --all` discovers and removes
+// ONLY sandboxes scoped to THIS process's current stack. `sbx ls` is a
+// host-global listing, so a mixed listing (this stack's own box beside a
+// DIFFERENT stack's own pix-* box) must skip the foreign one entirely —
+// never attempted, never reported removed, and never even named in an error.
+func TestRm_AllOnlyRemovesCurrentStack(t *testing.T) {
+	isolateState(t)
+	id, err := stack.Current()
+	if err != nil {
+		t.Fatalf("stack.Current: %v", err)
+	}
+	mine := "pix-" + id + "-mine"
+	foreign := "pix-fedcba9876543210-theirs"
+	fixture := installFakeSbx(t, multiListFixture(mine, foreign))
+
+	var out, errOut strings.Builder
+	if err := Rm(realEnv(), &out, &errOut, RmOptions{All: true, Interactive: true, Teardown: fastTeardown(t)}); err != nil {
+		t.Fatalf("Rm --all: %v (stderr %q)", err, errOut.String())
+	}
+
+	if !strings.Contains(out.String(), "removed "+mine) {
+		t.Errorf("stdout = %q, want it to report %q removed", out.String(), mine)
+	}
+	if strings.Contains(out.String(), foreign) || strings.Contains(errOut.String(), foreign) {
+		t.Errorf("a foreign-stack box must never be named by a bulk --all sweep: stdout=%q stderr=%q", out.String(), errOut.String())
+	}
+
+	var rmCalls []string
+	for _, l := range argvLines(t, fixture) {
+		if strings.HasPrefix(l, "rm") {
+			rmCalls = append(rmCalls, l)
+		}
+	}
+	if len(rmCalls) != 1 || rmCalls[0] != "rm -f "+mine {
+		t.Fatalf("rm calls = %v, want exactly one call removing only %q (never the foreign-stack box)", rmCalls, mine)
+	}
+	if _, serr := os.Stat(filepath.Join(fixture, "removed-"+foreign)); !os.IsNotExist(serr) {
+		t.Errorf("the foreign-stack box was removed by this stack's --all sweep")
+	}
 }

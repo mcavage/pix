@@ -27,6 +27,7 @@ import (
 	"pix/host/mcp"
 	"pix/host/sandbox"
 	"pix/host/secret"
+	"pix/host/stack"
 	"pix/host/workflow/doctor"
 	nativeenv "pix/host/workflow/env"
 	"pix/host/workflow/launch"
@@ -173,20 +174,32 @@ func composeStaticMCP(existing, oMCP []string) []string {
 	return mcp.AllPreloadedMCP(merged)
 }
 
-// resolveSandboxName is the sandbox `pix run` actually targets: an explicit
-// --name travels verbatim (a user-owned display name, never reinterpreted).
-// Absent that, the DEFAULT is the deterministic, digest-suffixed
-// sandbox.Name(workspace) — and lease state is keyed by whichever of those two
-// this function returns (see sessionKey below), so two workspaces sharing a
-// basename can never alias one sandbox or one lease directory in the default
-// case (the digest covers the full canonical path), and an explicit --name
-// reusing a workspace directory another sandbox already used never aliases
-// that sandbox's lease directory either.
-func resolveSandboxName(explicit, workspace string) string {
-	if explicit != "" {
-		return explicit
+// resolveSandboxName is the sandbox `pix run` actually targets, ALWAYS
+// scoped to this process's current stack (stack.Current, i.e. this
+// PIX_HOME): absent an explicit --name, the DEFAULT is the deterministic,
+// digest-suffixed sandbox.Name(workspace) — and lease state is keyed by
+// whichever of those two this function returns (see sessionKey below), so
+// two workspaces sharing a basename can never alias one sandbox or one
+// lease directory in the default case (the digest covers the full
+// canonical path), and an explicit --name reusing a workspace directory
+// another sandbox already used never aliases that sandbox's lease
+// directory either.
+//
+// An explicit --name is NOT a bypass of stack scoping: it is resolved
+// through sandbox.ScopeExplicitName, which scopes a short logical name into
+// this stack's own namespace, round-trips an already-current-stack-scoped
+// full name verbatim (e.g. one `pix ls` just printed), and refuses a full
+// name scoped to a DIFFERENT stack or any argv-unsafe form outright — see
+// its own doc comment for the exact three-way rule.
+func resolveSandboxName(explicit, workspace string) (string, error) {
+	id, err := stack.Current()
+	if err != nil {
+		return "", fmt.Errorf("pix run: resolve this stack's identity: %w", err)
 	}
-	return sandbox.Name(workspace)
+	if explicit == "" {
+		return sandbox.NameForStack(id, workspace, "")
+	}
+	return sandbox.ScopeExplicitName(id, explicit)
 }
 
 // sessionKeyFor is the lease identity for a resolved run: the FINAL sandbox
@@ -395,7 +408,10 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// Own the sandbox name (sbx would auto-derive `pix-<dir>`) and probe its state
 	// BEFORE any create-only resolution below, so a plain re-attach never fails on a
 	// --dev/checkout or --kit problem it does not need.
-	o.Name = resolveSandboxName(o.Name, o.Workspace)
+	o.Name, err = resolveSandboxName(o.Name, o.Workspace)
+	if err != nil {
+		return runFail(d, 2, "%v", err)
+	}
 	state := launch.ProbeTaskSandbox(defaultShellEnv(), o.Name)
 
 	// Mirror sbx's own model: an existing sandbox (running OR stopped) is ATTACHED

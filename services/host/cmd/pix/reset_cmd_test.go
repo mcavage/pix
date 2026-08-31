@@ -2,13 +2,27 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"pix/host/cli"
+	"pix/host/stack"
+	"pix/host/workflow/reset"
 )
+
+// fakeAbsentContainerRunner reports "no such container" for every docker
+// call, the same fixture shape workflow/reset's own tests use for a
+// container.Runner double — reimplemented here because that one is private
+// to the reset package.
+type fakeAbsentContainerRunner struct{}
+
+func (fakeAbsentContainerRunner) Run(args ...string) (string, error) {
+	return "Error: No such object", errors.New("exit 1")
+}
 
 // reset_cmd_test.go proves M2 (security re-review): pix reset has no
 // --keep-memory/--keep-sandboxes/--force flags left to ignore, --yes is the
@@ -40,6 +54,115 @@ func resetTestDeps(t *testing.T, home string) (*cli.Deps, *bytes.Buffer, *bytes.
 	t.Setenv("PIX_HOME", home)
 	var out, errb bytes.Buffer
 	return &cli.Deps{Out: &out, Err: &errb}, &out, &errb
+}
+
+// installFakeSbxOnPath writes an executable `sbx` fixture and prepends its
+// directory to PATH — the same shape workflow/launch's own
+// installFakeSbx uses, reimplemented here because it is a _test.go-only
+// helper private to that package.
+func installFakeSbxOnPath(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sbx")
+	body := "#!/bin/sh\n" + script + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return dir
+}
+
+// mixedStackListFixture lists two boxes forever (never removed until its own
+// `rm -f <name>` marks one gone): one this stack's own, one a DIFFERENT
+// stack's. It backs TestResetCmd_SweepIsScopedToCurrentStack below.
+func mixedStackListFixture(mine, foreign string) string {
+	return fmt.Sprintf(`
+d="$(dirname "$0")"
+echo "$@" >> "$d/argv.log"
+case "$1" in
+ls)
+	if [ "$2" = "--json" ]; then
+		rows=""
+		[ ! -f "$d/removed-%s" ] && rows="$rows{\"name\":\"%s\",\"state\":\"running\",\"instance_id\":\"inst-0\"},"
+		[ ! -f "$d/removed-%s" ] && rows="$rows{\"name\":\"%s\",\"state\":\"running\",\"instance_id\":\"inst-1\"},"
+		rows="${rows%%,}"
+		echo "[$rows]"
+	else
+		[ ! -f "$d/removed-%s" ] && echo "%s  img  running"
+		[ ! -f "$d/removed-%s" ] && echo "%s  img  running"
+	fi
+	exit 0
+	;;
+rm)
+	if [ "$2" != "-f" ]; then
+		echo "fixture: sbx v0.38 refuses a bare rm with no TTY attached" >&2
+		exit 3
+	fi
+	touch "$d/removed-$3"
+	exit 0
+	;;
+esac
+exit 0
+`, mine, mine, foreign, foreign, mine, mine, foreign, foreign)
+}
+
+// TestResetCmd_SweepIsScopedToCurrentStack proves `pix reset`'s injected
+// Sweep (rmAllSandboxes -> launch.Rm{All:true}) discovers and removes ONLY
+// this stack's own sandboxes, end to end through the real `dispatch` entry
+// point: a mixed `sbx ls` listing (this stack's own box beside a DIFFERENT
+// stack's) must leave the foreign box alone, yet still let the reset
+// proceed (PIX_HOME renamed aside) since nothing this stack owns failed to
+// remove.
+func TestResetCmd_SweepIsScopedToCurrentStack(t *testing.T) {
+	home := resetTestHome(t)
+	// Deliberately NOT resetTestDeps: that helper clobbers PATH down to an
+	// empty tempdir so the OTHER tests in this file can prove sbx is
+	// treated as absent. This test needs the REAL PATH (dirname/touch/sh
+	// utilities the fixture script below shells out to) with the fixture's
+	// own directory prepended — installFakeSbxOnPath's own contract.
+	t.Setenv("PIX_HOME", home)
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	d.Interactive = false
+	d.In = strings.NewReader("")
+
+	id, err := stack.ID(home)
+	if err != nil {
+		t.Fatalf("stack.ID: %v", err)
+	}
+	mine := "pix-" + id + "-mine"
+	foreign := "pix-fedcba9876543210-theirs"
+	fixture := installFakeSbxOnPath(t, mixedStackListFixture(mine, foreign))
+
+	// ResetHome directly, not the confirmation-gated resetCmd.Run: the
+	// confirmation gate and its own flag/prompt refusals are already covered
+	// by this file's other tests, and driving ResetHome directly is what lets
+	// this one inject a fake container.Runner — this dev environment has no
+	// real docker, and the sweep-scoping property under test has nothing to
+	// do with the memory container step. rmAllSandboxes(d) IS the exact
+	// `pix reset` production wiring (reset_cmd.go), unchanged here.
+	res, err := reset.ResetHome(reset.HomeDeps{
+		Home:            home,
+		Sweep:           rmAllSandboxes(d),
+		ContainerRunner: fakeAbsentContainerRunner{},
+		Out:             d.Out,
+		ErrOut:          d.Err,
+	})
+	if err != nil {
+		t.Fatalf("ResetHome: %v; stdout=%q stderr=%q", err, out.String(), errb.String())
+	}
+	if strings.Contains(out.String(), foreign) || strings.Contains(errb.String(), foreign) {
+		t.Fatalf("a foreign-stack box must never be named by pix reset's sweep: stdout=%q stderr=%q", out.String(), errb.String())
+	}
+	if _, statErr := os.Stat(filepath.Join(fixture, "removed-"+mine)); statErr != nil {
+		t.Errorf("this stack's own box was not removed by the sweep: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(fixture, "removed-"+foreign)); !os.IsNotExist(statErr) {
+		t.Errorf("the foreign-stack box was removed by this stack's reset sweep")
+	}
+	if res.BackupPath == "" {
+		t.Fatalf("PIX_HOME was not renamed aside despite a clean sweep of this stack's own boxes: %+v", res)
+	}
 }
 
 func requireHomeUntouched(t *testing.T, home string) {

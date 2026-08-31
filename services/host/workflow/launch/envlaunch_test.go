@@ -79,7 +79,14 @@ func TestEffectiveEnvironment_TwoRepositoriesOneEnvironment(t *testing.T) {
 	doc := &envinfo.Document{SchemaVersion: envinfo.SchemaVersionV1, Name: "authored-name"}
 	sel := EnvSelection{Name: "work", Root: "/envs/work", Document: doc, Reviewed: true}
 
-	nameA, nameB := sandbox.Name("/repo/a"), sandbox.Name("/repo/b")
+	nameA, err := sandbox.Name("/repo/a")
+	if err != nil {
+		t.Fatalf("sandbox.Name: %v", err)
+	}
+	nameB, err := sandbox.Name("/repo/b")
+	if err != nil {
+		t.Fatalf("sandbox.Name: %v", err)
+	}
 	if nameA == nameB {
 		t.Fatal("two repositories must not derive one sandbox name")
 	}

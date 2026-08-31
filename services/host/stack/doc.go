@@ -11,10 +11,12 @@
 //   - id.go    — ID derives the stack ID from a canonicalized PIX_HOME path:
 //     the first IDLen lowercase hex characters of sha256(canonical home).
 //     Current() derives it from pixhome.Dir() so a caller never has to
-//     canonicalize a home path by hand. Canonicalization is filepath.Abs,
-//     then filepath.EvalSymlinks when the path resolves, then
-//     filepath.Clean — the same shape sandbox.Name already uses for a
-//     workspace path, applied here to PIX_HOME itself.
+//     canonicalize a home path by hand. Canonicalization (CanonicalPath) is
+//     filepath.Abs, then filepath.EvalSymlinks when the path resolves, then
+//     filepath.Clean, and hashing (HashPrefix) is sha256 truncated to n hex
+//     characters — both exported so sandbox.Name reuses THIS package's own
+//     routines for a workspace path's digest, rather than keeping a second,
+//     duplicate copy of either.
 //   - names.go — every scoped resource name this stack's later callers need
 //     (sandbox name prefix, the pix-memory container name, the two reserved
 //     MCP names, and the locally-loaded image tag grammar), plus the two
