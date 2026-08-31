@@ -33,18 +33,23 @@ import (
 	"pix/host/release"
 )
 
-// memoryHostPort is the fixed loopback port pix-memory publishes on. A
-// future release manifest field may make this allocated/configurable; until
-// then it is the one port every home-adapter caller (doctor, setup) agrees
-// on, so a probe and a registration always describe the SAME endpoint.
-const memoryHostPort = 18080
-
 // homeContainerSpec builds the container.Spec every v2 home caller
 // reconciles/probes against: the release-pinned pix-memory image (when a
 // release manifest is recorded; "" otherwise, which container.Inspect and
 // the doctor probes both already treat as "nothing to compare against" and
-// report absent/no-manifest rather than crashing on) and this host's fixed
-// loopback port and data directory.
+// report absent/no-manifest rather than crashing on), container.
+// DefaultMemoryPort (the ONE canonical port, security/QA re-review MEDIUM
+// finding — this used to be a second, independently duplicated `18080`
+// literal here), this host's data directory, and — read-only, never
+// generated here — whatever MEMORY_AUTH_TOKEN env-file `pix setup` has
+// already written (security re-review HIGH finding: the pix-memory bearer
+// token is mounted via `docker create --env-file`, never a literal `-e`
+// argument, so it never appears in this host's own process listing of the
+// `docker create` invocation). A caller that has not yet run `pix setup`
+// sees an EnvFile path that does not exist yet; that is fine for every
+// current caller (doctor/run only ever read this spec, they never call
+// container.Create with it — only setup_cmd.go does, and it always calls
+// provision.EnsureMemoryAuthToken first).
 func homeContainerSpec(home pixhome.Paths) container.Spec {
 	image := ""
 	if m, err := release.LoadInstalled(home.Home); err == nil && m != nil {
@@ -53,8 +58,9 @@ func homeContainerSpec(home pixhome.Paths) container.Spec {
 	return container.Spec{
 		ContainerName: container.Name,
 		Image:         image,
-		HostPort:      memoryHostPort,
+		HostPort:      container.DefaultMemoryPort,
 		DataDir:       home.StateMemory,
+		EnvFile:       container.MemoryAuthTokenPath(home),
 	}
 }
 

@@ -8,6 +8,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -18,9 +19,32 @@ import (
 	"pix-memory/store"
 )
 
+// testAuthToken is the fixed bearer token every test in this file registers
+// (auth is a security invariant, not an optional feature to bypass in a
+// test double).
+const testAuthToken = "test-token-do-not-use-in-prod"
+
+// bearerRoundTripper injects "Authorization: Bearer <token>" on every
+// request, mirroring what a real MCP Gateway client configured with a
+// header-bearing registration would send.
+type bearerRoundTripper struct {
+	token string
+	base  http.RoundTripper
+}
+
+func (rt bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+rt.token)
+	base := rt.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(req)
+}
+
 // newTestServer starts an httptest server over server.NewMux backed by a
-// fresh temp-dir store, and returns a connected MCP client session plus a
-// cleanup func.
+// fresh temp-dir store, and returns a connected MCP client session (already
+// carrying the correct bearer token) plus a cleanup func.
 func newTestServer(t *testing.T) (*mcp.ClientSession, *httptest.Server) {
 	t.Helper()
 	st, err := store.Open(t.TempDir()+"/memory.db", nil) // no embedder: keyword-only recall
@@ -29,11 +53,14 @@ func newTestServer(t *testing.T) (*mcp.ClientSession, *httptest.Server) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	ts := httptest.NewServer(server.NewMux(st))
+	ts := httptest.NewServer(server.NewMux(st, testAuthToken))
 	t.Cleanup(ts.Close)
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0"}, nil)
-	transport := &mcp.StreamableClientTransport{Endpoint: ts.URL + "/mcp"}
+	transport := &mcp.StreamableClientTransport{
+		Endpoint:   ts.URL + "/mcp",
+		HTTPClient: &http.Client{Transport: bearerRoundTripper{token: testAuthToken}},
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	sess, err := client.Connect(ctx, transport, nil)
@@ -272,6 +299,119 @@ func TestSnapshotAndRestoreRoundTrip(t *testing.T) {
 	recalled := callTool[recallOut](t, sess, "memory_recall", map[string]any{"query": "*"})
 	if len(recalled.Hits) < 1 {
 		t.Fatalf("memory_recall after restore: want at least 1 hit, got %+v", recalled.Hits)
+	}
+}
+
+// --- security re-review HIGH: /mcp auth --------------------------------------
+
+// TestMCPRequiresAuth_UnauthorizedWithoutToken proves an /mcp request with NO
+// credential at all is refused before it ever reaches the MCP handler — the
+// exact "any local process can read/write agent memory" gap the security
+// re-review found.
+func TestMCPRequiresAuth_UnauthorizedWithoutToken(t *testing.T) {
+	st, err := store.Open(t.TempDir()+"/memory.db", nil)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ts := httptest.NewServer(server.NewMux(st, testAuthToken))
+	t.Cleanup(ts.Close)
+
+	resp, err := ts.Client().Post(ts.URL+"/mcp", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /mcp with no auth: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("POST /mcp with no auth: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+// TestMCPRequiresAuth_UnauthorizedWithWrongToken proves a wrong bearer value
+// is refused, not merely an absent one.
+func TestMCPRequiresAuth_UnauthorizedWithWrongToken(t *testing.T) {
+	st, err := store.Open(t.TempDir()+"/memory.db", nil)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ts := httptest.NewServer(server.NewMux(st, testAuthToken))
+	t.Cleanup(ts.Close)
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST /mcp with wrong auth: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("POST /mcp with wrong auth: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+// TestMCPRequiresAuth_NoConfiguredTokenRefusesEverything proves an empty
+// configured token (misconfiguration) fails CLOSED — never a silent
+// unauthenticated fallback.
+func TestMCPRequiresAuth_NoConfiguredTokenRefusesEverything(t *testing.T) {
+	st, err := store.Open(t.TempDir()+"/memory.db", nil)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ts := httptest.NewServer(server.NewMux(st, ""))
+	t.Cleanup(ts.Close)
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer anything")
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST /mcp with no configured token: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("POST /mcp with no configured token: status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+}
+
+// TestMCPQueryTokenAuthorizes proves the loopback-URL credential fallback
+// (?token=) a native sbx MCP declaration must use in place of a header
+// works end to end over the real MCP handshake.
+func TestMCPQueryTokenAuthorizes(t *testing.T) {
+	st, err := store.Open(t.TempDir()+"/memory.db", nil)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ts := httptest.NewServer(server.NewMux(st, testAuthToken))
+	t.Cleanup(ts.Close)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0"}, nil)
+	transport := &mcp.StreamableClientTransport{Endpoint: ts.URL + "/mcp?token=" + testAuthToken}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sess, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatalf("client.Connect over ?token=: %v", err)
+	}
+	defer sess.Close()
+	if sess.InitializeResult() == nil {
+		t.Fatal("InitializeResult is nil after Connect over ?token=")
+	}
+}
+
+// TestHealthzNeedsNoAuth proves /healthz answers with NO credential at all,
+// even when a real auth token is configured — architecture §9.1's stated
+// exception.
+func TestHealthzNeedsNoAuth(t *testing.T) {
+	_, ts := newTestServer(t)
+	resp, err := ts.Client().Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz with no auth: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /healthz with no auth: status = %d, want 200", resp.StatusCode)
 	}
 }
 

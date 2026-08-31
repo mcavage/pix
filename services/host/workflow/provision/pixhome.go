@@ -58,6 +58,13 @@ type Deps struct {
 	// that step entirely (e.g. a caller testing only the home/container
 	// halves).
 	MCP MCPRegistrar
+
+	// MemoryAuthToken is the bearer credential (container.
+	// EnsureMemoryAuthToken's return value) embedded into the registered
+	// MCP URL (security re-review HIGH finding). "" registers the bare
+	// URL — only a caller that has not generated a token yet (or a test
+	// exercising the pre-token shape) should ever pass that.
+	MemoryAuthToken string
 }
 
 // Result reports what each step of Setup actually did.
@@ -70,13 +77,6 @@ type Result struct {
 	// an existing registration under the reserved name points somewhere
 	// else, and Setup left it untouched.
 	MCPMatched bool
-}
-
-// MemoryMCPURL renders the loopback MCP endpoint a reconciled pix-memory
-// container publishes, for both Setup's own registration call and any
-// caller (doctor) that needs to compare against it.
-func MemoryMCPURL(spec container.Spec) string {
-	return fmt.Sprintf("http://127.0.0.1:%d/mcp", spec.HostPort)
 }
 
 // Setup runs the v2 setup sequence: initialize PIX_HOME, record the release
@@ -111,7 +111,7 @@ func Setup(d Deps) (Result, error) {
 	res.Container = cres
 
 	if d.MCP != nil {
-		matched, err := d.MCP.EnsureMemoryRemote(envinfo.MCPMemoryName, MemoryMCPURL(d.ContainerSpec))
+		matched, err := d.MCP.EnsureMemoryRemote(envinfo.MCPMemoryName, container.MemoryMCPURL(d.ContainerSpec, d.MemoryAuthToken))
 		if err != nil {
 			return res, fmt.Errorf("register %s with the sbx Gateway: %w", envinfo.MCPMemoryName, err)
 		}

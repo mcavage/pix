@@ -233,7 +233,7 @@ export default [
 	{
 		id: "lifecycle.session.attach-execs-stored-invocation",
 		description:
-			"U04c2: an attach to a POSITIVELY IDENTIFIED, RUNNING sandbox re-invokes pi through `sbx exec -it` (interactive) / `-i` (piped) with the STORED create-time invocation replayed verbatim — never asking sbx to re-derive a command from the container's spec. A stopped or schema-unverified row keeps the legacy `sbx run --name` reattach argv, because exec has no start of its own.",
+			"U04c2/QA re-review F1: an attach to a POSITIVELY IDENTIFIED, RUNNING sandbox re-invokes pi through `sbx exec -it` (interactive) / `-i` (piped) with THIS SESSION'S OWN CURRENT invocation (spec.DefaultInvocation — whatever --model/--resume/etc. this exact run asked for), never a replay of whatever a PRIOR create happened to store (the stored invocation is retained for audit only: reap.go still reads it to confirm a sandbox has a verifiable creation record). A stopped or schema-unverified row keeps the legacy `sbx run --name` reattach argv, because exec has no start of its own.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/sbxargs.go",
@@ -248,7 +248,7 @@ export default [
 			{
 				file: "services/host/workflow/launch/session.go",
 				kind: "contains",
-				values: ["execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, invocation)"],
+				values: ["execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, spec.DefaultInvocation)"],
 			},
 		],
 	},

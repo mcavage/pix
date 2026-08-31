@@ -192,7 +192,12 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 		created <- RunSession(SessionSpec{
 			Key: key, Name: "pix-demo", Creating: true,
 			EnvCreateArgs: []string{"env", "create", "/tmp/effective.sbxenv.yaml"},
-			Fingerprint:   fp, Invocation: []string{"--model", "m"},
+			// Invocation is what gets RECORDED (audit only, QA re-review F1):
+			// deliberately a DIFFERENT value from the attach's own
+			// DefaultInvocation below, so a regression to "attach replays
+			// whatever got stored" fails loudly instead of passing by
+			// coincidence.
+			Fingerprint: fp, Invocation: []string{"--model", "stale-create-time-model"},
 		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 	}()
 
@@ -205,7 +210,10 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 		attached <- RunSession(SessionSpec{
 			Key: key, Name: "pix-demo", AttachExec: true, AttachTTY: true,
 			AttachArgs: []string{"run", "--name", "pix-demo"}, Fingerprint: fp,
-			DefaultInvocation: []string{"--unused-default"},
+			// DefaultInvocation is THIS attach's own current, freshly resolved
+			// invocation (e.g. a new --model/--resume this run asked for) —
+			// it must reach the exec argv, never the stale stored one above.
+			DefaultInvocation: []string{"--model", "m"},
 		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 	}()
 
@@ -226,7 +234,7 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 	if diverged, found := CheckSessionFingerprint(key, fp); !found || len(diverged) > 0 {
 		t.Errorf("fingerprint not recorded before the session ended: found=%v diverged=%v", found, diverged)
 	}
-	if inv, found := readSessionInvocation(key); !found || strings.Join(inv, " ") != "--model m" {
+	if inv, found := readSessionInvocation(key); !found || strings.Join(inv, " ") != "--model stale-create-time-model" {
 		t.Errorf("invocation not recorded before the session ended: %v (found %v)", inv, found)
 	}
 	select {
@@ -243,11 +251,12 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 		t.Errorf("second attach started %s after the first record; want <250ms (the lifecycle lock must cover the transition, not the session)", d)
 	}
 
-	// (3) The attach replayed the STORED invocation verbatim, as `exec -it`.
-	// After the cutover the CREATE also execs (`sbx env create` then
-	// `sbx exec` — this spec asked for no TTY, so its own line is `exec -i`),
-	// so the assertion is that the interactive attach line is present, not
-	// that it is the only exec on the wire.
+	// (3) The attach used its OWN current invocation (DefaultInvocation),
+	// NEVER the stale one the create recorded (QA re-review F1). After the
+	// cutover the CREATE also execs (`sbx env create` then `sbx exec` —
+	// this spec asked for no TTY, so its own line is `exec -i`), so the
+	// assertion is that the interactive attach line is present, not that
+	// it is the only exec on the wire.
 	var execLines []string
 	sawAttachExec := false
 	for _, l := range argvLines(t, fixture) {

@@ -2,8 +2,10 @@ package secret
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"pix/host/pixhome"
@@ -167,5 +169,110 @@ func TestCheckRef_PropagatesFailureWithoutValue(t *testing.T) {
 	err := CheckRef(reader, "op://Vault/Missing/field")
 	if err == nil {
 		t.Fatal("expected an error for a failing reference")
+	}
+}
+
+// TestSetRef_ConcurrentWritesNeverLoseAReference is the security re-review
+// MEDIUM fix's proof: N goroutines each SetRef a DIFFERENT key concurrently
+// (the unlocked v1-style read-modify-write this finding named would
+// interleave two of these and silently drop one), and every single key must
+// still be present afterward.
+func TestSetRef_ConcurrentWritesNeverLoseAReference(t *testing.T) {
+	home := testHome(t)
+	const n = 25
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := fmt.Sprintf("KEY_%d", i)
+			val := fmt.Sprintf("op://Vault/Item%d/field", i)
+			errs[i] = SetRef(home, key, val)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("SetRef(KEY_%d): %v", i, err)
+		}
+	}
+
+	refs, err := LoadRefs(home)
+	if err != nil {
+		t.Fatalf("LoadRefs: %v", err)
+	}
+	if len(refs) != n {
+		t.Fatalf("secrets.env has %d refs after %d concurrent SetRef calls, want %d (a race dropped one) — got %+v", len(refs), n, n, refs)
+	}
+	seen := map[string]bool{}
+	for _, r := range refs {
+		seen[r.Key] = true
+	}
+	for i := 0; i < n; i++ {
+		key := fmt.Sprintf("KEY_%d", i)
+		if !seen[key] {
+			t.Errorf("%s missing after concurrent SetRef — a race dropped it", key)
+		}
+	}
+}
+
+// TestSetRefRemoveRef_ConcurrentMixDoesNotCorruptFile interleaves SetRef and
+// RemoveRef across many goroutines and proves the file is left in SOME
+// internally-consistent state (every surviving line still parses as a valid
+// ref) rather than a torn write from two unlocked writers racing each
+// other's temp-file-then-rename.
+func TestSetRefRemoveRef_ConcurrentMixDoesNotCorruptFile(t *testing.T) {
+	home := testHome(t)
+	// Seed every key first so RemoveRef has something to race against.
+	const n = 20
+	for i := 0; i < n; i++ {
+		if err := SetRef(home, fmt.Sprintf("MIX_%d", i), fmt.Sprintf("op://Vault/Mix%d/field", i)); err != nil {
+			t.Fatalf("seed SetRef: %v", err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := fmt.Sprintf("MIX_%d", i)
+			if i%2 == 0 {
+				_ = RemoveRef(home, key)
+			} else {
+				_ = SetRef(home, key, fmt.Sprintf("op://Vault/Mix%d/updated", i))
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	refs, err := LoadRefs(home)
+	if err != nil {
+		t.Fatalf("LoadRefs after concurrent mix: %v", err)
+	}
+	for _, r := range refs {
+		if !r.IsRef {
+			t.Fatalf("secrets.env corrupted: %+v is not a clean op:// ref", r)
+		}
+	}
+	// Every odd key (SetRef) must have survived; every even key (RemoveRef)
+	// must be gone. Wrong on either side means a lost or resurrected update.
+	byKey := map[string]OpRef{}
+	for _, r := range refs {
+		byKey[r.Key] = r
+	}
+	for i := 0; i < n; i++ {
+		key := fmt.Sprintf("MIX_%d", i)
+		r, present := byKey[key]
+		if i%2 == 0 {
+			if present {
+				t.Errorf("%s: RemoveRef lost a race and the key is still present", key)
+			}
+			continue
+		}
+		if !present || r.Value != fmt.Sprintf("op://Vault/Mix%d/updated", i) {
+			t.Errorf("%s: SetRef update lost a race, got %+v", key, r)
+		}
 	}
 }

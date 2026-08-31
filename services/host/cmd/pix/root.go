@@ -156,10 +156,32 @@ func normalizeArgv(argv []string) []string {
 	if len(argv) == 3 && argv[0] == "task" && argv[2] == "path" && !isTaskKnownVerb(argv[1]) {
 		return []string{"task", "path", argv[1]}
 	}
+	// `pix env NAME [--path|--effective|--json]` (docs/design/
+	// pix-v2-surface.md §3.4, QA re-review F3): NAME is not itself a
+	// subcommand, so kong's ordinary dispatch would try to parse it as an
+	// arg to `list` (the default subcommand) and refuse with "unexpected
+	// argument". Rewriting to the real subcommand BEFORE kong ever parses
+	// is the same technique the task name-then-verb and bare-DIR rewrites
+	// above already use. A token that IS one of the four real verbs, or
+	// that looks like a flag (so `pix env --json` keeps meaning `env list
+	// --json`), is left alone.
+	if len(argv) >= 2 && argv[0] == "env" && !isEnvKnownVerb(argv[1]) && !strings.HasPrefix(argv[1], "-") {
+		return append([]string{"env", "show", argv[1]}, argv[2:]...)
+	}
 	if argv[0] == "run" {
 		return rewriteRunPassthrough(argv)
 	}
 	return argv
+}
+
+// isEnvKnownVerb guards the env NAME-shorthand rewrite: it must never fire
+// for a real `pix env` subcommand.
+func isEnvKnownVerb(v string) bool {
+	switch v {
+	case "list", "show", "default", "trust":
+		return true
+	}
+	return false
 }
 
 // isTaskKnownVerb guards the name-then-verb rewrite: it must never fire for a

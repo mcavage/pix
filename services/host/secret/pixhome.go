@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"pix/host/pixhome"
+	"pix/host/sys"
 )
 
 // This file is the Pix v2 secrets.env surface (docs/design/
@@ -64,12 +65,32 @@ func (e *InvalidEnvVarNameError) Error() string {
 	return fmt.Sprintf("pix secret set: %q does not look like an env var name (want %s)", e.Key, EnvVarNameRe.String())
 }
 
+// secretsEnvLockName is the advisory transaction lock guarding
+// <home>/secrets.env's read-modify-write, a sibling of the file itself
+// (security re-review MEDIUM: SetRef/RemoveRef used to race a concurrent
+// `pix secret set`/`rm` in another process, silently losing whichever
+// reference lost the race — the same class of bug v1's op-refs.env already
+// guards against via WithProviderRefsLock). It is a DIFFERENT file from v1's
+// provider-refs.lock: that one guards the v1 config-dir op-refs.env, this
+// one guards the v2 PIX_HOME secrets.env, and the two must never share a
+// lock (a v1 and v2 transaction over two unrelated files must not be able to
+// block each other).
+const secretsEnvLockName = ".secrets.lock"
+
+// secretsEnvLockPath is <home>/.secrets.lock, adjacent to secrets.env.
+func secretsEnvLockPath(home pixhome.Paths) string {
+	return filepath.Join(filepath.Dir(RefsEnvPath(home)), secretsEnvLockName)
+}
+
 // SetRef validates key and value, then durably upserts KEY=op://... into
 // <home>/secrets.env: a same-directory temp file, fsync, then atomic rename
 // — never a value written anywhere else, and never a value this function
 // returns or logs. value is normalized first (NormalizeOpRef strips a
 // 1Password "Copy Secret Reference" paste's surrounding quotes) so a pasted
-// ref is accepted the same way v1's RunSecretSet accepts one.
+// ref is accepted the same way v1's RunSecretSet accepts one. The whole
+// read-modify-write runs under secretsEnvLockPath (an O_NOFOLLOW flock, see
+// sys.Lock), so a concurrent SetRef/RemoveRef in another process can never
+// interleave with this one and silently drop a reference.
 func SetRef(home pixhome.Paths, key, value string) error {
 	if !EnvVarNameRe.MatchString(key) {
 		return &InvalidEnvVarNameError{Key: key}
@@ -85,43 +106,50 @@ func SetRef(home pixhome.Paths, key, value string) error {
 	// one in a spaced 1Password field name), same as v1's RunSecretSetLocked.
 	value = strings.ReplaceAll(value, "%20", " ")
 
-	path := RefsEnvPath(home)
-	content := ""
-	if data, err := os.ReadFile(path); err == nil {
-		content = string(data)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
+	return sys.Lock(secretsEnvLockPath(home), func() error {
+		path := RefsEnvPath(home)
+		content := ""
+		if data, err := os.ReadFile(path); err == nil {
+			content = string(data)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
 
-	newContent := upsertOpRef(content, key, value)
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
-	}
-	return atomicWriteSecrets(dir, path, []byte(newContent), 0o600)
+		newContent := upsertOpRef(content, key, value)
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+		return atomicWriteSecrets(dir, path, []byte(newContent), 0o600)
+	})
 }
 
 // RemoveRef removes key's line from <home>/secrets.env. A missing file or a
 // key never present is a clean, idempotent no-op — matching v1's RunSecretRm
 // posture (surface §3.5: "removes one reference, never a 1Password item").
+// Locked the same way SetRef is, and against the SAME lock file, so a set
+// and a remove for two different keys still serialize rather than racing
+// each other's read-modify-write.
 func RemoveRef(home pixhome.Paths, key string) error {
 	if !EnvVarNameRe.MatchString(key) {
 		return &InvalidEnvVarNameError{Key: key}
 	}
-	path := RefsEnvPath(home)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
+	return sys.Lock(secretsEnvLockPath(home), func() error {
+		path := RefsEnvPath(home)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		newContent, removed := removeOpRef(string(data), key)
+		if !removed {
 			return nil
 		}
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-	newContent, removed := removeOpRef(string(data), key)
-	if !removed {
-		return nil
-	}
-	dir := filepath.Dir(path)
-	return atomicWriteSecrets(dir, path, []byte(newContent), 0o600)
+		dir := filepath.Dir(path)
+		return atomicWriteSecrets(dir, path, []byte(newContent), 0o600)
+	})
 }
 
 // OpReader resolves one op:// reference without ever returning its value —

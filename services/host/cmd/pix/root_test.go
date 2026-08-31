@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -385,6 +386,69 @@ func TestTaskNameThenVerbRewrite(t *testing.T) {
 		if after := strings.Join(normalizeArgv(argv), " "); after != before {
 			t.Errorf("normalizeArgv(%q) rewrote to %q, want unchanged", before, after)
 		}
+	}
+}
+
+// TestEnvNameShorthand_RewritesToShow is QA re-review F3: the accepted
+// surface (docs/design/pix-v2-surface.md §3.4) lists `pix env NAME
+// [--path|--effective|--json]` as its OWN shape, distinct from `pix env show
+// NAME` — both must work, and neither may break the four real subcommands.
+func TestEnvNameShorthand_RewritesToShow(t *testing.T) {
+	for _, tc := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"env", "work"}, "env show work"},
+		{[]string{"env", "work", "--effective"}, "env show work --effective"},
+		{[]string{"env", "work", "--json"}, "env show work --json"},
+		{[]string{"env", "work", "--path"}, "env show work --path"},
+		// The four real subcommands, and a bare/flag-only invocation, must
+		// never be touched by the shorthand rewrite.
+		{[]string{"env"}, "env"},
+		{[]string{"env", "--json"}, "env --json"},
+		{[]string{"env", "list"}, "env list"},
+		{[]string{"env", "list", "--json"}, "env list --json"},
+		{[]string{"env", "show", "work"}, "env show work"},
+		{[]string{"env", "default"}, "env default"},
+		{[]string{"env", "default", "work"}, "env default work"},
+		{[]string{"env", "trust", "work"}, "env trust work"},
+		{[]string{"env", "trust", "work", "--yes"}, "env trust work --yes"},
+	} {
+		got := strings.Join(normalizeArgv(tc.argv), " ")
+		if got != tc.want {
+			t.Errorf("normalizeArgv(%v) = %q, want %q", tc.argv, got, tc.want)
+		}
+	}
+}
+
+// TestEnvNameShorthand_RealDispatchShowsTheNamedEnvironment proves the
+// rewrite through the REAL dispatcher, not merely the argv shape: `pix env
+// work` must print exactly what `pix env show work` prints, for a real
+// registered environment.
+func TestEnvNameShorthand_RealDispatchShowsTheNamedEnvironment(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "pixhome")
+	envDir := filepath.Join(home, "envs", "work")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, ".sbxenv.yaml"), []byte("schemaVersion: \"1\"\nagent: pix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PIX_HOME", home)
+
+	d1, out1, _ := rootDeps()
+	if code := dispatch([]string{"env", "work"}, d1); code != 0 {
+		t.Fatalf("dispatch(env work) = %d", code)
+	}
+	d2, out2, _ := rootDeps()
+	if code := dispatch([]string{"env", "show", "work"}, d2); code != 0 {
+		t.Fatalf("dispatch(env show work) = %d", code)
+	}
+	if out1.String() != out2.String() {
+		t.Errorf("pix env work = %q, want the same as pix env show work = %q", out1.String(), out2.String())
+	}
+	if !strings.Contains(out1.String(), "name:        work") {
+		t.Errorf("pix env work did not show the named environment: %q", out1.String())
 	}
 }
 

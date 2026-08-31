@@ -12,12 +12,12 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/container"
 	"pix/host/envinfo"
 	"pix/host/pixhome"
 	"pix/host/sandbox"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/models"
-	"pix/host/workflow/provision"
 
 	nativeenv "pix/host/workflow/env"
 )
@@ -143,7 +143,7 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 // builtinMCPFacts resolves docs/design/pix-v2-architecture.md §10's two
 // reserved built-ins for THIS host: pix-memory, the loopback Streamable
 // HTTP endpoint `pix setup` reconciles and registers with the sbx Gateway
-// (the SAME URL homeContainerSpec/provision.MemoryMCPURL compose for that
+// (the SAME URL homeContainerSpec/container.MemoryMCPURL compose for that
 // registration — never a second, independently-derived one that could
 // silently disagree), and pix-session, the Gateway-launched host stdio
 // command that names this SAME running `pix` binary.
@@ -158,7 +158,12 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 func builtinMCPFacts() envinfo.BuiltinMCPFacts {
 	var facts envinfo.BuiltinMCPFacts
 	if home, err := pixhome.Resolve(); err == nil {
-		facts.MemoryURL = provision.MemoryMCPURL(homeContainerSpec(home))
+		// Read-only: a launch never GENERATES the token (that is `pix setup`'s
+		// job alone, container.EnsureMemoryAuthToken) — a missing token here
+		// degrades the same way an unresolvable session command already does,
+		// by omitting the built-in rather than failing the launch.
+		token, _ := container.ReadMemoryAuthToken(home)
+		facts.MemoryURL = container.MemoryMCPURL(homeContainerSpec(home), token)
 	}
 	if exe, err := os.Executable(); err == nil {
 		if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {

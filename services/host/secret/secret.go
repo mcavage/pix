@@ -659,16 +659,27 @@ func AnyModelKeyInOutput(out string) bool {
 // ModelKeyMissingMessage is the guidance printed when no model key could be put
 // in place. (The launch-blocking presence CHECK lives in runRun/launchTask via
 // sbxModelKeyState's tri-state; this is only the how-to-fix text.)
+//
+// QA re-review F2: this used to name two removed v1 verbs — "pix models add
+// anthropic" and "pix secret sync" — that exit 2 (unknown command) in v2
+// (docs/design/pix-v2-surface.md §3: secret is list/set/rm/check; there is
+// no models or sync verb at all). `pix run` itself already calls
+// BootstrapProviderKeys (which resolves any op:// ref into sbx) BEFORE this
+// message can ever print, so a caller seeing it with refs present just had
+// THIS SAME run's own resolve attempt fail — pointing it at a second
+// manual "sync" that does not exist would be actively misleading, not
+// merely stale.
 func ModelKeyMissingMessage(env hostenv.Env) string {
 	msg := fmt.Sprintf("pix run: no model provider key is set (need one of %s).\n",
 		strings.Join(ModelProviders, ", "))
 	if ProviderKeyRefsPresent(env) {
-		msg += "You have 1Password key refs; resolve them into sbx with:\n  pix secret sync\n"
+		msg += "You have 1Password key refs, but resolving them into sbx just failed. Check them:\n" +
+			"  pix secret check                                                (resolve every ref through op, no values printed)\n" +
+			"  pix doctor                                                      (full host report)\n"
 	} else {
 		msg += "Keys come from 1Password (op is required). Configure them, then re-run:\n" +
 			"  pix setup                                                       (guided, all providers)\n" +
-			"  pix models add anthropic                                        (one provider, prompts for the ref)\n" +
-			"  pix secret set ANTHROPIC_API_KEY op://vault/item/field           (scripted; then `pix models add anthropic`)\n"
+			"  pix secret set ANTHROPIC_API_KEY op://vault/item/field          (one provider; repeat per provider)\n"
 	}
 	return msg
 }

@@ -596,3 +596,38 @@ func TestSecretSetThenRm_FullLifecycle(t *testing.T) {
 		t.Error("the set confirmation should echo the ref (refs are safe to print)")
 	}
 }
+
+// TestModelKeyMissingMessage_NamesNoRemovedVerb is QA re-review F2: the
+// launch-blocking "no model key" guidance used to point at "pix models add
+// anthropic" and "pix secret sync", both removed v1 verbs that exit 2
+// (unknown command) in v2. Every branch (refs present, refs absent) must
+// name only real v2 verbs.
+func TestModelKeyMissingMessage_NamesNoRemovedVerb(t *testing.T) {
+	removed := []string{"pix models", "pix secret sync", "secret sync"}
+
+	t.Run("refs absent", func(t *testing.T) {
+		env := memEnv(map[string]string{})
+		msg := ModelKeyMissingMessage(env)
+		for _, r := range removed {
+			if strings.Contains(msg, r) {
+				t.Errorf("message names removed verb %q:\n%s", r, msg)
+			}
+		}
+		if !strings.Contains(msg, "pix setup") || !strings.Contains(msg, "pix secret set") {
+			t.Errorf("message must still guide to real v2 verbs, got:\n%s", msg)
+		}
+	})
+
+	t.Run("refs present", func(t *testing.T) {
+		env := memEnv(map[string]string{fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n"})
+		msg := ModelKeyMissingMessage(env)
+		for _, r := range removed {
+			if strings.Contains(msg, r) {
+				t.Errorf("message names removed verb %q:\n%s", r, msg)
+			}
+		}
+		if !strings.Contains(msg, "pix secret check") {
+			t.Errorf("message with refs present must point at `pix secret check`, got:\n%s", msg)
+		}
+	})
+}

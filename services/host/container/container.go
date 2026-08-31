@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -26,6 +27,20 @@ import (
 // Name is the one container name Pix ever reconciles (pix-v2-surface.md §8.1:
 // "pix setup starts one machine-local named container").
 const Name = "pix-memory"
+
+// DefaultMemoryPort is the ONE canonical loopback port pix-memory publishes
+// on, machine-wide (QA re-review MEDIUM finding: this used to be a literal
+// `18080` duplicated in both cmd/pix/homeadapters.go and
+// workflow/env/effective.go, with only a doc-comment tripwire holding the
+// two copies together). Every caller that needs "the pix-memory port" reads
+// it from HERE, container being the lowest layer (L1 capability) that both
+// cmd/pix (L4) and workflow/env (L3) may import — so a preview
+// (`pix env --effective`) and a real launch/setup can never silently
+// disagree again. It is still a single fixed default, not allocated: PRD/
+// architecture never asked for a port picker, only for one canonical value
+// instead of scattered copies, plus a collision probe (PortAvailable) so an
+// occupied port is reported instead of failing deep inside `docker start`.
+const DefaultMemoryPort = 18080
 
 // ManagedLabel and FingerprintLabel are the Docker labels Reconcile stamps on
 // every container it creates. ManagedLabel is the adoption boundary: Reconcile
@@ -60,6 +75,13 @@ type Spec struct {
 	// §9.1, surface §8.1). It is never removed by this package, on any path,
 	// including replace.
 	DataDir string
+	// EnvFile is an optional host path passed to `docker create --env-file`
+	// (security re-review HIGH: the pix-memory MEMORY_AUTH_TOKEN bearer
+	// secret is mounted this way, never as a literal `-e NAME=VALUE` create
+	// argument, so the secret VALUE never appears in this host's own process
+	// listing of the `docker create` invocation — only the file PATH does,
+	// which is not secret). "" omits --env-file entirely.
+	EnvFile string
 }
 
 // containerName returns s.ContainerName, defaulting to Name so a caller that
@@ -82,6 +104,12 @@ func (s Spec) Fingerprint() string {
 		"image=" + s.Image,
 		"port=" + strconv.Itoa(s.HostPort),
 		"data=" + s.DataDir,
+		// The env-file PATH is part of the create configuration identity (a
+		// changed path is a changed container), but its CONTENT (the token
+		// value) never is — this fingerprint becomes a Docker label, world-
+		// readable by anything with `docker inspect` access, so the secret
+		// itself must never be derivable from it.
+		"envfile=" + s.EnvFile,
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
 	return "sha256:" + hex.EncodeToString(sum[:])
@@ -92,7 +120,7 @@ func (s Spec) Fingerprint() string {
 // method so a test can assert the exact argv a Runner received, matching the
 // pattern release.GitInitArgs and pixhome already use for git.
 func (s Spec) CreateArgs() []string {
-	return []string{
+	args := []string{
 		"create",
 		"--name", s.containerName(),
 		"--restart", "unless-stopped",
@@ -100,8 +128,11 @@ func (s Spec) CreateArgs() []string {
 		"--label", FingerprintLabel + "=" + s.Fingerprint(),
 		"-p", fmt.Sprintf("127.0.0.1:%d:8080", s.HostPort),
 		"-v", s.DataDir + ":/data",
-		s.Image,
 	}
+	if s.EnvFile != "" {
+		args = append(args, "--env-file", s.EnvFile)
+	}
+	return append(args, s.Image)
 }
 
 // Runner runs one docker CLI invocation and returns its combined
@@ -349,6 +380,32 @@ func baseURL(spec Spec) string {
 	return fmt.Sprintf("http://127.0.0.1:%d", spec.HostPort)
 }
 
+// PortInUseError is PortAvailable's refusal: spec.HostPort is already bound
+// by something on this host, so creating pix-memory here would either fail
+// deep inside `docker start` (opaque) or, worse, appear to succeed while an
+// unrelated process actually answers that port.
+type PortInUseError struct{ Port int }
+
+func (e *PortInUseError) Error() string {
+	return fmt.Sprintf("port 127.0.0.1:%d is already in use by another process on this host; pix-memory needs it free before it can start (stop whatever is using it, then rerun `pix setup`)", e.Port)
+}
+
+// PortAvailable probes whether hostPort is free for a NEW bind on
+// 127.0.0.1: exactly the address:port pair Docker's own userland proxy
+// binds when the container actually starts. It is a best-effort, racy
+// check (something else can still grab the port between this probe and
+// dockerd's own bind, and Docker itself remains the final arbiter) but
+// turns the common same-host "something already listens on this port"
+// case into an actionable, pix-owned error instead of an opaque `docker
+// start` failure surfacing three layers down.
+func PortAvailable(hostPort int) error {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", hostPort))
+	if err != nil {
+		return &PortInUseError{Port: hostPort}
+	}
+	return ln.Close()
+}
+
 // Reconcile is the whole "one named container" contract: adopt a healthy
 // matching container, start a stopped matching one, create one when none
 // exists, or replace a mismatched one after ConfirmReplace approves — then
@@ -367,6 +424,9 @@ func Reconcile(runner Runner, spec Spec, prober Prober, opts ReconcileOptions) (
 
 	switch {
 	case !info.Exists:
+		if perr := PortAvailable(spec.HostPort); perr != nil {
+			return Result{}, perr
+		}
 		id, err := Create(runner, spec)
 		if err != nil {
 			return Result{}, err
@@ -402,6 +462,9 @@ func Reconcile(runner Runner, spec Spec, prober Prober, opts ReconcileOptions) (
 		}
 		if err := StopAndRemove(runner, name); err != nil {
 			return Result{}, err
+		}
+		if perr := PortAvailable(spec.HostPort); perr != nil {
+			return Result{}, perr
 		}
 		id, err := Create(runner, spec)
 		if err != nil {

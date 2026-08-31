@@ -641,12 +641,33 @@ The PR is ready to merge only after one supported host proves:
 2. both DHI images build and the release manifest points to exact artifacts;
 3. `pix-memory` starts, survives Docker restart, retains its database, and is
    reachable through the sbx Gateway but not directly from the sandbox;
+   **auth (security re-review HIGH), exact steps:**
+   `pix setup` generates `~/.pix/state/memory/auth.env` (mode 0600,
+   `MEMORY_AUTH_TOKEN=<64 hex chars>`) and `docker inspect pix-memory` shows
+   `--env-file <that path>` in its create config, never a literal
+   `MEMORY_AUTH_TOKEN=` value in `docker inspect`'s `Config.Env` or in
+   `ps aux` while `docker create`/`docker run` executed. Then:
+   `curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:<port>/mcp`
+   (no credential) must print `401`; the same curl with
+   `-H "Authorization: Bearer $(grep -o '[0-9a-f]\{64\}' ~/.pix/state/memory/auth.env)"`
+   must reach the MCP handshake instead of `401`; and
+   `curl -s http://127.0.0.1:<port>/healthz` must succeed with NO credential
+   at all (§9.1's stated exception). `sbx mcp ls` (or the registered
+   `.sbxenv.yaml`/effective document) must show the `pix-memory` URL carrying
+   `?token=<the same 64 hex chars>` — the loopback-URL credential fallback,
+   used because neither `.sbxenv.yaml`'s `mcp.servers` schema nor `sbx mcp
+   add` can express a custom header (envinfo.MCPServer is name/url/command/
+   args only). The token must never appear in `pix env trust`'s bill of
+   materials, `pix env show --json`'s output, or any `pix` log line.
 4. Pi lists and calls all memory tools;
 5. deterministic recall and capture hooks call MCP through a second Gateway
    client connection;
 6. `sbx env create` followed by `sbx exec -- <entrypoint> --model ...` selects
    the requested model;
-7. the same attach path resumes the requested Pi session;
+7. the same attach path resumes the requested Pi session; **a SECOND `pix
+   run --model <different> --resume <different>` against the SAME already-
+   running sandbox (QA re-review F1) carries the NEW model/resume into the
+   `sbx exec` argv — never the first run's create-time invocation;**
 8. root and child nodes render in `pix ls`, and root exit does not remove a
    sandbox still held by a child runner;
 9. final-holder exit removes an ordinary sandbox;

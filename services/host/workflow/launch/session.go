@@ -322,9 +322,19 @@ type SessionSpec struct {
 	AttachExec bool
 
 	Fingerprint sandbox.Fingerprint // recorded on create, validated on attach
-	Invocation  []string            // the exact pi argv this create sends
-	// DefaultInvocation is the "safe default" pi argv an attach uses when nothing
-	// was ever recorded — the same BuildPiInvocation a create would have sent.
+	// Invocation is the exact pi argv a CREATE sends and records for audit
+	// (PromoteSessionCreation persists it as sessionInvocationFileName); it
+	// is never read back to decide what a LATER attach execs.
+	Invocation []string
+	// DefaultInvocation is the pi argv THIS session actually execs, on both
+	// a create and an attach: the current, freshly resolved invocation this
+	// call built (model/resume/skills as requested THIS run), never a
+	// replay of a prior create's stored one (QA re-review F1). The command
+	// layer sets this to the SAME value as Invocation on every call
+	// (run_cmd.go builds one invocation and uses it for both fields), so
+	// the two names exist to document the two different questions
+	// ("what got recorded" vs "what gets exec'd"), not to carry two
+	// different values.
 	DefaultInvocation []string
 }
 
@@ -540,11 +550,19 @@ func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, 
 				spec.Name, strings.Join(diverged, ", "), RecreateGuidance(spec.Name))}
 		}
 		if spec.AttachExec {
-			invocation, hasRecord := readSessionInvocation(spec.Key)
-			if !hasRecord {
-				invocation = spec.DefaultInvocation
-			}
-			execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, invocation)
+			// QA re-review F1: an attach must use THIS launch's own current,
+			// freshly resolved invocation (spec.DefaultInvocation — the exact
+			// pi argv BuildPiInvocation just composed from --model/--resume/
+			// whatever was requested for THIS run), never a replay of
+			// whatever a prior create happened to store. The stored
+			// invocation (readSessionInvocation) remains an AUDIT trail only
+			// — reap.go still reads it to confirm a sandbox has a verifiable
+			// creation record — and is never again consulted to decide what
+			// an attach actually execs. Verified live: a re-attach with a new
+			// --model/--resume must carry it into the exec argv, not replay
+			// the create-time one (docs/design/pix-v2-surface.md §3.1: "both
+			// options apply to every attach").
+			execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, spec.DefaultInvocation)
 			if aerr != nil {
 				return nil, &SessionRefused{Err: aerr}
 			}

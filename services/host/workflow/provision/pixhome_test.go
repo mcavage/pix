@@ -155,9 +155,28 @@ func TestSetup_SkipsReleaseWhenManifestEmpty(t *testing.T) {
 }
 
 func TestMemoryMCPURL(t *testing.T) {
-	got := MemoryMCPURL(container.Spec{HostPort: 18080})
+	got := container.MemoryMCPURL(container.Spec{HostPort: 18080}, "")
 	if got != "http://127.0.0.1:18080/mcp" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSetup_RegistersMemoryURLWithToken(t *testing.T) {
+	home := pixhome.New(t.TempDir())
+	docker := &fakeDockerRunner{inspectErr: errors.New("exit 1"), inspectOut: "Error: No such object"}
+	mcp := &fakeMCP{}
+	spec := container.Spec{ContainerName: "pix-memory-test", Image: "img@sha256:" + strings.Repeat("b", 64), HostPort: 18080, DataDir: home.StateMemory}
+
+	_, err := Setup(Deps{
+		Home: home, ContainerRunner: docker, Prober: fakeProber{},
+		ContainerSpec: spec, MCP: mcp, MemoryAuthToken: "sekrit-token",
+	})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	want := "http://127.0.0.1:18080/mcp?token=sekrit-token"
+	if got := mcp.registered[envinfo.MCPMemoryName]; got != want {
+		t.Fatalf("registered MCP URL = %q, want %q", got, want)
 	}
 }
 

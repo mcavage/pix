@@ -7,10 +7,12 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -312,13 +314,22 @@ func registerTools(srv *mcp.Server, st *store.Store) {
 // NewMux serves the streamable-HTTP /mcp endpoint and a non-MCP /healthz over
 // one handler, the shape docs/design/pix-v2-architecture.md §9.1 describes.
 // /healthz is liveness+readiness: 200 only once the store answers a live
-// PRAGMA/ping.
-func NewMux(st *store.Store) http.Handler {
+// PRAGMA/ping, and stays UNAUTHENTICATED (it is loopback-only and carries no
+// memory content — architecture §9.1/security re-review HIGH finding).
+//
+// authToken, when non-empty, is enforced on EVERY /mcp request (security
+// re-review HIGH: "unauthenticated memory container exposed on host
+// loopback" — any local process/user on the same host can otherwise read or
+// write agent memory). A caller passes "" only from a test that
+// deliberately exercises the unauthenticated shape; production (cmd/pix-
+// memory) always resolves MEMORY_AUTH_TOKEN and refuses to serve /mcp at all
+// when it is unset, rather than silently running open (see main.go).
+func NewMux(st *store.Store, authToken string) http.Handler {
 	srv := New(st)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/mcp", requireAuth(authToken, mcpHandler))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := st.Ping(); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -329,4 +340,55 @@ func NewMux(st *store.Store) http.Handler {
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "version": Version})
 	})
 	return mux
+}
+
+// tokenQueryParam is the URL-embedded credential fallback: the native sbx
+// `.sbxenv.yaml`/`sbx mcp add` grammar for a remote MCP server has no field
+// for a custom header (envinfo.MCPServer is name/url/command/args only), so
+// a header-bearing declaration cannot be expressed. Pix's own registration
+// instead generates a loopback URL of the form
+// "http://127.0.0.1:<port>/mcp?token=<token>" — see
+// pix/host/workflow/provision.MemoryMCPURL — and this server accepts that
+// query parameter as equivalent to the bearer header. Whichever form a
+// caller uses, the comparison is constant-time against the SAME configured
+// token.
+const tokenQueryParam = "token"
+
+// requireAuth enforces authToken on next: either an "Authorization: Bearer
+// <token>" header (the documented mechanism for any client that CAN send a
+// header, e.g. a direct curl UAT check) or a "?token=<token>" query
+// parameter (the loopback-URL fallback a native sbx MCP declaration must use
+// instead). A missing/empty configured token fails EVERY request closed
+// (503): unauthenticated is never a silent fallback.
+func requireAuth(token string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if token == "" {
+			http.Error(w, "pix-memory: no auth token configured; refusing to serve /mcp", http.StatusServiceUnavailable)
+			return
+		}
+		if !authorized(r, token) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="pix-memory"`)
+			http.Error(w, "pix-memory: unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authorized reports whether r carries token via either accepted mechanism.
+// Both comparisons are constant-time (crypto/subtle): a request presents
+// attacker-controlled input, and this is the one gate standing between it
+// and every memory row on the host.
+func authorized(r *http.Request, token string) bool {
+	if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+		if subtle.ConstantTimeCompare([]byte(bearer), []byte(token)) == 1 {
+			return true
+		}
+	}
+	if q := r.URL.Query().Get(tokenQueryParam); q != "" {
+		if subtle.ConstantTimeCompare([]byte(q), []byte(token)) == 1 {
+			return true
+		}
+	}
+	return false
 }

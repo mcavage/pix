@@ -23,13 +23,13 @@
 package env
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"pix/host/config"
+	"pix/host/container"
 	"pix/host/envinfo"
 	"pix/host/mcp"
 	"pix/host/pixhome"
@@ -63,15 +63,6 @@ const (
 	effectiveTemplateRepo      = "docker.io/mcavage/pix"
 	effectivePullPolicyMissing = "missing"
 )
-
-// effectiveMemoryHostPort mirrors cmd/pix/homeadapters.go's own
-// memoryHostPort: the fixed loopback port pix-memory publishes on. Same
-// sibling-import ban as effectiveTemplateRepo above — cmd/pix is a HIGHER
-// layer this package may never import — so the value is duplicated with
-// this comment as the tripwire: if that port ever becomes configurable,
-// both copies must change together, or a preview's pix-memory URL would
-// silently disagree with what a real launch composes.
-const effectiveMemoryHostPort = 18080
 
 // effectiveSessionSubcommandArg mirrors cmd/pix/run_env.go's
 // mcpSessionSubcommand: pix-session's reserved argv[1]. Kept as a
@@ -176,14 +167,19 @@ func RenderEffectiveDocument(home pixhome.Paths, explicit string) ([]byte, error
 
 // builtinMCPFacts resolves docs/design/pix-v2-architecture.md §10's two
 // reserved built-ins for THIS host, mirroring cmd/pix/run_env.go's own
-// builtinMCPFacts exactly (same URL shape, same reserved argv) so a
-// preview never disagrees with what a real launch composes. Either half
-// degrades to "omit that built-in" rather than failing the preview: an
-// unresolvable running executable is a `pix doctor`-shaped gap, not a
-// reason `env --effective` should refuse to render anything at all.
+// builtinMCPFacts exactly (same URL shape — container.DefaultMemoryPort is
+// the ONE canonical port both copies now read, security/QA re-review MEDIUM
+// finding — same reserved argv) so a preview never disagrees with what a
+// real launch composes. Either half degrades to "omit that built-in" rather
+// than failing the preview: an unresolvable running executable is a `pix
+// doctor`-shaped gap, not a reason `env --effective` should refuse to
+// render anything at all. The bearer token (security re-review HIGH
+// finding) is read-only here, never generated: a preview run before `pix
+// setup` simply omits it, same as an unresolvable session command.
 func builtinMCPFacts(home pixhome.Paths) envinfo.BuiltinMCPFacts {
 	var facts envinfo.BuiltinMCPFacts
-	facts.MemoryURL = fmt.Sprintf("http://127.0.0.1:%d/mcp", effectiveMemoryHostPort)
+	token, _ := container.ReadMemoryAuthToken(home)
+	facts.MemoryURL = container.MemoryMCPURL(container.Spec{HostPort: container.DefaultMemoryPort}, token)
 	if exe, err := os.Executable(); err == nil {
 		if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
 			exe = resolved

@@ -4,7 +4,13 @@
 //
 // Env: MEMORY_PORT (8080), MEMORY_BIND (0.0.0.0), MEMORY_DB
 // (<MEMORY_DATA_DIR>/memory.db), MEMORY_DATA_DIR (/data), OLLAMA_HOST,
-// MEMORY_EMBED_MODEL, MEMORY_WATCHER_MODEL, MEMORY_CAPTURE_MODE.
+// MEMORY_EMBED_MODEL, MEMORY_WATCHER_MODEL, MEMORY_CAPTURE_MODE,
+// MEMORY_AUTH_TOKEN (security re-review HIGH finding: a random bearer token
+// `pix setup` generates on the host and mounts read-only via `docker create
+// --env-file`, never as a literal `-e` argument — see
+// pix/host/workflow/provision.EnsureMemoryAuthToken). /mcp refuses every
+// request when this is unset; /healthz never requires it (loopback-only,
+// carries no memory content).
 package main
 
 import (
@@ -36,7 +42,11 @@ func main() {
 	}
 	defer st.Close()
 
-	mux := server.NewMux(st)
+	authToken := os.Getenv("MEMORY_AUTH_TOKEN")
+	if authToken == "" {
+		log.Printf("pix-memory: WARNING: MEMORY_AUTH_TOKEN is not set; /mcp will refuse every request (/healthz still answers)")
+	}
+	mux := server.NewMux(st, authToken)
 	addr := envOr("MEMORY_BIND", "0.0.0.0") + ":" + envOr("MEMORY_PORT", "8080")
 	httpServer := &http.Server{Addr: addr, Handler: mux}
 

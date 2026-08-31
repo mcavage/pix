@@ -146,6 +146,23 @@
     ]
   },
   {
+    "id": "lifecycle.session.attach-execs-stored-invocation",
+    "rationale": "SECURITY/QA re-review F1 (real behavior fix, not a stale pin): an attach used to replay the STORED create-time invocation (readSessionInvocation) verbatim, silently ignoring a NEW --model/--resume the user asked for on this exact run — verified live: attaching with --model google/gemini-3.1-pro --resume sess-456 exec'd the create-time anthropic/claude-sonnet-5 + sess-123 instead. docs/design/pix-v2-surface.md §3.1 (\"both options apply to every attach\") and `pix help run` (\"--model is NOT create-only\") both promised the opposite. Fixed: startSessionTransition's attach branch now always execs spec.DefaultInvocation (this call's own current, freshly resolved invocation); the stored invocation remains an audit trail only (reap.go's own read of it is unchanged).",
+    "evidence": "services/host/workflow/launch/session.go (startSessionTransition's spec.AttachExec branch); services/host/workflow/launch/session_process_test.go (TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord, updated to seed a DIFFERENT stored-vs-default invocation so a regression to the old replay fails loudly)",
+    "changes": [
+      {
+        "file": "services/host/workflow/launch/session.go",
+        "kind": "contains",
+        "from": [
+          "execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, invocation)"
+        ],
+        "to": [
+          "execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, spec.DefaultInvocation)"
+        ]
+      }
+    ]
+  },
+  {
     "id": "lifecycle.rm.keep-short-and-long-flag",
     "rationale": "Stale pin, not a behavior change: `pix rm --keep`/`-k` already applies to --orphans as well as --all (the help text and RmOptions.Except fold both already reflect that), and this pin's two literals predate both the --orphans wording and the direct `Except: c.Keep` fold (the intermediate append-append expression it pinned was never shipped in this form). Updated to match cmd/pix/root.go exactly; the keep-polarity direction pinned separately by lifecycle.rm.keep-polarity-except is unchanged.",
     "evidence": "services/host/cmd/pix/root.go (rmCmd.Keep help text, rmCmd.Run's Except fold)",

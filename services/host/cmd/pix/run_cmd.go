@@ -319,6 +319,17 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	}
 	o.EnvName = selection.Name
 
+	// CRITICAL (security re-review): an environment this run actually
+	// selected must be REVIEWED before anything past this point runs a
+	// host command, resolves a credential, or composes a mount — fail
+	// closed on a non-interactive terminal, first-use BOM/default-No on an
+	// interactive one (run_trust.go). This is the FIRST of two checks; the
+	// second, immediately before the actual sbx mutation, closes the TOCTOU
+	// window between resolving the environment and using it.
+	if terr := runTrustGate(d, selection.Name); terr != nil {
+		return terr
+	}
+
 	// §6.3's model precedence, in one place: --model > the selected
 	// environment's [models].main > pi's own default.
 	if model, source := launch.SelectSessionModel(o.Model, selection.Sidecar); model != "" {
@@ -699,6 +710,19 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			cmd.Env = os.Environ()
 			return cmd
 		},
+	}
+	// CRITICAL (security re-review), SECOND check: recomputed fresh,
+	// immediately before the one call that actually mutates sbx
+	// (RunSession: `sbx env create`/`sbx exec`). Closes the TOCTOU window
+	// between the first gate (right after the environment was resolved,
+	// above) and this exact moment — an environment trusted a moment ago
+	// and unchanged since costs nothing here (an ordinary file read plus a
+	// fingerprint compare); one that changed out from under this launch (a
+	// symlink swap, a concurrent edit) is refused here even though the
+	// first check let it through.
+	if terr := runTrustGate(d, selection.Name); terr != nil {
+		releaseRoot(true)
+		return terr
 	}
 	xerr := launch.RunSession(spec, deps)
 	// The create-path Hold, awaited only now: RunSession has returned (created
