@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sandbox"
 )
 
 // argvEqual is a small, local helper — this package's tests intentionally
@@ -160,6 +161,45 @@ exit 1
 `)
 	if _, ok := FindPositivelyIdentifiedRunning(realEnv(), "pix-demo"); ok {
 		t.Fatal("a stopped sandbox must not be treated as positively-identified-running")
+	}
+}
+
+// TestFindPositivelyIdentified_Stopped_IsPositivelyIdentified: review round
+// 1 blocker #2. Unlike the RUNNING-only predicate above, the general
+// FindPositivelyIdentified DOES recognize a schema-verified stopped row —
+// the reattach gate's identity check, which must not refuse a stopped
+// sandbox outright, uses this one instead of FindPositivelyIdentifiedRunning.
+func TestFindPositivelyIdentified_Stopped_IsPositivelyIdentified(t *testing.T) {
+	isolateState(t)
+	installFakeSbx(t, `
+if [ "$1" = "ls" ] && [ "$2" = "--json" ]; then
+  echo '[{"name":"pix-demo","state":"stopped","instance_id":"inst-1"}]'
+  exit 0
+fi
+exit 1
+`)
+	found, ok := FindPositivelyIdentified(realEnv(), "pix-demo")
+	if !ok || found == nil {
+		t.Fatalf("expected a positively identified stopped row, got ok=%v found=%v", ok, found)
+	}
+	if found.State != sandbox.StateStopped {
+		t.Fatalf("state = %v, want stopped", found.State)
+	}
+}
+
+// TestFindPositivelyIdentified_Absent_RefusesEither: an absent sandbox
+// authorizes neither predicate.
+func TestFindPositivelyIdentified_Absent_RefusesEither(t *testing.T) {
+	isolateState(t)
+	installFakeSbx(t, `
+if [ "$1" = "ls" ] && [ "$2" = "--json" ]; then
+  echo '[]'
+  exit 0
+fi
+exit 1
+`)
+	if _, ok := FindPositivelyIdentified(realEnv(), "pix-demo"); ok {
+		t.Fatal("an absent sandbox must not be positively identified")
 	}
 }
 

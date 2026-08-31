@@ -41,12 +41,13 @@ import (
 // DefaultMemoryPort (the ONE canonical port, security/QA re-review MEDIUM
 // finding — this used to be a second, independently duplicated `18080`
 // literal here), this host's data directory, and — read-only, never
-// generated here — whatever MEMORY_AUTH_TOKEN env-file `pix setup` has
-// already written (security re-review HIGH finding: the pix-memory bearer
-// token is mounted via `docker create --env-file`, never a literal `-e`
-// argument, so it never appears in this host's own process listing of the
-// `docker create` invocation). A caller that has not yet run `pix setup`
-// sees an EnvFile path that does not exist yet; that is fine for every
+// generated here — whatever pix-memory bearer token file `pix setup` has
+// already written, bind-mounted read-only at container.AuthTokenMountPath
+// (security re-review round 1 blocker #1: never a literal `-e`/`--env-file`
+// argument, both of which would land the token in the container's own
+// Config.Env, which `docker inspect` exposes to anything on this host with
+// inspect access). A caller that has not yet run `pix setup` sees an
+// AuthTokenFile path that does not exist yet; that is fine for every
 // current caller (doctor/run only ever read this spec, they never call
 // container.Create with it — only setup_cmd.go does, and it always calls
 // provision.EnsureMemoryAuthToken first).
@@ -60,7 +61,7 @@ func homeContainerSpec(home pixhome.Paths) container.Spec {
 		Image:         image,
 		HostPort:      container.DefaultMemoryPort,
 		DataDir:       home.StateMemory,
-		EnvFile:       container.MemoryAuthTokenPath(home),
+		AuthTokenFile: container.MemoryAuthTokenPath(home),
 	}
 }
 

@@ -215,9 +215,33 @@ func sbxEntry(env hostenv.Env, name string, within time.Duration) (entry *sandbo
 	return sandbox.FindByName(entries, name), true
 }
 
-func FindPositivelyIdentifiedRunning(env hostenv.Env, name string) (*sandbox.Entry, bool) {
+// FindPositivelyIdentified reports the schema-verified, RUNNING-OR-STOPPED
+// row for name — the identity check a reattach gate needs regardless of
+// which of the two live states the sandbox is actually in (a stopped
+// sandbox is still a legitimate reattach target, docs/getting-started.md:
+// "A sandbox already exists -> reattach, running or stopped, as-is"). An
+// absent, unverified, or unreadable row authorizes nothing, exactly like
+// FindPositivelyIdentifiedRunning.
+func FindPositivelyIdentified(env hostenv.Env, name string) (*sandbox.Entry, bool) {
 	found, _ := sbxEntry(env, name, 0)
-	if found == nil || !found.IdentityVerified || found.State != sandbox.StateRunning {
+	if found == nil || !found.IdentityVerified {
+		return nil, false
+	}
+	if found.State != sandbox.StateRunning && found.State != sandbox.StateStopped {
+		return nil, false
+	}
+	return found, true
+}
+
+// FindPositivelyIdentifiedRunning is the RUNNING-only predicate a caller
+// authorizing `sbx exec` needs (exec has no "start" of its own — it fails
+// outright against a stopped sandbox). A stopped, schema-verified row is
+// deliberately NOT positively-identified-running here: the caller must fall
+// back to the legacy `sbx run --name` reattach path instead, which is what
+// actually starts a stopped sandbox (see BuildReattachArgs).
+func FindPositivelyIdentifiedRunning(env hostenv.Env, name string) (*sandbox.Entry, bool) {
+	found, ok := FindPositivelyIdentified(env, name)
+	if !ok || found.State != sandbox.StateRunning {
 		return nil, false
 	}
 	return found, true

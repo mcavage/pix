@@ -175,14 +175,15 @@ func TestDecideEnvAttach_DriftRefusalCopy(t *testing.T) {
 }
 
 // Every other §10.2 condition refuses too, and each names its own reason.
+// A STOPPED, schema-verified, identity-matched row is deliberately NOT in
+// this refusal table any more (review round 1 blocker #2): it must attach,
+// same as a running one — see TestDecideEnvAttach_StoppedRowAttaches.
 func TestDecideEnvAttach_EveryConditionRefuses(t *testing.T) {
 	id := "inst-1"
 	running := func() *sandbox.Entry {
 		return &sandbox.Entry{Name: "pix-x", State: sandbox.StateRunning, IdentityVerified: true, InstanceID: &id}
 	}
 	other := "inst-2"
-	stopped := running()
-	stopped.State = sandbox.StateStopped
 	unverified := running()
 	unverified.IdentityVerified = false
 	mismatched := running()
@@ -193,9 +194,8 @@ func TestDecideEnvAttach_EveryConditionRefuses(t *testing.T) {
 		gate AttachGate
 		want string
 	}{
-		{"no row", AttachGate{Reviewed: true}, "is not a schema-verified running sandbox"},
-		{"stopped", AttachGate{Entry: stopped, RecordedInstanceID: id, Reviewed: true}, "is not a schema-verified running sandbox"},
-		{"unverified", AttachGate{Entry: unverified, RecordedInstanceID: id, Reviewed: true}, "is not a schema-verified running sandbox"},
+		{"no row", AttachGate{Reviewed: true}, "is not a schema-verified running or stopped sandbox"},
+		{"unverified", AttachGate{Entry: unverified, RecordedInstanceID: id, Reviewed: true}, "is not a schema-verified running or stopped sandbox"},
 		{"no record", AttachGate{Entry: running(), Reviewed: true}, "has no recorded creation instance on this host"},
 		{"instance mismatch", AttachGate{Entry: mismatched, RecordedInstanceID: id, Reviewed: true}, "is a different instance"},
 		{"unreviewed", AttachGate{Entry: running(), RecordedInstanceID: id, Reviewed: false}, "no longer reviewed"},
@@ -216,6 +216,22 @@ func TestDecideEnvAttach_EveryConditionRefuses(t *testing.T) {
 	ok := DecideEnvAttach(AttachGate{Entry: running(), RecordedInstanceID: id, Reviewed: true}, "pix-x", "work")
 	if !ok.Attach || ok.Refusal != "" {
 		t.Fatalf("a fully satisfied gate must attach, got %+v", ok)
+	}
+}
+
+// TestDecideEnvAttach_StoppedRowAttaches: review round 1 blocker #2. A
+// STOPPED sandbox that is otherwise schema-verified, identity-matched, and
+// still reviewed must ATTACH — not be refused the way a stale "running
+// only" gate used to refuse it. The command layer (run_cmd.go) reads
+// entry.State back off this same decision to choose the argv: exec for
+// running, the legacy `sbx run --name` reattach (which actually starts a
+// stopped sandbox) otherwise.
+func TestDecideEnvAttach_StoppedRowAttaches(t *testing.T) {
+	id := "inst-1"
+	stopped := &sandbox.Entry{Name: "pix-x", State: sandbox.StateStopped, IdentityVerified: true, InstanceID: &id}
+	d := DecideEnvAttach(AttachGate{Entry: stopped, RecordedInstanceID: id, Reviewed: true}, "pix-x", "work")
+	if !d.Attach || d.Refusal != "" {
+		t.Fatalf("a schema-verified stopped, identity-matched, reviewed sandbox must attach, got %+v", d)
 	}
 }
 

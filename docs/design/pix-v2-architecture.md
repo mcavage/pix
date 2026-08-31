@@ -267,13 +267,30 @@ new sandbox:
   record instance id + fingerprint + invocation
   sbx exec -it <sandbox> -- <pix-entrypoint> [--model M] [--resume S]
 
-existing sandbox:
+existing sandbox, RUNNING:
   verify name, instance id, effective fingerprint, and holder state
   sbx exec -it <sandbox> -- <pix-entrypoint> [--model M] [--resume S]
+
+existing sandbox, STOPPED:
+  verify name, instance id, effective fingerprint, and holder state
+  sbx run --name <sandbox> [-- [--model M] [--resume S]]
 ```
 
 The command after `--` is inside the sandbox. Model and resume are Pi entrypoint
-arguments, not sbx flags. The same builder is used on every attach.
+arguments, not sbx flags. The same builder is used on every RUNNING attach.
+
+A STOPPED sandbox is never `sbx exec`'d (exec has no "start" of its own and
+fails outright against an already-stopped container). It goes through the
+same identity/fingerprint/review gate as a running attach (review round 1
+blocker #2 — a stopped sandbox is a legitimate reattach target,
+docs/getting-started.md: "A sandbox already exists -> reattach, running or
+stopped, as-is", never an outright refusal), but the actual
+start-then-attach uses the legacy `sbx run --name <name>` reattach argv
+instead, which is what actually starts a stopped sandbox — no `sbx start`
+verb is established in this codebase's observed sbx contract
+(docs/upstream/sbx-0.39-environments.md), so this is the one supported
+existing argv for that case. It still carries the session's CURRENT
+`--model`/`--resume`, not a replay of a stale prior invocation.
 
 Host UAT must prove this exact argv against the supported sbx release. If it
 fails, implementation stops at this seam and records the observed contract; it
@@ -641,15 +658,19 @@ The PR is ready to merge only after one supported host proves:
 2. both DHI images build and the release manifest points to exact artifacts;
 3. `pix-memory` starts, survives Docker restart, retains its database, and is
    reachable through the sbx Gateway but not directly from the sandbox;
-   **auth (security re-review HIGH), exact steps:**
-   `pix setup` generates `~/.pix/state/memory/auth.env` (mode 0600,
-   `MEMORY_AUTH_TOKEN=<64 hex chars>`) and `docker inspect pix-memory` shows
-   `--env-file <that path>` in its create config, never a literal
-   `MEMORY_AUTH_TOKEN=` value in `docker inspect`'s `Config.Env` or in
-   `ps aux` while `docker create`/`docker run` executed. Then:
+   **auth (security re-review round 1 blocker #1), exact steps:**
+   `pix setup` generates `~/.pix/state/memory/auth.token` (mode 0600, the
+   RAW `<64 hex chars>`, no `KEY=value` wrapping) and `docker inspect
+   pix-memory` shows `-v ~/.pix/state/memory/auth.token:/run/secrets/
+   pix-memory-auth:ro` in its create config — never `--env-file`/a literal
+   `-e MEMORY_AUTH_TOKEN=...` argument, and never a
+   `MEMORY_AUTH_TOKEN=<value>` entry in `docker inspect`'s `Config.Env`
+   (that field is world-readable by anything on the host with inspect
+   access, which is exactly what a bind-mounted, container-local FILE
+   avoids) or in `ps aux` while `docker create`/`docker run` executed. Then:
    `curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:<port>/mcp`
    (no credential) must print `401`; the same curl with
-   `-H "Authorization: Bearer $(grep -o '[0-9a-f]\{64\}' ~/.pix/state/memory/auth.env)"`
+   `-H "Authorization: Bearer $(cat ~/.pix/state/memory/auth.token)"`
    must reach the MCP handshake instead of `401`; and
    `curl -s http://127.0.0.1:<port>/healthz` must succeed with NO credential
    at all (§9.1's stated exception). `sbx mcp ls` (or the registered
@@ -658,7 +679,8 @@ The PR is ready to merge only after one supported host proves:
    used because neither `.sbxenv.yaml`'s `mcp.servers` schema nor `sbx mcp
    add` can express a custom header (envinfo.MCPServer is name/url/command/
    args only). The token must never appear in `pix env trust`'s bill of
-   materials, `pix env show --json`'s output, or any `pix` log line.
+   materials, `pix env show --json`'s output, `docker inspect`'s `Config.Env`,
+   or any `pix` log line.
 4. Pi lists and calls all memory tools;
 5. deterministic recall and capture hooks call MCP through a second Gateway
    client connection;

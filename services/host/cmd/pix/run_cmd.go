@@ -511,7 +511,11 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	var root *interactiveRoot
 	releaseRoot := func(failed bool) { root.release(failed) }
 	if plan.Reattach {
-		entry, _ := launch.FindPositivelyIdentifiedRunning(defaultShellEnv(), o.Name)
+		// FindPositivelyIdentified accepts a RUNNING-OR-STOPPED row: a stopped
+		// sandbox is still a legitimate reattach target (docs/getting-started.md:
+		// "A sandbox already exists -> reattach, running or stopped, as-is") and
+		// must not be refused outright the way a running-only gate would.
+		entry, _ := launch.FindPositivelyIdentified(defaultShellEnv(), o.Name)
 		recordedInstanceID := launch.ReadRecordedInstanceID(sessionKey)
 
 		// §10.2's third condition: the RECREATE-ONLY creation fingerprint,
@@ -565,7 +569,13 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			}
 			return runFail(d, 1, "%s", decision.Refusal)
 		}
-		attachExec = true
+		// exec has no "start" of its own and fails outright against a stopped
+		// sandbox — only a RUNNING, positively identified entry may exec. A
+		// stopped one still attaches (decision.Attach is true above), but via
+		// spec.AttachArgs, the legacy `sbx run --name` reattach that actually
+		// starts it, honoring THIS launch's current --model/--resume exactly
+		// like BuildReattachArgs already does for a fresh create.
+		attachExec = entry != nil && entry.State == sandbox.StateRunning
 
 		// The interactive-root Hold: this attach has a POSITIVE instance receipt
 		// right here (a fresh probe's entry.InstanceID, else the recorded one

@@ -88,11 +88,12 @@ func (c *setupCmd) Run(d *cli.Deps) error {
 		return err
 	}
 	// Generate (or reuse) the pix-memory bearer token BEFORE the container
-	// spec is built: homeContainerSpec's EnvFile names this same path, and
-	// `docker create --env-file <path>` fails outright if that file does not
-	// exist yet (security re-review HIGH finding — never a literal `-e`
-	// argument, which would leak the value into this host's own process
-	// listing of the `docker create` invocation).
+	// spec is built: homeContainerSpec's AuthTokenFile names this same path,
+	// and `docker create -v <path>:...:ro` fails outright if that file does
+	// not exist yet (security re-review round 1 blocker #1 — never a literal
+	// `-e`/`--env-file` argument, both of which would land the token in the
+	// container's own Config.Env, which `docker inspect` exposes to anything
+	// on this host with inspect access).
 	token, terr := container.EnsureMemoryAuthToken(home)
 	if terr != nil {
 		return fmt.Errorf("pix-memory auth token: %w", terr)

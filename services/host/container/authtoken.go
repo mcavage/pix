@@ -26,21 +26,28 @@ import (
 	"pix/host/pixhome"
 )
 
-// MemoryAuthTokenEnvKey is the exact env var name the token is written under
-// in its env-file — the same key services/memory/cmd/pix-memory/main.go
-// reads (MEMORY_AUTH_TOKEN) — and CreateArgs mounts that file read-only via
-// `docker create --env-file`, never a literal `-e NAME=VALUE` argument (so
-// the value never appears in this host's own process listing of the
-// `docker create` invocation itself).
+// MemoryAuthTokenEnvKey is the DEV-ONLY fallback env var name
+// services/memory/cmd/pix-memory/main.go still accepts when its mounted
+// token FILE (AuthTokenMountPath) is absent — e.g. `go run ./cmd/pix-memory`
+// outside any container. Production `pix setup`/Reconcile never sets this
+// as a literal `-e`/`--env-file` value; see container.Spec.AuthTokenFile's
+// doc for why (security re-review round 1 blocker #1: that would land the
+// secret in the container's own Config.Env, which `docker inspect` exposes
+// in full).
 const MemoryAuthTokenEnvKey = "MEMORY_AUTH_TOKEN"
 
-// memoryAuthTokenFileName is the env-file's name under home.StateMemory —
-// beside (never inside) the sqlite data the container itself owns.
-const memoryAuthTokenFileName = "auth.env"
+// memoryAuthTokenFileName is the token file's name under home.StateMemory —
+// beside (never inside) the sqlite data the container itself owns. It holds
+// the RAW token only (no "KEY=value" wrapping): this file is bind-mounted
+// read-only straight into the container at container.AuthTokenMountPath, so
+// its on-host format is exactly what pix-memory reads back on the other end
+// of that mount.
+const memoryAuthTokenFileName = "auth.token"
 
-// MemoryAuthTokenPath is <home>/state/memory/auth.env: the one file both the
-// token generator (EnsureMemoryAuthToken) and the container's --env-file
-// mount (homeContainerSpec) agree names the same secret.
+// MemoryAuthTokenPath is <home>/state/memory/auth.token: the one file both
+// the token generator (EnsureMemoryAuthToken) and the container's read-only
+// bind mount (homeContainerSpec's AuthTokenFile) agree names the same
+// secret.
 func MemoryAuthTokenPath(home pixhome.Paths) string {
 	return filepath.Join(home.StateMemory, memoryAuthTokenFileName)
 }
@@ -66,7 +73,7 @@ func EnsureMemoryAuthToken(home pixhome.Paths) (string, error) {
 	if err := os.MkdirAll(home.StateMemory, 0o700); err != nil {
 		return "", fmt.Errorf("create %s: %w", home.StateMemory, err)
 	}
-	content := MemoryAuthTokenEnvKey + "=" + tok + "\n"
+	content := tok + "\n"
 	path := MemoryAuthTokenPath(home)
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
@@ -91,13 +98,7 @@ func ReadMemoryAuthToken(home pixhome.Paths) (string, error) {
 		}
 		return "", err
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if v, ok := strings.CutPrefix(line, MemoryAuthTokenEnvKey+"="); ok {
-			return strings.TrimSpace(v), nil
-		}
-	}
-	return "", nil
+	return strings.TrimSpace(string(data)), nil
 }
 
 // MemoryMCPURL renders the loopback MCP endpoint a reconciled pix-memory

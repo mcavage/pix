@@ -19,20 +19,20 @@
       }
     },
     "pix/host/cmd/pix": {
-      "_prod_loc_note": "Pix v2 gate-green cleanup (test/dead-code sweep): real fixes grew this package — secret set/rm dispatch tests corrected to sabotage the real PIX_HOME/secrets.env path (adding a PIX_HOME-based fixture var, +1 global), plus rewritten verb-reference comments across several files. Not dead-code accumulation; ratcheted up with a reason per this file's own write-budgets refusal. SECURITY/QA RE-REVIEW FOLLOW-UP: run_trust.go (the CRITICAL fail-closed trust gate, two call sites in run_cmd.go plus its own runTrustGate/gateEnvTrust) and root.go's env-NAME-shorthand rewrite (isEnvKnownVerb) added real, load-bearing logic, not accumulation.",
-      "prod_loc": 3608,
-      "test_loc": 4386,
+      "_prod_loc_note": "Review round 1 blocker #2 fix: run_cmd.go's reattach branch now distinguishes a STOPPED sandbox (legacy `sbx run --name` reattach, honoring current --model/--resume) from a RUNNING one (`sbx exec`), reading entry.State back off FindPositivelyIdentified instead of the running-only FindPositivelyIdentifiedRunning. Real new logic (a documented gap: a stopped sandbox used to be refused outright), not accumulation. Previous note retained: Pix v2 gate-green cleanup (test/dead-code sweep): real fixes grew this package — secret set/rm dispatch tests corrected to sabotage the real PIX_HOME/secrets.env path (adding a PIX_HOME-based fixture var, +1 global), plus rewritten verb-reference comments across several files. Not dead-code accumulation; ratcheted up with a reason per this file's own write-budgets refusal. SECURITY/QA RE-REVIEW FOLLOW-UP: run_trust.go (the CRITICAL fail-closed trust gate, two call sites in run_cmd.go plus its own runTrustGate/gateEnvTrust) and root.go's env-NAME-shorthand rewrite (isEnvKnownVerb) added real, load-bearing logic, not accumulation.",
+      "prod_loc": 3620,
+      "test_loc": 4585,
       "exports": 5,
       "exports_used_externally": 0,
       "exits": 1,
-      "streams": 0,
-      "globals": 20,
+      "streams": 3,
+      "globals": 19,
       "init": 2,
       "edges": 24,
       "parser_families": {
         "cmd": 8,
-        "core": 10,
-        "test": 37
+        "core": 11,
+        "test": 38
       }
     },
     "pix/host/config": {
@@ -51,19 +51,19 @@
       }
     },
     "pix/host/container": {
-      "_prod_loc_note": "SECURITY re-review HIGH finding fix: authtoken.go adds the pix-memory bearer-token lifecycle (EnsureMemoryAuthToken/ReadMemoryAuthToken/MemoryMCPURL/MemoryAuthTokenPath) plus container.go's PortAvailable/PortInUseError (QA F4's port-collision probe) and Spec.EnvFile. Real new capability, not accumulation; this package now imports pixhome (+1 edge) for the first time.",
-      "prod_loc": 850,
-      "test_loc": 468,
-      "exports": 34,
-      "exports_used_externally": 4,
+      "_prod_loc_note": "Review round 1 blocker #1 fix: Spec.EnvFile (`docker create --env-file`, which wrote the pix-memory bearer token into the container's own Config.Env) replaced by Spec.AuthTokenFile + the AuthTokenMountPath const, a read-only bind mount so the token value never enters Config.Env, a label, or this host's own process argv. Real capability change, not accumulation. Previous note retained: SECURITY re-review HIGH finding fix: authtoken.go adds the pix-memory bearer-token lifecycle (EnsureMemoryAuthToken/ReadMemoryAuthToken/MemoryMCPURL/MemoryAuthTokenPath) plus container.go's PortAvailable/PortInUseError (QA F4's port-collision probe). Real new capability, not accumulation; this package now imports pixhome (+1 edge) for the first time.",
+      "prod_loc": 862,
+      "test_loc": 618,
+      "exports": 35,
+      "exports_used_externally": 8,
       "exits": 0,
       "streams": 0,
-      "globals": 15,
+      "globals": 16,
       "init": 0,
       "edges": 1,
       "parser_families": {
-        "core": 2,
-        "test": 2
+        "core": 3,
+        "test": 3
       }
     },
     "pix/host/envinfo": {
@@ -336,10 +336,11 @@
       }
     },
     "pix/host/workflow/launch": {
-      "prod_loc": 4829,
-      "test_loc": 6322,
+      "_prod_loc_note": "Review round 1 blocker #2 fix: FindPositivelyIdentified (the running-or-stopped identity check DecideEnvAttach's reattach gate now uses) and DecideEnvAttach's relaxed running-or-stopped gate. Real new logic (a stopped sandbox used to be refused outright by this gate), not accumulation.",
+      "prod_loc": 4852,
+      "test_loc": 6474,
       "exports": 192,
-      "exports_used_externally": 63,
+      "exports_used_externally": 61,
       "exits": 0,
       "streams": 3,
       "globals": 62,

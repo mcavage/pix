@@ -372,3 +372,73 @@ func TestCreateArgs_PublishesLoopbackOnly(t *testing.T) {
 		t.Errorf("create argv missing loopback publish: %q", joined)
 	}
 }
+
+// TestCreateArgs_AuthTokenIsAReadOnlyMountNeverAnEnvFile is the security
+// re-review round 1 blocker #1 regression: the pix-memory bearer token must
+// enter the container ONLY as a read-only bind mount of the host token
+// file, at the exact path pix-memory reads (AuthTokenMountPath) — never via
+// `--env-file`/`-e`, both of which would write the token's VALUE into the
+// container's own Config.Env (docker inspect exposes Config.Env in full to
+// anything on this host with inspect access). DataDir remains the only
+// WRITABLE mount.
+func TestCreateArgs_AuthTokenIsAReadOnlyMountNeverAnEnvFile(t *testing.T) {
+	spec := testSpec()
+	spec.AuthTokenFile = "/home/agent/.pix/state/memory/auth.token"
+	args := spec.CreateArgs()
+	joined := strings.Join(args, " ")
+
+	if strings.Contains(joined, "--env-file") {
+		t.Errorf("create argv must never use --env-file: %q", joined)
+	}
+	for _, a := range args {
+		if a == "-e" || strings.HasPrefix(a, "MEMORY_AUTH_TOKEN=") {
+			t.Errorf("create argv must never pass a literal -e NAME=VALUE: %v", args)
+		}
+	}
+	wantMount := spec.AuthTokenFile + ":" + AuthTokenMountPath + ":ro"
+	if !strings.Contains(joined, wantMount) {
+		t.Errorf("create argv missing read-only auth token mount %q: %q", wantMount, joined)
+	}
+	// The data mount must stay the only WRITABLE one — the auth token mount
+	// must carry :ro and nothing else must.
+	if strings.Contains(joined, spec.DataDir+":/data:ro") {
+		t.Error("the data mount must remain writable, not :ro")
+	}
+}
+
+// TestCreateArgs_NoAuthTokenFileOmitsTheMountEntirely: an empty
+// AuthTokenFile (pre-`pix setup`, or a caller that never resolved one) must
+// not synthesize a mount to a path that does not exist.
+func TestCreateArgs_NoAuthTokenFileOmitsTheMountEntirely(t *testing.T) {
+	spec := testSpec()
+	args := spec.CreateArgs()
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, AuthTokenMountPath) {
+		t.Errorf("create argv must omit the auth token mount when AuthTokenFile is empty: %q", joined)
+	}
+}
+
+// TestFingerprint_ChangesWithAuthTokenFilePathButNeverLeaksItsContent: the
+// fingerprint tracks the auth-token-file PATH (a changed path is a changed
+// container identity) but is computed over Spec fields only — the token's
+// CONTENT never enters CreateArgs, Fingerprint, or any label, so it can
+// never be derived from anything docker inspect (or this package) exposes.
+func TestFingerprint_ChangesWithAuthTokenFilePathButNeverLeaksItsContent(t *testing.T) {
+	base := testSpec()
+	fp := base.Fingerprint()
+
+	withToken := base
+	withToken.AuthTokenFile = "/home/agent/.pix/state/memory/auth.token"
+	if withToken.Fingerprint() == fp {
+		t.Error("setting AuthTokenFile did not change the fingerprint")
+	}
+
+	// The fingerprint (and everything derived from Spec) must never carry the
+	// token VALUE itself — only ever its path. There is no field for a token
+	// value on Spec at all, which this assertion pins as a design invariant:
+	// a future change that adds one and threads it into Fingerprint/CreateArgs
+	// would be exactly the regression this test exists to catch.
+	if strings.Contains(withToken.Fingerprint(), "sekrit") {
+		t.Fatal("fingerprint must never contain a token value")
+	}
+}

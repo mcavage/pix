@@ -400,3 +400,90 @@ exit 0
 		t.Errorf("warn = %q, want it to say the keep was not recorded", warn.String())
 	}
 }
+
+// TestRunSession_StoppedSandbox_ReattachesViaLegacyRunName is review round 1
+// blocker #2's regression: a STOPPED sandbox must never be exec'd (exec has
+// no "start" of its own and fails outright against an already-stopped
+// container) — the command layer (cmd/pix/run_cmd.go) sets AttachExec=false
+// for exactly this case, so RunSession spawns the legacy `sbx run --name`
+// reattach argv instead, which IS the supported existing argv that actually
+// starts a stopped sandbox, and it honors THIS launch's current
+// --model/--resume exactly like BuildReattachArgs already does for a fresh
+// create — never a replay of some stale prior invocation.
+func TestRunSession_StoppedSandbox_ReattachesViaLegacyRunName(t *testing.T) {
+	isolateState(t)
+	dir := installFakeSbx(t, `
+if [ "$1" = "ls" ]; then
+  if [ "$2" = "--json" ]; then echo '[{"name":"pix-demo","state":"stopped","instance_id":"inst-1"}]'
+  else echo "pix-demo  x  stopped"; fi
+  exit 0
+fi
+echo "$@" >> "$(dirname "$0")/argv.log"
+exit 0
+`)
+	o := RunOpts{Name: "pix-demo", Model: "anthropic/claude-sonnet-5", Resume: "sess-9"}
+	reattachArgv := BuildReattachArgs(o)
+	err := RunSession(SessionSpec{
+		Key: SessionName(t.TempDir()), Name: "pix-demo",
+		AttachArgs: reattachArgv, AttachExec: false,
+	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: io.Discard, Spawn: fixtureSpawn(t)})
+	if err != nil {
+		t.Fatalf("RunSession: %v", err)
+	}
+	logged, rerr := os.ReadFile(filepath.Join(dir, "argv.log"))
+	if rerr != nil {
+		t.Fatalf("argv.log: %v", rerr)
+	}
+	got := strings.TrimSpace(string(logged))
+	want := strings.Join(reattachArgv, " ")
+	if got != want {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "exec") {
+		t.Fatalf("a stopped sandbox must never be exec'd, got argv %q", got)
+	}
+	if !strings.Contains(got, "--model anthropic/claude-sonnet-5") || !strings.Contains(got, "--resume sess-9") {
+		t.Fatalf("argv %q does not honor the current --model/--resume", got)
+	}
+}
+
+// TestRunSession_RunningSandbox_UsesExecArgv is the running-side pair of the
+// stopped regression above: a RUNNING sandbox uses `sbx exec`, never the
+// legacy `run --name` reattach, and it too carries this launch's current
+// --model/--resume.
+func TestRunSession_RunningSandbox_UsesExecArgv(t *testing.T) {
+	isolateState(t)
+	dir := installFakeSbx(t, `
+if [ "$1" = "ls" ]; then
+  if [ "$2" = "--json" ]; then echo '[{"name":"pix-demo","state":"running","instance_id":"inst-1"}]'
+  else echo "pix-demo  x  running"; fi
+  exit 0
+fi
+echo "$@" >> "$(dirname "$0")/argv.log"
+exit 0
+`)
+	invocation := []string{"--model", "anthropic/claude-sonnet-5", "--resume", "sess-9"}
+	err := RunSession(SessionSpec{
+		Key: SessionName(t.TempDir()), Name: "pix-demo",
+		AttachArgs: []string{"run", "--name", "pix-demo"}, AttachExec: true, AttachTTY: true,
+		DefaultInvocation: invocation,
+	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: io.Discard, Spawn: fixtureSpawn(t)})
+	if err != nil {
+		t.Fatalf("RunSession: %v", err)
+	}
+	logged, rerr := os.ReadFile(filepath.Join(dir, "argv.log"))
+	if rerr != nil {
+		t.Fatalf("argv.log: %v", rerr)
+	}
+	got := strings.TrimSpace(string(logged))
+	want, aerr := BuildAttachArgv("pix-demo", true, invocation)
+	if aerr != nil {
+		t.Fatal(aerr)
+	}
+	if got != strings.Join(want, " ") {
+		t.Fatalf("argv = %q, want %q", got, strings.Join(want, " "))
+	}
+	if !strings.HasPrefix(got, "exec ") {
+		t.Fatalf("a running sandbox must be exec'd, got argv %q", got)
+	}
+}

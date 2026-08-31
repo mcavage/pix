@@ -75,14 +75,24 @@ type Spec struct {
 	// §9.1, surface §8.1). It is never removed by this package, on any path,
 	// including replace.
 	DataDir string
-	// EnvFile is an optional host path passed to `docker create --env-file`
-	// (security re-review HIGH: the pix-memory MEMORY_AUTH_TOKEN bearer
-	// secret is mounted this way, never as a literal `-e NAME=VALUE` create
-	// argument, so the secret VALUE never appears in this host's own process
-	// listing of the `docker create` invocation — only the file PATH does,
-	// which is not secret). "" omits --env-file entirely.
-	EnvFile string
+	// AuthTokenFile is an optional HOST path to the pix-memory bearer token
+	// (security re-review round 1 blocker #1: `docker create --env-file`/`-e`
+	// both write the resolved value into the container's own Config.Env,
+	// which `docker inspect` exposes in full to anything on this host with
+	// inspect access — a bearer secret must never land there). Instead this
+	// file is bind-mounted READ-ONLY at AuthTokenMountPath, so the token
+	// value never appears in Config.Env, in this host's own `docker create`
+	// argv, in a label, or in a log — only the host PATH does, which is not
+	// secret. "" omits the mount entirely. DataDir remains the only WRITABLE
+	// mount this container ever receives; this one is always :ro.
+	AuthTokenFile string
 }
+
+// AuthTokenMountPath is the fixed in-container path AuthTokenFile is
+// mounted at: pix-memory reads its bearer token from here (see
+// services/memory/cmd/pix-memory/main.go), never from an environment
+// variable in production.
+const AuthTokenMountPath = "/run/secrets/pix-memory-auth"
 
 // containerName returns s.ContainerName, defaulting to Name so a caller that
 // only cares about the real container need not repeat the constant.
@@ -104,12 +114,12 @@ func (s Spec) Fingerprint() string {
 		"image=" + s.Image,
 		"port=" + strconv.Itoa(s.HostPort),
 		"data=" + s.DataDir,
-		// The env-file PATH is part of the create configuration identity (a
-		// changed path is a changed container), but its CONTENT (the token
+		// The auth-token-file PATH is part of the create configuration identity
+		// (a changed path is a changed container), but its CONTENT (the token
 		// value) never is — this fingerprint becomes a Docker label, world-
 		// readable by anything with `docker inspect` access, so the secret
 		// itself must never be derivable from it.
-		"envfile=" + s.EnvFile,
+		"authtokenfile=" + s.AuthTokenFile,
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
 	return "sha256:" + hex.EncodeToString(sum[:])
@@ -129,8 +139,9 @@ func (s Spec) CreateArgs() []string {
 		"-p", fmt.Sprintf("127.0.0.1:%d:8080", s.HostPort),
 		"-v", s.DataDir + ":/data",
 	}
-	if s.EnvFile != "" {
-		args = append(args, "--env-file", s.EnvFile)
+	if s.AuthTokenFile != "" {
+		// :ro — DataDir above stays this container's ONLY writable mount.
+		args = append(args, "-v", s.AuthTokenFile+":"+AuthTokenMountPath+":ro")
 	}
 	return append(args, s.Image)
 }

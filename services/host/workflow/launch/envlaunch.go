@@ -435,11 +435,13 @@ func EnvRecreateGuidance(sandboxName, envName string) string {
 	return fmt.Sprintf("pix rm %s && pix run --env %s", sys.ShellQuote(sandboxName), sys.ShellQuote(envName))
 }
 
-// AttachGate is everything §10.2 requires before a name-based
-// `sbx exec -it <name>` may run.
+// AttachGate is everything §10.2 requires before a reattach — either a
+// name-based `sbx exec -it <name>` (Entry.State == StateRunning) or the
+// legacy `sbx run --name <name>` reattach, which is what actually STARTS a
+// stopped sandbox (Entry.State == StateStopped) — may run.
 type AttachGate struct {
-	// Entry is the schema-verified RUNNING row, or nil when sbx reported
-	// no such row (absent, stopped, unverified, or unreadable — all of
+	// Entry is the schema-verified RUNNING-OR-STOPPED row, or nil when sbx
+	// reported no such row (absent, unverified, or unreadable — all of
 	// which refuse: an unknown listing authorizes nothing).
 	Entry *sandbox.Entry
 	// RecordedInstanceID is the instance id this launcher recorded at
@@ -501,9 +503,9 @@ func DecideEnvAttach(g AttachGate, sandboxName, envName string) AttachDecision {
 
 	switch {
 	case g.Entry == nil:
-		return refuse("is not a schema-verified running sandbox", nil)
-	case !g.Entry.IdentityVerified || g.Entry.State != sandbox.StateRunning:
-		return refuse("is not a schema-verified running sandbox", nil)
+		return refuse("is not a schema-verified running or stopped sandbox", nil)
+	case !g.Entry.IdentityVerified || (g.Entry.State != sandbox.StateRunning && g.Entry.State != sandbox.StateStopped):
+		return refuse("is not a schema-verified running or stopped sandbox", nil)
 	}
 	live := ""
 	if g.Entry.InstanceID != nil {
