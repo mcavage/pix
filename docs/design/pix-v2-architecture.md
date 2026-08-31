@@ -523,7 +523,13 @@ selected built-in environment; errors name the native command.
 
 For each declaration Pix verifies that host-global registration matches the
 reviewed URL or local command. A same-name mismatch refuses launch and is never
-overwritten automatically. The registry itself is one list per host, not one
+overwritten automatically. A registration already sitting under one of Pix's
+own reserved scoped names whose endpoint this host cannot read back (both
+`sbx mcp inspect` and `sbx mcp get` fail) is neither a match nor a mismatch:
+`pix setup` reports it as present and unverified, leaves it exactly as it is,
+names the two commands to inspect or remove it, and does NOT report ready.
+Presence alone is not evidence that the sandbox would reach this home's
+memory. The registry itself is one list per host, not one
 per `PIX_HOME`: a second `PIX_HOME`'s two built-ins register under their own
 stack-scoped names in that SAME list, so the registrations sit side by side
 instead of colliding.

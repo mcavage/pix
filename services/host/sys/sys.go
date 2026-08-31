@@ -18,7 +18,7 @@ import (
 // Exec runs other programs. Six methods rather than one because the CALLER's
 // obligations differ: Run captures, RunInput keeps a value out of argv,
 // RunTimed bounds an untrusted command, RunInteractive hands over the
-// terminal — collapsing them would hide that.
+// terminal: collapsing them would hide that.
 type Exec interface {
 	// LookPath resolves a binary on PATH.
 	LookPath(name string) (string, error)

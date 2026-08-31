@@ -19,6 +19,16 @@ registers its `/mcp` Streamable HTTP endpoint under the matching
 lets multiple `PIX_HOME` stacks coexist; `/healthz` is a separate,
 non-MCP liveness/readiness endpoint `pix doctor` probes.
 
+What the scoped name buys, precisely: two stacks on one host cannot collide
+on a registration, a container, or a port by accident. It is not a
+confidentiality boundary. The endpoint URL carries this stack's bearer token
+as a query parameter, sbx has no way to express a custom authorization header
+today, and its registry is a host-global store owned by your user account. So
+any other process running as the SAME host user can read that URL back out of
+the registry (or off a process listing at the moment of registration) and talk
+to your memory service. Until sbx can carry a secret header, that residual is
+real and is not something Pix can close from its side.
+
 **Pix has no top-level `memory` command in v2.** Memory is operated
 entirely through MCP tool calls: the model's own tools, the slash commands,
 and the deterministic lifecycle hooks all reach the same Gateway-registered
@@ -108,7 +118,12 @@ dump.
 ## Trust model and scope
 
 Memory runs as one personal service per `PIX_HOME` stack; it is not shared
-between two stacks, across your laptop and desktop, or with teammates. Profiles are
+between two stacks, across your laptop and desktop, or with teammates. "Not
+shared between two stacks" means the two stacks never address each other's
+service by accident, not that one is sealed from the other: both registrations
+live in the same host-global sbx registry under the same user, and either
+token-bearing URL is readable by anything running as that user (see the
+registration note above). Profiles are
 organizational scopes in this local service, not security tenants: the
 server enforces query/write scope on every request, but the same trusted
 Gateway client can request another profile. A future multi-user or cloud

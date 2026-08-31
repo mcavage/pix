@@ -47,7 +47,7 @@ func ValidID(id string) error {
 // Two failure modes are distinguished, because collapsing them is how an
 // identity silently changes underneath a running stack:
 //
-//   - The path (or an ancestor) IS there but cannot be resolved — a symlink
+//   - The path (or an ancestor) IS there but cannot be resolved: a symlink
 //     loop, an unreadable parent directory, any I/O error. That is an ERROR.
 //     Falling back to the unresolved spelling would mint a stack id for a
 //     location nobody can name, and a later call that CAN resolve it would
@@ -57,8 +57,8 @@ func ValidID(id string) error {
 //     ancestor is resolved and the missing components are appended to it
 //     unchanged. That is the whole point: a home under a symlinked parent
 //     canonicalizes to the same string before and after the directory is
-//     created, so its stack id — and therefore its container, MCP and
-//     sandbox names — do not move the first time setup runs.
+//     created, so its stack id: and therefore its container, MCP and
+//     sandbox names: do not move the first time setup runs.
 func CanonicalPath(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {

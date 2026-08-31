@@ -53,6 +53,13 @@ run side by side with their own containers, their own loopback memory ports,
 and their own namespaced entries in the host-global sbx MCP registry.
 Cleanup only ever reaches the current stack.
 
+Scoping is about collisions, not confidentiality. The two homes cannot take
+each other's names, ports, or sandboxes by accident, but the sbx registry is
+one host-global store owned by your user, and a memory registration's URL
+carries that stack's bearer token (sbx has no secret-header alternative yet).
+Anything running as the same host user can read it. Treat a shared login as
+a shared memory service.
+
 Provider keys are `op://` references in `$PIX_HOME/secrets.env`. `pix setup`
 creates that file; every run resolves the refs into **sandbox-scoped** sbx
 secrets, so a rotated 1Password item takes effect on the next run.

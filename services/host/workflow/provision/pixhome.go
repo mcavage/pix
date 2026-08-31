@@ -25,11 +25,13 @@ import (
 // it to `sbx mcp add`/`sbx mcp ls`; a test wires it to a fake registry.
 type MCPRegistrar interface {
 	// EnsureMemoryRemote registers name at url if unregistered and reports
-	// which of the two honest outcomes happened. An already-registered name
-	// is NEVER overwritten and NEVER reported as verified: a host that
-	// cannot read back the existing entry's URL says so (MCPPresent), it
-	// does not launder "there is something under this name" into "it points
-	// where we want".
+	// which honest outcome happened. An already-registered name is NEVER
+	// overwritten and NEVER reported as verified unless the endpoint was
+	// actually read back and matched: a host that cannot read it says so
+	// (MCPRegistrationPresentUnverified), and a host that reads back a
+	// DIFFERENT endpoint returns an error rather than touching it. Neither
+	// launders "there is something under this name" into "it points where we
+	// want".
 	EnsureMemoryRemote(name, url string) (state MCPRegistrationState, err error)
 }
 
@@ -45,11 +47,21 @@ const (
 	// MCPRegistrationAdded: this run registered the name at the URL it
 	// composed, and the registrar's own add command reported success.
 	MCPRegistrationAdded
-	// MCPRegistrationPresent: a registration already existed under the
-	// reserved name and was left untouched. Its URL is NOT verifiable from
-	// this host (`sbx mcp ls` does not print endpoints), so this is neither
-	// a match nor a mismatch — it is an unverifiable presence.
-	MCPRegistrationPresent
+	// MCPRegistrationPresentVerified: a registration already existed under
+	// the reserved name, was left untouched, AND this host read its endpoint
+	// back and it EQUALS the URL setup would have registered. This is the
+	// only "already fine" answer, and a probe earned it.
+	MCPRegistrationPresentVerified
+	// MCPRegistrationPresentUnverified: a registration already existed under
+	// the reserved name and was left untouched, but its endpoint could NOT be
+	// read back (`sbx mcp ls` does not print endpoints, and inspect/get both
+	// failed). Neither a match nor a mismatch: this host genuinely cannot
+	// tell what the sandbox would reach through that name. It is NOT ready
+	// (Ready() is false), because "there is something under this name" is not
+	// evidence that memory works: laundering it into one is exactly the
+	// success word safety invariant 12 forbids. Nothing is overwritten or
+	// removed either way; the caller states the manual check.
+	MCPRegistrationPresentUnverified
 )
 
 // Deps is every external effect Setup needs, injected so a test drives the
@@ -130,6 +142,10 @@ type Result struct {
 	// MCPState is what the registrar observed; meaningful only when
 	// MCPRegistered is true.
 	MCPState MCPRegistrationState
+	// MCPName is the scoped registration name this run acted on, carried so
+	// a caller can print an EXACT remedy (the name to inspect or remove)
+	// without re-deriving it from a stack id of its own.
+	MCPName string
 	// MemoryPort is the loopback port this PIX_HOME's pix-memory actually
 	// got, after any bind-conflict reallocation. It is the port the
 	// registered Gateway URL names.
@@ -284,6 +300,7 @@ func Setup(d Deps) (Result, error) {
 		if nerr != nil {
 			return res, fmt.Errorf("derive this PIX_HOME's scoped pix-memory MCP name: %w", nerr)
 		}
+		res.MCPName = memoryName
 		state, err := d.MCP.EnsureMemoryRemote(memoryName, container.MemoryMCPURL(resolvedSpec, token))
 		if err != nil {
 			return res, fmt.Errorf("register %s with the sbx Gateway: %w", memoryName, err)
@@ -297,15 +314,20 @@ func Setup(d Deps) (Result, error) {
 
 // Ready reports whether Setup left the host in a state `pix doctor` would
 // call fully ready: the container reconciled and probed successfully, and
-// (when registration was requested) the registrar reached a definite
-// outcome. An unverifiable PRESENT registration is not a failure — nothing
-// observed a defect — but the caller must not print it as verified either;
-// see renderSetupResult's wording.
+// (when registration was requested) the registrar reached an outcome a probe
+// actually earned: this run registered the name itself, or read the existing
+// registration's endpoint back and it matched.
+//
+// An UNVERIFIED presence is not ready. Nothing observed a defect, but nothing
+// observed the endpoint either, and "a server exists under this name" is not
+// the claim setup makes; the sandbox could be pointed at another home's
+// memory, or at nothing. The caller reports that state in those words and
+// names the manual check (see renderSetupResult).
 func (r Result) Ready() bool {
 	if !r.Container.Ready() {
 		return false
 	}
-	if r.MCPRegistered && r.MCPState == MCPRegistrationNone {
+	if r.MCPRegistered && (r.MCPState == MCPRegistrationNone || r.MCPState == MCPRegistrationPresentUnverified) {
 		return false
 	}
 	return true

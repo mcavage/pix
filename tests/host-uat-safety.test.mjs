@@ -52,8 +52,34 @@ test("host-uat.sh refuses BEFORE any mutation when a pre-existing resource under
 	assert.ok(preflightStart < script.indexOf('step "U1 setup'), "the pre-flight must run before pix setup");
 });
 
+test("host-uat.sh holds a sandbox open with --keep whenever it inspects one before removing it", () => {
+	// `pix run -- <cmd>` tears the sandbox down when that last shell exits.
+	// Any row that lists, greps or removes the sandbox afterwards must have
+	// asked for it to stay: without --keep those rows assert against a box
+	// that is already gone, which passes or fails for the wrong reason.
+	// Command lines only: the header comment and the make-load check also
+	// mention `pix run --dev`, and a comment is not a launch.
+	const launches = [...script.matchAll(/^(?!#)[^\n]*\bpix run --dev[^\n]*$/gm)]
+		.map((m) => m[0])
+		.filter((line) => !line.includes("|| fail \"make load"));
+	assert.ok(launches.length >= 2, "the UAT must launch at least the two sandboxes it inspects");
+	for (const line of launches) {
+		assert.match(line, /--keep/, `a launch whose sandbox is inspected afterwards must pass --keep: ${line}`);
+		assert.match(line, /--name "\$SANDBOX(_B)?"/, `every launch must name an explicit, stack-scoped sandbox so cleanup can find it: ${line}`);
+	}
+});
+
+test("host-uat.sh names every sandbox with its OWN stack's scoped form", () => {
+	assert.match(script, /SANDBOX="pix-\$STACK_ID-uat"/, "the first stack's sandbox must carry its own stack id");
+	assert.match(script, /SANDBOX_B="pix-\$STACK_ID_B-uat"/, "the second stack's sandbox must carry ITS own stack id");
+	// A short logical --name would be scoped by the launcher into the same
+	// namespace, but the script would not know the resulting name to clean up,
+	// so no row may use one.
+	assert.doesNotMatch(script, /--name "b-uat"/, "a bare short name leaves cleanup guessing at the scoped result");
+});
+
 test("host-uat.sh cleans up only resources it proved it created", () => {
-	for (const flag of ["CREATED_MEMORY_CONTAINER", "CREATED_MCP_REGISTRATION", "CREATED_SANDBOX"]) {
+	for (const flag of ["CREATED_MEMORY_CONTAINER", "CREATED_MCP_REGISTRATION", "CREATED_SANDBOX", "CREATED_SANDBOX_B"]) {
 		assert.match(script, new RegExp(`${flag}=0`), `${flag} must default to "not mine"`);
 		assert.match(script, new RegExp(`if \\[ "\\$${flag}" = "1" \\]`), `cleanup must gate on ${flag}`);
 	}
@@ -135,6 +161,14 @@ test("host-uat.sh proves resetting stack B leaves stack A intact, and never adop
 	// The second home's container is cleaned up only if this run created it.
 	assert.match(script, /CREATED_MEMORY_CONTAINER_B=0/, "the second home's container flag must default to \"not mine\"");
 	assert.match(script, /if \[ "\$CREATED_MEMORY_CONTAINER_B" = "1" \]/, "cleanup must gate on it");
+	// And so is its sandbox: a failure between the launch and `pix rm --all`
+	// must not leave the second stack's kept sandbox running on the host.
+	const cleanup = script.slice(script.indexOf("cleanup() {"), script.indexOf("trap cleanup EXIT"));
+	assert.match(cleanup, /PIX_HOME="\$HOME_B" pix rm "\$SANDBOX_B" --force/, "cleanup must remove the second stack's sandbox from ITS own home");
+	assert.ok(
+		cleanup.indexOf('if [ "$CREATED_SANDBOX_B" = "1" ]') < cleanup.indexOf('pix rm "$SANDBOX_B"'),
+		"that removal must be gated by this run's own ownership flag",
+	);
 });
 
 test("host-uat.sh reports the global-secret row honestly instead of claiming a negative it cannot prove", () => {

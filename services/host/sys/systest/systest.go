@@ -101,7 +101,7 @@ func (f *Fake) Run(name string, args ...string) (string, error) {
 }
 
 // RunInput records the ARGV and nothing else, then falls back to Run when
-// only Run is wired — the same wired-for-unwired substitution RunTimed makes.
+// only Run is wired: the same wired-for-unwired substitution RunTimed makes.
 // The input is DROPPED on that fallback rather than folded into the argv: a
 // fixture must never see a value in a place production keeps it out of.
 func (f *Fake) RunInput(input, name string, args ...string) (string, error) {

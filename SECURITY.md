@@ -92,6 +92,23 @@ effect once you re-register the server (`sbx mcp add <name>`), which triggers a
 fresh spawn. `pix secret set` is the equivalent for the cloud model provider
 keys (Anthropic/OpenAI/Google), not MCP credentials.
 
+## The memory service is scoped, not sealed
+
+Every Pix-owned runtime resource carries a stack id derived from your
+`PIX_HOME`, so two installations on one host never take each other's
+container, port, sandbox, or MCP registration by accident. That is a
+collision guarantee, not a confidentiality one.
+
+The memory registration's endpoint URL carries that stack's bearer token as a
+query parameter, because sbx has no way to declare a secret authorization
+header for a registered MCP server. sbx's registry is host-global and owned by
+your user account, so any other process running as the SAME host user can read
+the token-bearing URL back out of it and call your memory service. Closing
+that needs an upstream sbx capability (a header-bearing MCP declaration, or
+per-registration ACLs) this project does not own. Until then: a shared login is
+a shared memory service, and nothing in memory should be a secret you would not
+hand to any process on that account.
+
 ## Provider-key process exposure
 
 A resolved provider value never enters an argument vector. Pix writes each

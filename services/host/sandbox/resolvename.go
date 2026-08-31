@@ -64,7 +64,7 @@ func ScopeExplicitName(stackID, requested string) (string, error) {
 // MaxNameLen. Unlike compose (name.go), there is no digest here to keep the
 // result distinct: the caller's own name IS the identity, so cutting it to
 // fit is how `--name <sixty-chars>-alpha` and `--name <sixty-chars>-beta`
-// silently become one sandbox — the second run would attach to the first
+// silently become one sandbox: the second run would attach to the first
 // run's box. A refusal that states the budget is the only answer that cannot
 // alias.
 func composeExplicit(prefix, name string) (string, error) {

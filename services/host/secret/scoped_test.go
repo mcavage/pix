@@ -22,7 +22,7 @@ const scopedRefs = "ANTHROPIC_API_KEY=op://Private/anthropic/key\n" +
 
 // TestPrepareSandboxSecrets_ExactScopedArgv is the argv contract: `sbx secret
 // set -f --sandbox <name> <service>`, in that order, once per configured
-// known ref — no value in argv, and never a global flag.
+// known ref: no value in argv, and never a global flag.
 func TestPrepareSandboxSecrets_ExactScopedArgv(t *testing.T) {
 	var calls []string
 	env := fakeSyncEnv(scopedRefs, "sk-secret-value\n", nil, &calls)
@@ -54,7 +54,7 @@ func TestPrepareSandboxSecrets_ExactScopedArgv(t *testing.T) {
 // TestPrepareSandboxSecrets_ValueTravelsOverStdin is the finding this seam
 // exists for: the resolved credential is written to `sbx secret set`'s STDIN,
 // so it is never readable in the host's process table. The value must appear
-// in the injected input and NOWHERE else — not in the argv, not in the fake's
+// in the injected input and NOWHERE else: not in the argv, not in the fake's
 // recorded calls, not in printed output.
 func TestPrepareSandboxSecrets_ValueTravelsOverStdin(t *testing.T) {
 	const val = "sk-stdin-only-value"
@@ -101,7 +101,7 @@ func TestPrepareSandboxSecrets_ValueTravelsOverStdin(t *testing.T) {
 }
 
 // TestPrepareSandboxSecrets_StdinFailureNeverEchoesTheValue: redaction stays
-// as defence in depth even though the argv no longer carries the value — sbx
+// as defence in depth even though the argv no longer carries the value: sbx
 // is free to echo whatever it read, and this path prints its first line.
 func TestPrepareSandboxSecrets_StdinFailureNeverEchoesTheValue(t *testing.T) {
 	const val = "sk-echoed-back"

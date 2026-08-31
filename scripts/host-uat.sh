@@ -76,6 +76,7 @@ CREATED_MEMORY_CONTAINER=0
 CREATED_MCP_REGISTRATION=0
 CREATED_SANDBOX=0
 CREATED_MEMORY_CONTAINER_B=0
+CREATED_SANDBOX_B=0
 
 memory_container_exists() {
   [ -n "$(docker ps -a --filter "name=^$MEMORY_CONTAINER\$" --format '{{.Names}}' 2>/dev/null)" ]
@@ -106,6 +107,10 @@ cleanup() {
     printf 'host-uat: removed the %s container (created by this run)\n' "$MEMORY_CONTAINER"
   fi
   if [ -n "${HOME_B:-}" ]; then
+    if [ "$CREATED_SANDBOX_B" = "1" ]; then
+      ( PIX_HOME="$HOME_B" pix rm "$SANDBOX_B" --force ) >/dev/null 2>&1
+      printf 'host-uat: removed sandbox %s (created by this run)\n' "$SANDBOX_B"
+    fi
     if [ "$CREATED_MEMORY_CONTAINER_B" = "1" ]; then
       docker rm -f "$MEMORY_CONTAINER_B" >/dev/null 2>&1
       printf 'host-uat: removed the %s container (created by this run)\n' "$MEMORY_CONTAINER_B"
@@ -218,9 +223,19 @@ test -f "$PIX_HOME/envs/hooked/.installed" || fail "U4b: the setup hook's apply 
 pix setup --env hooked || fail "U4b: rerunning setup --env is not idempotent"
 
 step "U5 launch this checkout's own image, list, remove"
+# --keep is REQUIRED here, not decoration: `pix run -- --version` runs one
+# command and the sandbox is torn down when that last shell exits, so without
+# the keep marker there would be nothing left for `pix ls` to list and `pix rm`
+# would be removing a box that already went away. Every row that inspects a
+# sandbox and then removes it deliberately holds it open this way. --name is
+# the already-scoped form, which the launcher round-trips verbatim (a short
+# name would be scoped into the same namespace, but then this script would not
+# know the resulting name to clean up).
 pix run --dev --env uat --name "$SANDBOX" --keep -- --version || fail "U5: pix run --dev failed"
 CREATED_SANDBOX=1
 pix ls | grep -q "$SANDBOX" || fail "U5: pix ls does not list the sandbox it just created"
+# An explicit `pix rm NAME` removes a kept sandbox: the keep marker blocks the
+# AUTOMATIC reaper, never a named request.
 pix rm "$SANDBOX" || fail "U5: pix rm refused the sandbox it created"
 CREATED_SANDBOX=0
 
@@ -244,6 +259,12 @@ STACK_ID_B="$(stack_id_for "$HOME_B")"
 [ "$STACK_ID_B" != "$STACK_ID" ] || fail "U8: two distinct PIX_HOMEs derived the SAME stack id"
 MEMORY_CONTAINER_B="pix-memory-$STACK_ID_B"
 MEMORY_MCP_B="pix-memory-$STACK_ID_B"
+# The second stack's sandbox is named the SAME way the first one is: an
+# explicit --name is scoped to the stack that launches it, and passing the
+# already-scoped form is the round-trip case the launcher accepts verbatim.
+# Naming it here (rather than letting a short name expand invisibly) is what
+# lets cleanup remove it under its own ownership flag if a later row fails.
+SANDBOX_B="pix-$STACK_ID_B-uat"
 if [ -n "$(docker ps -a --filter "name=^$MEMORY_CONTAINER_B\$" --format '{{.Names}}' 2>/dev/null)" ]; then
   fail "U8: a $MEMORY_CONTAINER_B container already exists; refusing to adopt a resource this run did not create"
 fi
@@ -257,10 +278,13 @@ PORT_B="$(grep -E '^memory_port' "$HOME_B/config.toml" | tr -dc '0-9')"
 [ "$PORT_A" != "$PORT_B" ] || fail "U8: both PIX_HOMEs allocated the SAME loopback memory port ($PORT_A)"
 sbx mcp ls | grep -q "$MEMORY_MCP_B" || fail "U8: the second stack's $MEMORY_MCP_B registration is missing (the MCP registry is host-global but namespaced)"
 sbx mcp ls | grep -q "$MEMORY_MCP" || fail "U8: registering the second stack dropped the first stack's $MEMORY_MCP registration"
-( cd "$REPO" && PIX_HOME="$HOME_B" pix run --dev --name "b-uat" --keep -- --version ) || fail "U8: pix run failed under the second PIX_HOME"
-sbx ls | grep -q "pix-$STACK_ID_B-" || fail "U8: the second stack's sandbox does not carry its own stack id"
+( cd "$REPO" && PIX_HOME="$HOME_B" pix run --dev --name "$SANDBOX_B" --keep -- --version ) || fail "U8: pix run failed under the second PIX_HOME"
+CREATED_SANDBOX_B=1
+sbx ls | grep -q "$SANDBOX_B" || fail "U8: the second stack's sandbox does not carry its own stack id"
+sbx ls | grep -q "pix-$STACK_ID-uat" && fail "U8: the second stack's launch reached into the FIRST stack's namespace"
 ( PIX_HOME="$HOME_B" pix rm --all --yes ) || fail "U8: pix rm --all failed under the second PIX_HOME"
 sbx ls | grep -q "pix-$STACK_ID_B-" && fail "U8: the second stack's own sandbox survived its own pix rm --all"
+CREATED_SANDBOX_B=0
 
 step "U9 reset of stack B leaves stack A completely intact"
 ( PIX_HOME="$HOME_B" pix reset --yes ) || fail "U9: pix reset failed for the second PIX_HOME"

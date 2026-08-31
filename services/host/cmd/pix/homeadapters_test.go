@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"pix/host/cli"
 	"pix/host/container"
 	"pix/host/pixhome"
 	"pix/host/release"
@@ -135,8 +137,8 @@ exit 1
 }
 
 // TestSbxMemoryRegistrarPresentWhenEndpointMatches proves a same scoped name
-// registered at the SAME endpoint is reported present (not re-added, not
-// refused).
+// registered at the SAME endpoint is reported present-VERIFIED (not re-added,
+// not refused): the one already-fine answer, and a read-back earned it.
 func TestSbxMemoryRegistrarPresentWhenEndpointMatches(t *testing.T) {
 	const scopedName = "pix-memory-0123456789abcdef"
 	installSbxRegistrarFixture(t, `
@@ -148,8 +150,74 @@ exit 1
 	if err != nil {
 		t.Fatalf("EnsureMemoryRemote: %v", err)
 	}
-	if state != provision.MCPRegistrationPresent {
-		t.Fatalf("state = %v, want present", state)
+	if state != provision.MCPRegistrationPresentVerified {
+		t.Fatalf("state = %v, want present-verified", state)
+	}
+}
+
+// TestSbxMemoryRegistrarUnverifiedWhenEndpointCannotBeRead is the finding: a
+// pre-existing registration under this stack's scoped name that neither
+// `sbx mcp inspect` nor `sbx mcp get` can describe is present-UNVERIFIED. It
+// must not be re-added over, must not be removed, and must not be reported as
+// a match.
+func TestSbxMemoryRegistrarUnverifiedWhenEndpointCannotBeRead(t *testing.T) {
+	const scopedName = "pix-memory-0123456789abcdef"
+	dir := installSbxRegistrarFixture(t, `
+if [ "$1 $2" = "mcp ls" ]; then echo "`+scopedName+` remote"; exit 0; fi
+if [ "$1 $2" = "mcp add" ]; then printf '%s\n' "$@" > "$d/addargv"; exit 0; fi
+if [ "$1 $2" = "mcp rm" ]; then printf '%s\n' "$@" > "$d/rmargv"; exit 0; fi
+exit 1
+`)
+	state, err := (sbxMemoryRegistrar{}).EnsureMemoryRemote(scopedName, "http://127.0.0.1:18080/mcp")
+	if err != nil {
+		t.Fatalf("EnsureMemoryRemote: %v", err)
+	}
+	if state != provision.MCPRegistrationPresentUnverified {
+		t.Fatalf("state = %v, want present-unverified", state)
+	}
+	for _, f := range []string{"addargv", "rmargv"} {
+		if _, statErr := os.Stat(filepath.Join(dir, f)); statErr == nil {
+			t.Errorf("an unverifiable registration must be left alone, but sbx %s ran", strings.TrimSuffix(f, "argv"))
+		}
+	}
+}
+
+// TestSetupReportsUnverifiedRegistrationAsNotReady wires the state through to
+// the surface a user sees: `pix setup` names the registration, says the
+// endpoint could not be read, states that nothing was touched, gives the
+// exact commands, and does NOT print the ready line.
+func TestSetupReportsUnverifiedRegistrationAsNotReady(t *testing.T) {
+	const scopedName = "pix-memory-0123456789abcdef"
+	var out bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &out}
+	res := provision.Result{
+		MCPRegistered: true,
+		MCPState:      provision.MCPRegistrationPresentUnverified,
+		MCPName:       scopedName,
+	}
+	renderSetupResult(d, pixhome.New(t.TempDir()), res, false)
+	got := out.String()
+	for _, want := range []string{
+		scopedName,
+		"could not be read",
+		"nothing overwritten or removed",
+		"sbx mcp rm " + scopedName,
+		"pix setup: not ready.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("setup output is missing %q:\n%s", want, got)
+		}
+	}
+	// "read back and matched" is the verified branch's own wording; the bare
+	// word "verified" is not searchable here because the temp PIX_HOME path
+	// carries this test's own name.
+	for _, forbidden := range []string{"pix setup: ready", "read back and matched"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("setup output claims %q for a registration nothing probed:\n%s", forbidden, got)
+		}
+	}
+	if res.Ready() {
+		t.Error("Ready() = true for an unverifiable registration")
 	}
 }
 

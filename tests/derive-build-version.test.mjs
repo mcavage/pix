@@ -273,11 +273,48 @@ test("clean and dirty derived versions are legal SemVer prereleases, legal OCI t
 
 test("Makefile's LAUNCHER_VERSION default derives from this script, and CI still overrides it with a clean semver", () => {
 	const makefile = fs.readFileSync(path.join(repoRoot, "Makefile"), "utf8");
-	assert.match(makefile, /LAUNCHER_VERSION\s*\?=\s*\$\(shell scripts\/release\/derive-build-version\.sh\)/);
+	assert.match(makefile, /DERIVE_VERSION_SH\s*\?=\s*scripts\/release\/derive-build-version\.sh/);
+	assert.match(makefile, /LAUNCHER_VERSION\s*\?=\s*\$\(call launcher-version-or-die,\$\(shell \$\(DERIVE_VERSION_SH\)\)\)/);
 	// `make launcher LAUNCHER_VERSION=<clean>` must actually win over the
 	// derived default — proven with a real `make -n` dry run, not just a
 	// Makefile-text assertion, so a syntax mistake in the override plumbing
 	// would fail this test.
 	const dryRun = execFileSync("make", ["-n", "launcher", "LAUNCHER_VERSION=1.2.3"], { cwd: repoRoot, encoding: "utf8" });
 	assert.match(dryRun, /-X main\.version=1\.2\.3/);
+});
+
+test("Make ABORTS when the derivation fails, instead of stamping an empty version", () => {
+	// /bin/false stands in for a derivation that refuses (a malformed
+	// package.json version, no git metadata, an illegal candidate): it exits
+	// nonzero and prints nothing on stdout, exactly like the real script's
+	// failure contract.
+	const r = spawnSync("make", ["-n", "launcher", "DERIVE_VERSION_SH=/bin/false"], { cwd: repoRoot, encoding: "utf8" });
+	assert.notEqual(r.status, 0, `make must fail; stdout was:\n${r.stdout}`);
+	assert.match(r.stderr, /could not derive/i, `the failure must say what happened, got:\n${r.stderr}`);
+	assert.match(r.stderr, /LAUNCHER_VERSION=/, "the failure must name the explicit override that bypasses the derivation");
+	// The critical half: no target may run with an empty stamp.
+	assert.doesNotMatch(r.stdout, /-X main\.version=\s*(-o|$)/m, "make continued with an empty version stamp");
+	assert.doesNotMatch(r.stdout, /go build/, "no build command may be emitted once the version is unknown");
+});
+
+test("an explicit LAUNCHER_VERSION never invokes the derivation script at all", () => {
+	// The stub would exit nonzero AND write a marker if it ran; `?=` must not
+	// expand its default when the variable already has a command-line value,
+	// so a release build (LAUNCHER_VERSION=$(VERSION)) never shells out.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pix-derive-override-"));
+	try {
+		const marker = path.join(dir, "ran");
+		const stub = path.join(dir, "derive-stub.sh");
+		fs.writeFileSync(stub, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`);
+		fs.chmodSync(stub, 0o755);
+		const r = spawnSync("make", ["-n", "launcher", "LAUNCHER_VERSION=9.9.9", `DERIVE_VERSION_SH=${stub}`], {
+			cwd: repoRoot,
+			encoding: "utf8",
+		});
+		assert.equal(r.status, 0, `make must succeed with an explicit version; stderr was:\n${r.stderr}`);
+		assert.match(r.stdout, /-X main\.version=9\.9\.9/);
+		assert.equal(fs.existsSync(marker), false, "the derivation script ran even though LAUNCHER_VERSION was given explicitly");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });

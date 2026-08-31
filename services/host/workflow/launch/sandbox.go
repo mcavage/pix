@@ -335,8 +335,8 @@ func removePixSandbox(env hostenv.Env, name string) error {
 // sandbox name the PIX_HOME that created the task composed, and on a host
 // where two Pix stacks coexist that may be another stack's sandbox (or a
 // pre-scoping name no stack owns). sandbox.PlanForceRemove cannot catch
-// either — it has no stack id to compare against, so "pix-*" is as far as its
-// scope check reaches — which is exactly the gap this closes: the stack check
+// either: it has no stack id to compare against, so "pix-*" is as far as its
+// scope check reaches: which is exactly the gap this closes: the stack check
 // runs BEFORE any argv is composed, and a name that fails it is never
 // executed in any form.
 func RemoveScopedPixSandbox(env hostenv.Env, stackID, name string) error {
