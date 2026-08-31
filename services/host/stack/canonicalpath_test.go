@@ -35,7 +35,11 @@ func TestCanonicalPath_MissingLeafUnderASymlinkedParentIsStableAcrossCreation(t 
 	if err != nil {
 		t.Fatalf("CanonicalPath(%q) before creation: %v", home, err)
 	}
-	want := filepath.Join(real, ".pix")
+	resolvedReal, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", real, err)
+	}
+	want := filepath.Join(resolvedReal, ".pix")
 	if before != want {
 		t.Errorf("CanonicalPath(%q) = %q before creation, want the resolved parent %q", home, before, want)
 	}
