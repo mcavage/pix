@@ -249,7 +249,7 @@ var pkgLayer = map[string]int{
 	// health (L2) and the applies for the three things setup installs, and owns
 	// no domain knowledge of its own.
 	"workflow/provision": layerWorkflow,
-	"workflow/reset": layerWorkflow,
+	"workflow/reset":     layerWorkflow,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,
@@ -283,7 +283,7 @@ var pkgLayer = map[string]int{
 var l0Order = map[string]int{
 	"pixhome": 0,
 	"config":  1,
-	"sys": 2, "launcher": 2,
+	"sys":     2, "launcher": 2,
 	"workspace":   3,
 	"sys/systest": 3, "hostenv": 4,
 	"cli": 5,

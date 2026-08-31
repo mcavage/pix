@@ -2,10 +2,8 @@ package mcp
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
-	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
 )
@@ -102,23 +100,3 @@ func TestDetectLegacyPositionalURL_UnknownStaysCurrent(t *testing.T) {
 }
 
 // --- AddArgs respects LegacyPositionalURL -----------------------------------
-
-func TestAddArgs_LegacyPositionalURL(t *testing.T) {
-	servers := map[string]config.MCPServer{
-		"notion-ish": {Manifest: "https://example.com/mcp/x/server.json"},
-		"meetings":   {RemoteURL: "https://app.trymeetings.com/mcp"},
-	}
-	reg := McpRegistrar{servers: servers, LegacyPositionalURL: true}
-
-	manifest := strings.Join(reg.AddArgs("notion-ish"), " ")
-	if manifest != "mcp add notion-ish --local https://example.com/mcp/x/server.json" {
-		t.Errorf("legacy manifest AddArgs = %q", manifest)
-	}
-	remote := strings.Join(reg.AddArgs("meetings"), " ")
-	if remote != "mcp add meetings https://app.trymeetings.com/mcp" {
-		t.Errorf("legacy remote AddArgs = %q", remote)
-	}
-	if strings.Contains(manifest, "--url") || strings.Contains(remote, "--url") {
-		t.Errorf("legacy grammar must never carry --url: manifest=%q remote=%q", manifest, remote)
-	}
-}

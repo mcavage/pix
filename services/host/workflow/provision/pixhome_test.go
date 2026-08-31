@@ -43,17 +43,18 @@ type fakeMCP struct {
 	calls      int
 }
 
-func (f *fakeMCP) EnsureMemoryRemote(name, url string) (bool, error) {
+func (f *fakeMCP) EnsureMemoryRemote(name, url string) (MCPRegistrationState, error) {
 	f.calls++
 	if f.registered == nil {
 		f.registered = map[string]string{}
 	}
-	existing, ok := f.registered[name]
-	if !ok {
+	if _, ok := f.registered[name]; !ok {
 		f.registered[name] = url
-		return true, nil
+		return MCPRegistrationAdded, nil
 	}
-	return existing == url, nil
+	// Already registered: left untouched, and reported as an unverifiable
+	// PRESENCE — never as a match (round-4 review).
+	return MCPRegistrationPresent, nil
 }
 
 func testManifest() release.Manifest {
@@ -86,8 +87,8 @@ func TestSetup_FromScratch(t *testing.T) {
 	if res.Container.Action != container.ActionCreated {
 		t.Errorf("Container.Action = %s, want created", res.Container.Action)
 	}
-	if !res.MCPRegistered || !res.MCPMatched {
-		t.Errorf("MCPRegistered/MCPMatched = %v/%v, want true/true", res.MCPRegistered, res.MCPMatched)
+	if !res.MCPRegistered || res.MCPState != MCPRegistrationAdded {
+		t.Errorf("MCPRegistered/MCPState = %v/%v, want true/added", res.MCPRegistered, res.MCPState)
 	}
 	if !res.Ready() {
 		t.Errorf("Ready() = false, want true")
@@ -122,11 +123,8 @@ func TestSetup_MCPMismatchIsReportedNotOverwritten(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
-	if !res.MCPRegistered || res.MCPMatched {
-		t.Fatalf("expected registered=true matched=false, got %+v", res)
-	}
-	if res.Ready() {
-		t.Fatal("Ready() must be false on an MCP registration mismatch")
+	if !res.MCPRegistered || res.MCPState != MCPRegistrationPresent {
+		t.Fatalf("expected registered=true state=present, got %+v", res)
 	}
 	if mcp.registered[envinfo.MCPMemoryName] != "http://127.0.0.1:9999/mcp" {
 		t.Fatal("Setup must never overwrite an existing mismatched registration")
@@ -169,12 +167,19 @@ func TestSetup_RegistersMemoryURLWithToken(t *testing.T) {
 
 	_, err := Setup(Deps{
 		Home: home, ContainerRunner: docker, Prober: fakeProber{},
-		ContainerSpec: spec, MCP: mcp, MemoryAuthToken: "sekrit-token",
+		ContainerSpec: spec, MCP: mcp,
 	})
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
-	want := "http://127.0.0.1:18080/mcp?token=sekrit-token"
+	// Setup generates the token itself, INSIDE the setup lock, so the URL it
+	// registers must carry exactly the token now persisted under PIX_HOME —
+	// never one the caller passed in (there is no such parameter any more).
+	tok, terr := container.ReadMemoryAuthToken(home)
+	if terr != nil || tok == "" {
+		t.Fatalf("ReadMemoryAuthToken = (%q, %v), want a generated token", tok, terr)
+	}
+	want := "http://127.0.0.1:18080/mcp?token=" + tok
 	if got := mcp.registered[envinfo.MCPMemoryName]; got != want {
 		t.Fatalf("registered MCP URL = %q, want %q", got, want)
 	}

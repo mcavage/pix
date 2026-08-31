@@ -54,7 +54,10 @@ func MemoryAuthTokenPath(home pixhome.Paths) string {
 
 // EnsureMemoryAuthToken returns the persisted pix-memory bearer token,
 // generating and durably writing a fresh 256-bit one (mode 0600) on first
-// use. It is IDEMPOTENT: a later call returns the SAME token, so an
+// use. `pix setup` calls it INSIDE the setup lock (container.SetupLockPath),
+// so two concurrent setups against the same PIX_HOME cannot generate two
+// tokens and race which one the container is created against. It is
+// IDEMPOTENT: a later call returns the SAME token, so an
 // already-created container's baked-in MEMORY_AUTH_TOKEN keeps matching the
 // registered MCP URL/env-file across `pix setup` reruns — regenerating on
 // every call would silently desync a running container (whose env is fixed
@@ -70,18 +73,53 @@ func EnsureMemoryAuthToken(home pixhome.Paths) (string, error) {
 		return "", fmt.Errorf("generate pix-memory auth token: %w", err)
 	}
 	tok := hex.EncodeToString(buf)
-	if err := os.MkdirAll(home.StateMemory, 0o700); err != nil {
-		return "", fmt.Errorf("create %s: %w", home.StateMemory, err)
+	dir := home.StateMemory
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", dir, err)
 	}
-	content := tok + "\n"
+	// Tighten a state dir that an earlier run (or an unpacked backup) may
+	// have created 0755: the token file below is 0600, which is worthless if
+	// its parent is world-traversable and something later recreates the file.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", fmt.Errorf("secure %s: %w", dir, err)
+	}
 	path := MemoryAuthTokenPath(home)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+	// os.CreateTemp opens O_CREATE|O_EXCL in the SAME directory, so this can
+	// never follow (or clobber) an attacker-planted `auth.token.tmp` the way
+	// the previous fixed-name os.WriteFile could, and the rename below stays
+	// on one filesystem. fsync before rename: a crash must leave either the
+	// old token or the new one, never a truncated file the container would
+	// then authenticate against.
+	tmp, err := os.CreateTemp(dir, ".auth.token.tmp-*")
+	if err != nil {
 		return "", fmt.Errorf("write %s: %w", path, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("write %s: %w", path, err)
+	}
+	if _, err := tmp.WriteString(tok + "\n"); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
 		return "", fmt.Errorf("install %s: %w", path, err)
 	}
+	cleanup = false
 	return tok, nil
 }
 

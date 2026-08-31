@@ -9,7 +9,7 @@
 export default [
 	{
 		id: "config-keys.top-level.surface",
-		description: "Config's top-level toml tags, from the Services field through GogAccount, still name exactly this key set.",
+		description: "Config's top-level toml tags still name exactly this key set. The round-4 config collapse deleted services/mcp/packs/pack: config.toml declares no MCP server list and no service list any more (the environment's .sbxenv.yaml plus reserved built-ins are the ONE MCP declaration channel), and pixhome.Machine — not this struct — owns the two machine-only keys (default_environment, memory_port).",
 		checks: [
 			{
 				file: "services/host/config/config.go",
@@ -23,7 +23,7 @@ export default [
 				// the same struct) are real keys too but are out of scope for this W0
 				// pin — Story-scoped follow-up, not this guard's job to enumerate the
 				// entire struct.
-				region: { start: 'Services []string `toml:"-"`', end: "\n\tKits struct {" },
+				region: { start: "type Config struct {", end: "\n\tKits struct {" },
 				pattern: 'toml:"([^",]+)',
 				// "-" (Services' own tag, deliberately un-serialized — ServicesRaw is
 				// the TOML-facing field) sits ON the start-anchor line itself and is
@@ -52,8 +52,7 @@ export default [
 				// `pix env use`/`pix env add`/`pix env rm` (Wave C) are the only
 				// writers.
 				expected: [
-					"services",
-					"mcp",
+					"version_pin",
 					"memory_watcher_model",
 					"memory_embed_model",
 					"memory_capture",

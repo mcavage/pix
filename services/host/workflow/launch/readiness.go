@@ -90,7 +90,7 @@ func (p memoryLivenessProbe) Check(ctx context.Context) health.Result {
 func FastSnapshot(ctx context.Context, cfg *config.Config, keys health.Result) health.Snapshot {
 	snap := health.Run(ctx, health.StatusBudget, memoryLivenessProbe{
 		Port:    memoryPortDefault,
-		Enabled: config.ServiceEnabled(cfg, "memory"),
+		Enabled: true, // pix-memory is a reserved built-in in v2, never an opt-in service list entry
 	})
 	if keys.Name != "" {
 		snap.Results = append([]health.Result{keys}, snap.Results...)

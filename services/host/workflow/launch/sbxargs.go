@@ -26,8 +26,8 @@ type RunOpts struct {
 	Skills        []string // --skills DIR: extra live skill trees
 	Kits          []string // --kit K: escape hatch. When present they REPLACE the auto git/local pin, then the config stack applies.
 	KitRef        string
-	MCP           []string // --mcp M: extra servers on top of config.MCP (folded into StaticMCP by the caller)
-	StaticMCP     []string // RESOLVED create-time set, emitted as --static-mcp (mcp.AllPreloadedMCP of cfg.MCP+MCP)
+	MCP           []string // --mcp M: flag-requested servers (folded into StaticMCP by the caller)
+	StaticMCP     []string // RESOLVED create-time set, emitted as --static-mcp (mcp.AllPreloadedMCP of MCP + built-ins)
 	Name          string   // --name N: sandbox name
 	// Env is `--env NAME`: the EXACT registered environment this run
 	// launches under, overriding the configured default for this run only

@@ -24,7 +24,7 @@ enumerated below rather than left to the phrase "only what you configured".
 | **A version check**: pi asks the npm registry whether a newer `@earendil-works/pi-coding-agent` exists (this is what the in-sandbox "Update available" banner is) | `registry.npmjs.org` | Update notification | npm's terms; pix stores no result |
 | **Package + toolchain downloads**: pi extensions and npm packages, the pinned `fd`/`ruff`/Go binaries at image build, git fetches, release assets fetched by `install.sh`/`brew` | `registry.npmjs.org`, `nodejs.org`, `pi.dev`, `github.com`, `codeload.github.com`, `objects.githubusercontent.com`, `raw.githubusercontent.com`, `go.dev` | Install what the sandbox runs | Those hosts' terms |
 | GitHub API calls you make (`gh`, PRs, issues) | `api.github.com`, `uploads.github.com` | Commands you ran | GitHub's terms |
-| Loopback traffic to host services you started (`memory` :11435, `ollama` :11434) | Your own machine, over `host.docker.internal`/`localhost` | Recall, local inference | Local only — see below |
+| Loopback traffic to services on your own machine: the `pix-memory` container (a loopback port `pix setup` allocates per PIX_HOME, 18080 by default) and `ollama` (:11434) | Your own machine, over `host.docker.internal`/`localhost` | Recall, local inference | Local only — see below |
 
 Every sandbox-egress destination is disclosed above: sandbox egress is
 allowlisted in `pi-kit/spec.yaml` (`permissions.network.allow`), and a
@@ -41,7 +41,7 @@ depends on it.
 
 ## What stays local
 
-- **Memory** (`pix-host memory`, `:11435`): the self-learning store. Binds
+- **Memory** (`pix-memory`, one Docker container reached only through the sbx MCP Gateway over loopback, on the port `pix setup` allocated for this PIX_HOME): the self-learning store. Binds
   loopback, file-backed on your machine, never synced anywhere. "Local"
   describes the store and its extraction/embedding path, not everything
   memory touches: once a row is **recalled** (auto-injected each turn, or via
@@ -61,10 +61,11 @@ depends on it.
   transcripts under `.pi-sessions/*.jsonl` in your workspace.
   **If you ran an earlier version, that data is still there and nothing will
   ever touch it again** — no reader, no eviction pass, no bounds. Delete it:
-  `rm -rf ~/.local/state/pix/monitor` (or `$XDG_STATE_HOME/pix/monitor`).
+  `rm -rf ~/.local/state/pix/monitor` (that orphaned path predates PIX_HOME;
+  everything Pix writes today lives under `${PIX_HOME:-$HOME/.pix}`).
 - **Session transcripts / todos / provenance records**: files under your home
   and `out/`, never uploaded by pix.
-- **Config**: `~/.config/pix/config.toml`, `~/.local/state/pix/`.
+- **Config and state**: everything Pix owns lives under `PIX_HOME` (default `~/.pix`, overridable with `$PIX_HOME`): `~/.pix/config.toml`, `~/.pix/secrets.env`, `~/.pix/op-refs.env`, `~/.pix/state/`. There is no XDG split and no second config location.
 
 ## Credentials
 

@@ -120,12 +120,14 @@ func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		keys.Source = "configured inference"
 	}
 
-	mcpServers := append([]string(nil), cfg.MCP...)
-
 	hs := HostState{
-		Keys:   keys,
-		Memory: hostStateSvc{Enabled: slices.Contains(cfg.Services, "memory"), Up: dialer(memoryPortDefault), Port: memoryPortDefault},
-		MCP:    hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
+		Keys: keys,
+		// pix-memory is a reserved built-in (always declared), and MCP servers
+		// are declared by the ENVIRONMENT's .sbxenv.yaml plus the reserved
+		// built-ins — config.toml carries no second server list any more, so
+		// this host-state summary reports none of its own.
+		Memory: hostStateSvc{Enabled: true, Up: dialer(memoryPortDefault), Port: memoryPortDefault},
+		MCP:    hostStateMCP{Enabled: false},
 		Models: hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
 	}
 	// Provisioned: an inherited, fully set-up environment that must NOT be

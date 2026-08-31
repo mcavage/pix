@@ -169,3 +169,90 @@ func TestDeletionSweep_ModuleHasNoSutureOrGoPlugin(t *testing.T) {
 		}
 	}
 }
+
+// TestDeletionSweep_RemovedVerbsRouteNowhere is the round-4 strengthening of
+// this sentinel: it pins the FULL removed verb set, not just the packs/host
+// subset the original sweep covered. A removed verb gets the ordinary
+// unknown-command answer (AGENTS.md's command surface: pix has no released
+// users to keep a migration path for), so the proof is that no dispatch
+// table anywhere in the module names one.
+func TestDeletionSweep_RemovedVerbsRouteNowhere(t *testing.T) {
+	// Each entry is the STRUCT-FIELD shape a kong-style dispatch child takes
+	// in cmd/pix/root.go, so this cannot false-positive on the word "config"
+	// or "models" appearing in prose.
+	removed := []string{
+		"mcpCmd struct",
+		"modelsCmd struct",
+		"configCmd struct",
+		"agentCmd struct",
+		"packCmd struct",
+		"serveCmd struct",
+		"resumeCmd struct",
+		"statusCmd struct",
+		"uatCmd struct",
+		"memoryCmd struct",
+	}
+	self, err := filepath.Abs("deletion_sentinel_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	walkGoSource(t, hostRoot(t), func(path, content string) {
+		if abs, _ := filepath.Abs(path); abs == self {
+			return
+		}
+		for _, verb := range removed {
+			if strings.Contains(content, verb) {
+				t.Errorf("%s declares %q: that verb was deleted in the Pix v2 cutover and must not route anywhere", path, verb)
+			}
+		}
+	})
+}
+
+// TestDeletionSweep_NoSecondConfigSchemaOrMCPChannel pins round 4's config
+// collapse: pixhome.Machine is the SOLE config.toml owner (there is no
+// config.MachineConfig duplicate any more), config.Config carries no
+// services/mcp/pack list, and nothing writes config.toml through a legacy
+// Save path. A second schema over one file is how two writers disagree
+// about the same bytes.
+func TestDeletionSweep_NoSecondConfigSchemaOrMCPChannel(t *testing.T) {
+	banned := map[string]string{
+		"MachineConfig":         "the duplicate config.toml schema (pixhome.Machine is the sole owner)",
+		"func (c *Config) Save": "the legacy config.Config write path",
+		"cfg.MCP":               "config.toml's retired MCP server list (the environment document is the ONE declaration channel)",
+		"RegisterServers(":      "the pack-manifest MCP registration admin surface",
+		"ReconcileOnboarding":   "the in-sandbox onboarding proposal's host-config write path",
+	}
+	self, err := filepath.Abs("deletion_sentinel_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	walkGoSource(t, hostRoot(t), func(path, content string) {
+		if abs, _ := filepath.Abs(path); abs == self {
+			return
+		}
+		for sym, why := range banned {
+			if strings.Contains(content, sym) {
+				t.Errorf("%s mentions %q: %s was deleted in round 4 and must not come back", path, sym, why)
+			}
+		}
+	})
+}
+
+// TestDeletionSweep_OpRefsResolvesUnderPixHomeOnly is QA F5's closing
+// sentinel: no production file may consult $PIX_CONFIG or any XDG_* variable
+// to locate a Pix-owned file. PIX_HOME is the single root (safety invariant 1).
+func TestDeletionSweep_OpRefsResolvesUnderPixHomeOnly(t *testing.T) {
+	self, err := filepath.Abs("deletion_sentinel_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := regexp.MustCompile(`Getenv\("(PIX_CONFIG|XDG_[A-Z_]+)"\)`)
+	walkGoSource(t, hostRoot(t), func(path, content string) {
+		if abs, _ := filepath.Abs(path); abs == self {
+			return
+		}
+		if m := bad.FindString(content); m != "" {
+			t.Errorf("%s reads %s: Pix resolves every one of its own files under PIX_HOME alone", path, m)
+		}
+	})
+}

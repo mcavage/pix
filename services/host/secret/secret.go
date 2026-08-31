@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -131,7 +130,7 @@ func OpSignedIn(env hostenv.Env) bool {
 // OpRefsContent resolves + reads op-refs.env through the injected env, returning
 // its path, contents, and whether it exists.
 func OpRefsContent(env hostenv.Env) (path, content string, exists bool) {
-	path = DefaultOpRefsPath(env)
+	path = DefaultOpRefsPath()
 	c, err := env.ReadFile(path)
 	if err != nil {
 		return path, "", false
@@ -260,7 +259,7 @@ func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string, nonSe
 	// --env-file` both require a literal space in a ref (a spaced 1Password
 	// field name, e.g. "Anthropic API Key") and reject a percent-encoded one.
 	value = strings.ReplaceAll(value, "%20", " ")
-	path := DefaultOpRefsPath(env)
+	path := DefaultOpRefsPath()
 	content := ""
 	exists := false
 	c, err := env.ReadFile(path)
@@ -345,7 +344,7 @@ func RunSecretRm(env hostenv.Env, out io.Writer, key string) error {
 // runSecretRmLocked is RunSecretRm's file transaction. Caller MUST hold the
 // provider-refs lock.
 func runSecretRmLocked(env hostenv.Env, out io.Writer, key string) error {
-	path := DefaultOpRefsPath(env)
+	path := DefaultOpRefsPath()
 	content := ""
 	exists := false
 	c, err := env.ReadFile(path)
@@ -468,21 +467,6 @@ func repairLegacyOpRefsTemplate(content string) (string, bool) {
 	return strings.Join(lines, "\n"), changed
 }
 
-func RepairLegacyOpRefsFile(env hostenv.Env, path string) error {
-	content, err := env.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	repaired, changed := repairLegacyOpRefsTemplate(content)
-	if !changed {
-		return nil
-	}
-	return env.WriteFile(path, []byte(repaired), 0o600)
-}
-
 // RunSecretCheck resolves every op:// ref in op-refs.env with `op read` and
 // reports OK/FAIL per KEY. It NEVER prints the resolved value (only OK/FAIL).
 // The three no-evidence arms (no refs file, no op, not signed in) return exit
@@ -568,21 +552,13 @@ func indent(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-// DefaultOpRefsPath computes the absolute XDG op-refs.env path from the injected
-// env (mirrors config.OpRefsPath but stays hermetic under test): $PIX_CONFIG
-// dir, else $XDG_CONFIG_HOME/pix, else ~/.config/pix — all + op-refs.env.
-// This is the path repo-less hosts must create, so every user-facing message and
-// the seeder reference it (never a meaningless repo-relative config/op-refs.env).
-func DefaultOpRefsPath(env hostenv.Env) string {
-	if p := env.Getenv("PIX_CONFIG"); p != "" {
-		return filepath.Join(filepath.Dir(p), "op-refs.env")
-	}
-	if xdg := env.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "pix", "op-refs.env")
-	}
-	if home := env.HomeDir(); home != "" {
-		return filepath.Join(home, ".config", "pix", "op-refs.env")
-	}
+// DefaultOpRefsPath is the ONE op-refs.env location: <PIX_HOME>/op-refs.env,
+// resolved through the canonical helper (config.OpRefsPath -> pixhome.Dir).
+// There is no $PIX_CONFIG, no $XDG_CONFIG_HOME, and no ~/.config/pix
+// fallback — set $PIX_HOME itself to redirect it (tests do exactly that).
+// This is the path repo-less hosts must create, so every user-facing message
+// and the seeder reference it.
+func DefaultOpRefsPath() string {
 	return config.OpRefsPath()
 }
 

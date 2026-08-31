@@ -40,7 +40,7 @@ func TestShellQuote_SafeTokensPassThroughBare(t *testing.T) {
 	}
 }
 
-// TestShellQuote_EmptyStringIsQuotedEmpty pins the zero-length case: `''`,
+// TestShellQuote_EmptyStringIsQuotedEmpty pins the zero-length case: `”`,
 // never a bare zero-byte argument a naive caller could lose track of.
 func TestShellQuote_EmptyStringIsQuotedEmpty(t *testing.T) {
 	if got := ShellQuote(""); got != "''" {

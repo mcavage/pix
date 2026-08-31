@@ -3,11 +3,9 @@
 package config
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/BurntSushi/toml"
 
@@ -29,10 +27,6 @@ const (
 	// rather than run as an external sub-process.
 	BuiltinImpl = "builtin"
 )
-
-// DefaultServices is intentionally empty: memory needs a verified local Ollama
-// watcher + embedding model, so only setup enables it once those probes pass.
-var DefaultServices = []string{}
 
 // The two memory_capture admission modes. Explicit is the default; there is
 // no review/staging mode.
@@ -82,18 +76,6 @@ func (c *Config) AutoserveEnabled() bool {
 type Config struct {
 	VersionPin string `toml:"version_pin"`
 
-	// Services is the RESOLVED runtime service set every consumer reads (serve,
-	// ensureServe, doctor, …); it is never (de)serialized directly.
-	Services []string `toml:"-"`
-	// ServicesRaw is the TOML image of Services: nil = the key was ABSENT (resolve
-	// to DefaultServices); non-nil — even an empty slice — = PRESENT, authoritative.
-	ServicesRaw *[]string `toml:"services,omitempty"`
-
-	// MCP is every configured MCP server. There is no eager/lazy split: every
-	// configured server (plus every pack integration's) preloads at sandbox
-	// CREATE (`--static-mcp`), and the mcp_static/mcp_dynamic knobs are retired.
-	MCP []string `toml:"mcp,omitempty"`
-
 	MemoryWatcherModel string `toml:"memory_watcher_model,omitempty"`
 	MemoryEmbedModel   string `toml:"memory_embed_model,omitempty"`
 	OllamaBridgeModel  string `toml:"ollama_bridge_model,omitempty"`
@@ -134,12 +116,6 @@ type Config struct {
 	Skills struct {
 		Paths []string `toml:"paths"`
 	} `toml:"skills"`
-
-	// Packs is the ordered active pack stack. Pack is retained as the last-pack
-	// compatibility image while the command surface migrates; runtime composition
-	// always prefers Packs and de-duplicates Pack.
-	Packs []string `toml:"packs,omitempty"`
-	Pack  string   `toml:"pack,omitempty"`
 
 	Plugins map[string]PluginSpec `toml:"plugins"`
 
@@ -294,42 +270,11 @@ func dataDirOr() string {
 	return d
 }
 
-// removedServices are service names that no longer exist (e.g. gws, which the
-// Google Workspace port replaced with the host `gog` MCP server). We drop them
-// silently from a loaded config so a stale services list doesn't fatal `serve`.
-var removedServices = map[string]bool{"gws": true, "gws-token": true, "knowledge": true} // knowledge: W1 U01a
-
 // defaults returns a Config with the sane defaults applied to any unset field.
 func (c *Config) applyDefaults() {
 	if c.Inference.Backends == nil {
 		c.Inference.Backends = map[string]InferenceBackend{}
 	}
-	// services is TRI-STATE (see the ServicesRaw field doc): absent key →
-	// DefaultServices; present key (even `services = []`) → authoritative.
-	if c.ServicesRaw != nil {
-		kept := make([]string, 0, len(*c.ServicesRaw))
-		dropped := false
-		for _, s := range *c.ServicesRaw {
-			if removedServices[s] {
-				dropped = true
-				continue
-			}
-			kept = append(kept, s)
-		}
-		c.Services = kept
-		// A list that became empty ONLY because every entry was a removed service
-		// (a stale `services = ["gws"]`) falls back to defaults — that user never
-		// chose an empty set. A file-explicit `services = []` (nothing dropped)
-		if len(c.Services) == 0 && dropped {
-			c.Services = append([]string(nil), DefaultServices...)
-		}
-	} else if len(c.Services) == 0 {
-		c.Services = append([]string(nil), DefaultServices...)
-	}
-	// Keep the TOML image aliased to the resolved field so `config show`'s
-	// whole-struct encode still prints a services line. Save never trusts this
-	// alias — sparseForSave recomputes it from Services.
-	c.ServicesRaw = &c.Services
 	if c.MemoryWatcherModel == "" {
 		c.MemoryWatcherModel = DefaultMemoryWatcherModel
 	}
@@ -455,155 +400,6 @@ func (c *Config) Plugin(slot string) PluginSpec {
 	return PluginSpec{Impl: BuiltinImpl}
 }
 
-// Save writes the config back to Path() as TOML. It is the write half of the
-// repo-less workflow: the CLI (`pix setup`, and every verb that mutates a
-// setting) loads a Config in memory and calls Save() so the user NEVER
-// hand-edits the file.
-func (c *Config) Save() error {
-	path := Path()
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(c.sparseForSave()); err != nil {
-		return err
-	}
-	return writeFileAtomic(dir, path, buf.Bytes(), 0o600)
-}
-
-// writeFileAtomic writes data to a temp file IN THE SAME dir (so the rename is on
-// one filesystem), fsyncs it, then renames it over path — never a truncate in place.
-func writeFileAtomic(dir, path string, data []byte, perm os.FileMode) error {
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
-	}
-	cleanup = false // renamed away; nothing left at tmpPath to remove
-	return nil
-}
-
-// sparseForSave returns a shallow copy with every defaultable field that equals its
-// default zeroed, so Save (via `,omitempty`) writes only explicit deviations.
-func (c *Config) sparseForSave() *Config {
-	sp := *c
-	// services: an untouched default is omitted (nil raw); ANY deviation — including
-	// an explicitly-empty list — is serialized (`services = []`).
-	if stringSlicesEqual(sp.Services, DefaultServices) {
-		sp.ServicesRaw = nil
-	} else {
-		// make (not append-to-nil): a pointer to a NIL slice is dropped by the
-		// encoder's omitempty, but a pointer to an allocated EMPTY slice encodes
-		// as `services = []` — exactly the presence bit we need.
-		explicit := make([]string, len(sp.Services))
-		copy(explicit, sp.Services)
-		sp.ServicesRaw = &explicit
-	}
-	if sp.MemoryWatcherModel == DefaultMemoryWatcherModel {
-		sp.MemoryWatcherModel = ""
-	}
-	if sp.MemoryEmbedModel == DefaultMemoryEmbedModel {
-		sp.MemoryEmbedModel = ""
-	}
-	if sp.OllamaBridgeModel == DefaultOllamaBridgeModel {
-		sp.OllamaBridgeModel = ""
-	}
-	if sp.MemoryCapture == DefaultMemoryCapture {
-		sp.MemoryCapture = ""
-	}
-	// applyDefaults allocates an empty Plugins map (and fills Impl=builtin) so
-	// readers never nil-check; don't petrify that resolution either.
-	if len(sp.Plugins) == 0 {
-		sp.Plugins = nil
-	}
-	return &sp
-}
-
-// stringSlicesEqual reports element-wise equality (order-sensitive).
-func stringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// AddMCP adds name to the MCP set if absent, returning true when it changed.
-func (c *Config) AddMCP(name string) bool { return addUnique(&c.MCP, name) }
-
-// RemoveMCP removes name from the MCP set, returning true when it changed.
-func (c *Config) RemoveMCP(name string) bool { return removeValue(&c.MCP, name) }
-
-// AddService adds name to the Services set if absent, returning true when it
-// changed.
-func (c *Config) AddService(name string) bool { return addUnique(&c.Services, name) }
-
-// RemoveService removes name from the Services set, returning true when it
-// changed.
-func (c *Config) RemoveService(name string) bool { return removeValue(&c.Services, name) }
-
-// addUnique appends value to *list if it is not already present, returning true
-// when the list changed.
-func addUnique(list *[]string, value string) bool {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return false
-	}
-	for _, v := range *list {
-		if v == value {
-			return false
-		}
-	}
-	*list = append(*list, value)
-	return true
-}
-
-// removeValue drops every occurrence of value from *list, returning true when
-// the list changed.
-func removeValue(list *[]string, value string) bool {
-	value = strings.TrimSpace(value)
-	kept := (*list)[:0]
-	changed := false
-	for _, v := range *list {
-		if v == value {
-			changed = true
-			continue
-		}
-		kept = append(kept, v)
-	}
-	*list = kept
-	return changed
-}
-
 // OpRefsPath resolves the absolute path of op-refs.env (the 1Password refs file
 // the sbx gateway resolves via `op run --env-file`): <PIX_HOME>/op-refs.env.
 func OpRefsPath() string {
@@ -613,46 +409,6 @@ func OpRefsPath() string {
 	}
 	return filepath.Join(dir, "op-refs.env")
 }
-
-// MCPServer is one pack-declared MCP server, resolved to everything pix needs
-// to register it with the gateway. Exactly one TRANSPORT is set, and that
-// choice decides both the argv and whether credentials are injected at all:
-//
-//	Command   a host binary the gateway spawns over stdio (creds via op-refs)
-//	Image     a container run by the gateway            (creds via op-refs, -e)
-//	Manifest  an OCI server manifest the gateway resolves (creds Docker-side)
-//	RemoteURL a hosted endpoint                           (OAuth host-side)
-//
-// Pix ships NO built-in servers: every one of these comes from a pack. There
-// is no special case for any particular vendor — a server that needs hardened
-// flags declares them as Args, where a reviewer can see them.
-type MCPServer struct {
-	// Command + Args are the host binary and its LITERAL argv. Pix never
-	// templates Args, so what a reviewer reads in the pack manifest is
-	// character-for-character what the gateway spawns. Anything that varies
-	// per user travels as an environment variable instead (EnvKeys).
-	Command string
-	Args    []string
-
-	Image     string
-	EnvKeys   []string          // env var NAMES forwarded to a Command/Image server (-e KEY)
-	EnvValues map[string]string // non-secret literals forwarded as -e KEY=VALUE
-
-	Manifest  string
-	RemoteURL string // remote MCP endpoint URL (`sbx mcp add <name> --url <url>`)
-
-	// Probe is the argv that answers "can this server actually do its job",
-	// as distinct from "is it registered". Registration is not health: a
-	// server can be registered and unable to authenticate. Doctor runs this
-	// and shows its output; nothing else does. Empty means the pack declared
-	// no probe, which doctor reports as unverifiable rather than as healthy.
-	Probe []string
-}
-
-// HostExec reports whether this server runs a command on the HOST — the
-// distinction that decides whether it enters a pack's Tier-1 trust surface.
-// Manifest and RemoteURL servers do not: the gateway resolves and runs them.
-func (s MCPServer) HostExec() bool { return s.Command != "" || s.Image != "" }
 
 // OpRefsMentalModel is the ≤4-line plain explanation of what op-refs.env is, reused
 // VERBATIM in `pix setup`, the `secret` help, and the template header.

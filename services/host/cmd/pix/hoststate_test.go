@@ -22,7 +22,6 @@ const testMemoryPortDefault = 11435
 
 func TestBuildHostState(t *testing.T) {
 	cfg := &config.Config{
-		MCP:                []string{testMCPServer},
 		MemoryWatcherModel: "gemma4:e4b-mlx",
 		MemoryEmbedModel:   "nomic-embed-text",
 	}
@@ -45,8 +44,11 @@ func TestBuildHostState(t *testing.T) {
 	if !hs.Memory.Up || hs.Memory.Port != testMemoryPortDefault {
 		t.Errorf("memory up/port wrong: %+v", hs.Memory)
 	}
-	if !hs.MCP.Enabled || len(hs.MCP.Servers) != 1 || hs.MCP.Servers[0] != testMCPServer {
-		t.Errorf("mcp wrong: %+v", hs.MCP)
+	// config.toml carries no MCP server list any more (the environment's
+	// .sbxenv.yaml plus the reserved built-ins are the ONE declaration
+	// channel), so host state reports none of its own.
+	if hs.MCP.Enabled || len(hs.MCP.Servers) != 0 {
+		t.Errorf("mcp must be empty now that config declares none: %+v", hs.MCP)
 	}
 	// The model-visible payload is a CLOSED set of facts, not a config dump:
 	// whatever a future config key adds, only the reviewed keys reach the
@@ -95,25 +97,6 @@ func TestBuildHostState_NotProvisioned(t *testing.T) {
 	// JSON must never leak a secret value: it only has booleans/names.
 	if strings.Contains(hs.Keys.Source, "sk-") {
 		t.Error("source must not contain a key value")
-	}
-}
-
-func TestBuildHostState_KeylessGatewayCountsAsResolvedInference(t *testing.T) {
-	cfg := &config.Config{Inference: config.InferenceConfig{
-		Backends: map[string]config.InferenceBackend{"gateway": {Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "https://models.example.test/v1"}},
-		Models:   []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
-	}}
-	hs := launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", false)
-	if !hs.Keys.Resolved || hs.Keys.OpenAI || hs.Keys.Anthropic || hs.Keys.Google {
-		t.Fatalf("gateway inference should resolve without pretending direct keys exist: %+v", hs.Keys)
-	}
-	if hs.Memory.Enabled {
-		t.Fatal("memory must not be reported enabled merely because its port is part of Pix")
-	}
-	cfg.Services = []string{"memory"}
-	hs = launch.BuildHostState(cfg, "", true, func(int) bool { return false }, "sbx", false)
-	if !hs.Memory.Enabled || hs.Memory.Up {
-		t.Fatalf("enabled-but-stopped memory state is wrong: %+v", hs.Memory)
 	}
 }
 
@@ -319,13 +302,13 @@ func TestEncodeTrustedHostState_EncodingFailureReturnsError(t *testing.T) {
 // touching disk. This exercises it directly (rather than only through
 // launch.InjectTrustedHostState) so the seam has its own focused coverage.
 func TestBuildTrustedHostState_MatchesBuildHostStateShape(t *testing.T) {
-	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{testMCPServer}}
+	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }, DialLocalFn: func(int) bool { return true }}}
 	hs := launch.BuildTrustedHostState(cfg, env)
 	if !hs.Memory.Up {
 		t.Error("dial stub says up; launch.BuildTrustedHostState must reflect it")
 	}
-	if !hs.MCP.Enabled || !slices.Contains(hs.MCP.Servers, testMCPServer) {
+	if hs.MCP.Enabled || len(hs.MCP.Servers) != 0 {
 		t.Errorf("configured mcp servers must carry through: %+v", hs.MCP)
 	}
 	if _, err := launch.EncodeTrustedHostState(hs); err != nil {
@@ -339,14 +322,14 @@ func TestBuildTrustedHostState_MatchesBuildHostStateShape(t *testing.T) {
 // transport, argv and credential VAR names are host-side detail the fenced agent
 // has no use for and must not be handed.
 func TestInjectTrustedHostState_ReportsMCPNamesOnly(t *testing.T) {
-	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{testMCPServer}}
+	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
 	args := []string{"run", "pix", ".", "--", launch.GeneratedInputMarker + "hi"}
 	out, err := launch.InjectTrustedHostState(args, cfg, env)
 	if err != nil {
 		t.Fatalf("launch.InjectTrustedHostState: %v", err)
 	}
-	if !strings.Contains(out[4], `"mcp":{"enabled":true,"servers":["`+testMCPServer+`"]}`) {
+	if !strings.Contains(out[4], `"mcp":{"enabled":false,"servers":null}`) {
 		t.Errorf("mcp state must be reported as enabled + names, got %q", out[4])
 	}
 }

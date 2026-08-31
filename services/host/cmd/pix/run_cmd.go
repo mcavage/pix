@@ -30,7 +30,6 @@ import (
 	"pix/host/workflow/doctor"
 	nativeenv "pix/host/workflow/env"
 	"pix/host/workflow/launch"
-	"pix/host/workflow/provision"
 	"pix/host/workspace"
 )
 
@@ -160,16 +159,16 @@ func (c *runCmd) Run(d *cli.Deps) error {
 	return runLaunch(d, o)
 }
 
-// composeStaticMCP folds this launch's already-resolved StaticMCP — e.g. a pack
-// contribution ApplyPackContribution folded in earlier — together with the
-// configured (cfg.MCP) and flag-requested (o.MCP) servers into the final
-// create-time preloaded set. It reads all three inputs but never mutates or
-// aliases any of their backing arrays: the result is always a freshly made
-// slice, so a caller's cfg or o is safe to keep using afterward.
-func composeStaticMCP(existing, cfgMCP, oMCP []string) []string {
-	merged := make([]string, 0, len(existing)+len(cfgMCP)+len(oMCP))
+// composeStaticMCP folds this launch's already-resolved StaticMCP together
+// with the flag-requested (--mcp) servers into the final create-time
+// preloaded set. There is no config.toml server list to fold in any more:
+// the environment's `.sbxenv.yaml` plus the reserved built-ins are the ONE
+// MCP declaration channel (architecture §10), so config.toml can no longer
+// smuggle a second one into a launch. It never mutates or aliases either
+// input's backing array: the result is always a freshly made slice.
+func composeStaticMCP(existing, oMCP []string) []string {
+	merged := make([]string, 0, len(existing)+len(oMCP))
 	merged = append(merged, existing...)
-	merged = append(merged, cfgMCP...)
 	merged = append(merged, oMCP...)
 	return mcp.AllPreloadedMCP(merged)
 }
@@ -357,11 +356,9 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		}
 	}
 
-	// Reconcile a prior in-session onboarding proposal (<workspace>/.pix/
-	// onboarding.json) BEFORE LoadResolvedConfig so a fresh create picks it up.
-	// Best-effort; a non-TTY just leaves the file.
-	provision.ReconcileOnboarding(o.Workspace, defaultShellEnv(), d.In, d.Out, false, d.Interactive)
-
+	// There is no onboarding-proposal reconcile step here any more: an
+	// in-sandbox agent has no channel that mutates host config.toml (the
+	// whole `onboarding.json` -> config write path is deleted, not gated).
 	// Load the config for the rest of run (kits, mcp, gog, pack).
 	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
@@ -483,8 +480,9 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			}
 		}
 
-		// Every configured MCP server attaches at create (--static-mcp).
-		o.StaticMCP = composeStaticMCP(o.StaticMCP, cfg.MCP, o.MCP)
+		// Flag-requested servers attach at create (--static-mcp); the
+		// environment document declares everything else.
+		o.StaticMCP = composeStaticMCP(o.StaticMCP, o.MCP)
 	}
 
 	plan := launch.PlanSandboxLaunch(state, cfg, o, version)

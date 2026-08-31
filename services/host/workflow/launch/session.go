@@ -105,8 +105,8 @@ func setSessionKeep(sessionKey string) error {
 
 func SessionFingerprint(cfg *config.Config, o RunOpts) sandbox.Fingerprint {
 	mcpSet := o.StaticMCP
-	if len(mcpSet) == 0 && cfg != nil {
-		mcpSet = mcp.AllPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
+	if len(mcpSet) == 0 {
+		mcpSet = mcp.AllPreloadedMCP(append([]string(nil), o.MCP...))
 	}
 	sorted := append([]string(nil), mcpSet...)
 	sort.Strings(sorted)

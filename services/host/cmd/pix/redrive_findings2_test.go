@@ -12,22 +12,19 @@ package main
 //      anything.
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/workflow/launch"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/sys/systest"
-	"pix/host/workflow/launch"
 	"pix/host/workflow/provision"
 )
 
@@ -129,37 +126,6 @@ func TestVerifyCatalogMCPReady_NonCatalogNamesNeverProbed(t *testing.T) {
 	}
 	if err := provision.VerifyCatalogMCPReady(env, []string{"gog", "slack", ""}); err != nil {
 		t.Fatalf("gog/local/blank names are not the gate's business: %v", err)
-	}
-}
-func TestReconcileOnboarding_CatalogGateLeavesFileAndConfig(t *testing.T) {
-	ws := t.TempDir()
-	t.Setenv("PIX_HOME", t.TempDir())
-	t.Setenv("PIX_PROFILE", "")
-	dir := filepath.Join(ws, ".pix")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	fp := filepath.Join(dir, "onboarding.json")
-	if err := os.WriteFile(fp, []byte(`{"version":1,"mcp":["notion"]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	env := catalogGateEnv(t, map[string]string{"sbx mcp ls": "atlassian\n"})
-
-	var out bytes.Buffer
-	provision.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
-
-	if _, err := os.Stat(fp); err != nil {
-		t.Errorf("proposal file must be left in place on a gate failure, err=%v", err)
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if slices.Contains(cfg.MCP, "notion") {
-		t.Errorf("notion must NOT be persisted while unregistered: %v", cfg.MCP)
-	}
-	if !strings.Contains(out.String(), "sbx mcp add notion") {
-		t.Errorf("refusal must name the exact repair command, got:\n%s", out.String())
 	}
 }
 

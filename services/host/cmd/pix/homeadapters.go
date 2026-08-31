@@ -31,6 +31,7 @@ import (
 	"pix/host/mcp"
 	"pix/host/pixhome"
 	"pix/host/release"
+	"pix/host/workflow/provision"
 )
 
 // homeContainerSpec builds the container.Spec every v2 home caller
@@ -128,26 +129,25 @@ type sbxMemoryRegistrar struct{}
 
 // EnsureMemoryRemote registers name at url with the sbx Gateway if it is not
 // already present in `sbx mcp ls`'s listing. An existing registration under
-// name is left untouched (matched reports true, since this host cannot prove
-// otherwise) rather than ever being silently overwritten — the one
-// unconditional rule architecture §10 states regardless of what this host
-// can observe about the existing entry.
-func (sbxMemoryRegistrar) EnsureMemoryRemote(name, url string) (matched bool, err error) {
+// name is left untouched — the one unconditional rule architecture §10
+// states regardless of what this host can observe — and reported as
+// MCPRegistrationPresent, never as a match: `sbx mcp ls` does not print
+// endpoints, so this host genuinely cannot tell whether the existing entry
+// points at the URL we would have registered (round-4 review: reporting it
+// as "ok" was a success word no probe earned).
+func (sbxMemoryRegistrar) EnsureMemoryRemote(name, url string) (provision.MCPRegistrationState, error) {
 	lsOut, _, lsErr := runSbxCapturedOut("mcp", "ls")
 	if lsErr == nil {
 		for _, n := range mcp.RegisteredNamesFrom(lsOut) {
 			if n == name {
-				// Already registered under this name. Cannot verify its URL from
-				// this host (see the file doc comment); never overwritten
-				// automatically.
-				return true, nil
+				return provision.MCPRegistrationPresent, nil
 			}
 		}
 	}
 	if _, _, addErr := runSbxCapturedOut("mcp", "add", name, "--url", url); addErr != nil {
-		return false, addErr
+		return provision.MCPRegistrationNone, addErr
 	}
-	return true, nil
+	return provision.MCPRegistrationAdded, nil
 }
 
 // runSbxCapturedOut is a tiny local wrapper so this file needs no export

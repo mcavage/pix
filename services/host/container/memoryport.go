@@ -8,6 +8,7 @@
 package container
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -133,4 +134,43 @@ func ReadMemoryPort(home pixhome.Paths) (int, error) {
 		return m.MemoryPort, nil
 	}
 	return DefaultMemoryPort, nil
+}
+
+// ReallocateMemoryPortLocked draws a FRESH free loopback port, persists it
+// as this PIX_HOME's memory port, and returns it. The CALLER must already
+// hold SetupLockPath(home).
+//
+// This is the recovery half of the cross-PIX_HOME collision QA F4 opened
+// (two homes both allocated 18080 because it was free at ALLOCATION time,
+// then the second one's `docker create` lost the bind race). Allocation
+// alone cannot close that window — the only authority on "is this port
+// actually bindable" is the bind itself — so `pix setup` retries here when
+// reconcile reports PortInUseError, atomically committing the new port to
+// config.toml BEFORE the retry so the container it creates and the Gateway
+// URL it registers can never disagree about which port pix-memory answers
+// on.
+func ReallocateMemoryPortLocked(home pixhome.Paths) (int, error) {
+	port, err := freeLoopbackPort()
+	if err != nil {
+		return 0, err
+	}
+	m, err := pixhome.LoadMachine(home)
+	if err != nil {
+		return 0, err
+	}
+	m.MemoryPort = port
+	if err := pixhome.SaveMachine(home, m); err != nil {
+		return 0, err
+	}
+	return port, nil
+}
+
+// IsPortInUse reports whether err is (or wraps) the bind conflict
+// PortAvailable raises — the ONE reconcile failure a fresh port can fix. Any
+// other error (no Docker, an image that will not pull, a refused replace)
+// is returned to the user unchanged; retrying those on a new port would
+// just fail four more times with a less honest message.
+func IsPortInUse(err error) bool {
+	var pe *PortInUseError
+	return errors.As(err, &pe)
 }

@@ -224,39 +224,6 @@ func TestAddEnvironmentAlreadyAbsoluteStaysClean(t *testing.T) {
 
 // ── registry + selection round trip ─────────────────────────────────────
 
-func TestEnvironmentsMapRoundTrips(t *testing.T) {
-	path := tempConfig(t)
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	homePath, err := cfg.AddEnvironment("home", "/abs/envs/home")
-	if err != nil {
-		t.Fatal(err)
-	}
-	workPath, err := cfg.AddEnvironment("work", "/abs/envs/work")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.UseEnvironment("work"); err != nil {
-		t.Fatalf("UseEnvironment: %v", err)
-	}
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := LoadFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Environment != "work" {
-		t.Errorf("Environment = %q, want work", got.Environment)
-	}
-	if len(got.Environments) != 2 || got.Environments["home"] != homePath || got.Environments["work"] != workPath {
-		t.Errorf("Environments = %v, want home=%q work=%q", got.Environments, homePath, workPath)
-	}
-}
-
 func TestUseEnvironmentRefusesUnregistered(t *testing.T) {
 	tempConfig(t)
 	cfg, err := Load()
@@ -573,64 +540,6 @@ func TestRemoveEnvironmentLeavesUnrelatedDefaultAlone(t *testing.T) {
 
 // ── sparse Save: no default noise, exactly one added key ────────────────
 
-func TestSaveWithNoEnvironmentAddsNoKeys(t *testing.T) {
-	path := tempConfig(t)
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Pack = "acme" // force a write, unrelated to environments
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	raw := rawFile(t, path)
-	if strings.Contains(raw, "environment") {
-		t.Errorf("raw file petrified environment/environments with nothing set:\n%s", raw)
-	}
-}
-
-// TestSelectingEnvironmentAddsExactlyOneKey is the byte-diff proof: choosing a
-// default among an ALREADY-registered environment changes the file by exactly
-// one line, `environment = "home"`. Registration itself is a separate, prior
-// write (AddEnvironment/`pix env add`), so this isolates what selection alone
-// costs.
-func TestSelectingEnvironmentAddsExactlyOneKey(t *testing.T) {
-	path := tempConfig(t)
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cfg.AddEnvironment("home", "/abs/home"); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	before := rawFile(t, path)
-
-	if err := cfg.UseEnvironment("home"); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	after := rawFile(t, path)
-
-	beforeLines := map[string]bool{}
-	for _, l := range strings.Split(strings.TrimRight(before, "\n"), "\n") {
-		beforeLines[l] = true
-	}
-	var added []string
-	for _, l := range strings.Split(strings.TrimRight(after, "\n"), "\n") {
-		if !beforeLines[l] {
-			added = append(added, l)
-		}
-	}
-	if len(added) != 1 || added[0] != `environment = "home"` {
-		t.Fatalf("selection diff = %v, want exactly [environment = \"home\"]\nbefore:\n%s\nafter:\n%s", added, before, after)
-	}
-}
-
 // ── malformed/noncanonical persisted paths fail closed ──────────────────
 
 // TestLoadDropsNoncanonicalEnvironmentPaths: a hand-edited config.toml is the
@@ -674,76 +583,6 @@ func TestLoadDropsNoncanonicalEnvironmentPaths(t *testing.T) {
 	}
 	if slices.Contains(unknown, "environments.good") {
 		t.Errorf("UnknownKeys() wrongly flagged the canonical entry: %v", unknown)
-	}
-}
-
-// TestSaveErasesHandEditedNoncanonicalEnvironment is the explicit regression
-// test for the fail-closed behavior TestLoadDropsNoncanonicalEnvironmentPaths
-// documents at the in-memory level: a hand-edited noncanonical [environments]
-// entry does not just fail to round-trip through Load, it is PERMANENTLY
-// ERASED the moment anything calls Save() on that loaded Config, because
-// Save() always writes the in-memory (already-dropped) Environments map back
-// to disk. That is deliberate — AddEnvironment is the only writer trusted to
-// produce a canonical path, so a value that could only have reached the file
-// by hand is never round-tripped — but "deliberate" must never mean "silent":
-// this test proves the diagnostic (UnknownKeys) is already populated the
-// instant Load returns, strictly BEFORE the destructive Save() call, so a
-// caller that checks UnknownKeys() first (see cli.Deps.Config's
-// warnUnknownConfigKeys, which does exactly this on every command) sees the
-// warning with time to back up the file before the entry becomes
-// unrecoverable.
-func TestSaveErasesHandEditedNoncanonicalEnvironment(t *testing.T) {
-	path := tempConfig(t)
-	const before = "environment = \"home\"\n\n[environments]\n" +
-		"home = \"~/envs/home\"\n" +
-		"good = \"/abs/canonical/good\"\n"
-	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := LoadFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// The diagnostic must exist BEFORE Save is ever called — this is the
-	// window in which the drop is still recoverable (the raw file on disk
-	// still has the hand-edited entry; only the in-memory Config forgot it).
-	if !slices.Contains(cfg.UnknownKeys(), "environments.home") {
-		t.Fatalf("UnknownKeys() = %v, want it to already include %q before Save is ever called",
-			cfg.UnknownKeys(), "environments.home")
-	}
-	raw := rawFile(t, path)
-	if !strings.Contains(raw, "~/envs/home") {
-		t.Fatalf("file on disk no longer has the hand-edited entry before Save was called: %s", raw)
-	}
-
-	// Now the destructive step: Save() persists the in-memory (already-
-	// dropped) state, which is the point of no return for the hand-edited
-	// entry.
-	if err := cfg.Save(); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	after := rawFile(t, path)
-	if strings.Contains(after, "~") || strings.Contains(after, "envs/home") {
-		t.Errorf("Save must have erased the noncanonical entry from disk, got:\n%s", after)
-	}
-	if !strings.Contains(after, "/abs/canonical/good") {
-		t.Errorf("Save must keep the canonical sibling entry, got:\n%s", after)
-	}
-
-	// The erasure is now permanent and, on a FRESH load of the rewritten
-	// file, silent: there is nothing left to flag. This is exactly why the
-	// pre-Save diagnostic above is the only chance a user gets to notice.
-	reloaded, err := LoadFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := reloaded.Environments["home"]; ok {
-		t.Errorf("Environments still has the erased entry after Save+reload: %v", reloaded.Environments)
-	}
-	if slices.Contains(reloaded.UnknownKeys(), "environments.home") {
-		t.Errorf("UnknownKeys() = %v, want no trace after the entry was already erased by Save", reloaded.UnknownKeys())
 	}
 }
 
@@ -798,57 +637,6 @@ func TestLoadDropsInvalidEnvironmentNames(t *testing.T) {
 	}
 	if slices.Contains(unknown, "environments.good") {
 		t.Errorf("UnknownKeys() wrongly flagged the valid entry: %v", unknown)
-	}
-}
-
-// TestSaveErasesHandEditedInvalidEnvironmentName is the name-side sibling of
-// TestSaveErasesHandEditedNoncanonicalEnvironment: the diagnostic
-// (UnknownKeys) must already be populated the instant Load returns, strictly
-// BEFORE the destructive Save() call that permanently erases the entry —
-// proving the invalid-name drop does not survive a save, and does not
-// silently survive undetected before one either.
-func TestSaveErasesHandEditedInvalidEnvironmentName(t *testing.T) {
-	path := tempConfig(t)
-	const before = "environment = \"home\"\n\n[environments]\n" +
-		"\"../evil\" = \"/abs/canonical/evil\"\n" +
-		"good = \"/abs/canonical/good\"\n"
-	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := LoadFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(cfg.UnknownKeys(), "environments.../evil") {
-		t.Fatalf("UnknownKeys() = %v, want it to already include %q before Save is ever called",
-			cfg.UnknownKeys(), "environments.../evil")
-	}
-	raw := rawFile(t, path)
-	if !strings.Contains(raw, "../evil") {
-		t.Fatalf("file on disk no longer has the hand-edited entry before Save was called: %s", raw)
-	}
-
-	if err := cfg.Save(); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	after := rawFile(t, path)
-	if strings.Contains(after, "evil") {
-		t.Errorf("Save must have erased the invalid-name entry from disk, got:\n%s", after)
-	}
-	if !strings.Contains(after, "/abs/canonical/good") {
-		t.Errorf("Save must keep the valid sibling entry, got:\n%s", after)
-	}
-
-	reloaded, err := LoadFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := reloaded.Environments["../evil"]; ok {
-		t.Errorf("Environments still has the erased entry after Save+reload: %v", reloaded.Environments)
-	}
-	if slices.Contains(reloaded.UnknownKeys(), "environments.../evil") {
-		t.Errorf("UnknownKeys() = %v, want no trace after the entry was already erased by Save", reloaded.UnknownKeys())
 	}
 }
 

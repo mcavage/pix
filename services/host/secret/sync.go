@@ -162,7 +162,7 @@ func WriteOpRefQuiet(env hostenv.Env, key, value string) error {
 // + upsert of op-refs.env, the single refs file). Caller MUST hold the
 // provider-refs lock.
 func WriteOpRefQuietLocked(env hostenv.Env, key, value string) error {
-	path := DefaultOpRefsPath(env)
+	path := DefaultOpRefsPath()
 	if !EnvVarNameRe.MatchString(key) {
 		return fmt.Errorf("invalid env var name %q", key)
 	}
@@ -377,7 +377,7 @@ func syncProviderKeys(env hostenv.Env, out io.Writer) (synced, failed int, fatal
 func syncProviderKeysLocked(env hostenv.Env, out io.Writer) (synced, failed int, fatal error) {
 	_, content, exists := OpRefsContent(env)
 	if !exists {
-		return 0, 0, fmt.Errorf("op-refs.env not found (%s)", DefaultOpRefsPath(env))
+		return 0, 0, fmt.Errorf("op-refs.env not found (%s)", DefaultOpRefsPath())
 	}
 	if !OpInstalled(env) {
 		return 0, 0, fmt.Errorf("op (1Password CLI) not installed")
@@ -452,4 +452,3 @@ func FirstLine(s string) string {
 	}
 	return ""
 }
-

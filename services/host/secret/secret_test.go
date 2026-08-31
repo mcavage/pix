@@ -32,6 +32,7 @@ func realFixture(t *testing.T, opRefs string) (hostenv.Env, string) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+	t.Setenv("PIX_HOME", dir) // op-refs.env resolves under PIX_HOME alone (QA F5)
 	t.Setenv("PATH", t.TempDir())
 	path := filepath.Join(dir, "op-refs.env")
 	if opRefs != "" {
@@ -125,6 +126,7 @@ func TestParseOpRefsNilAllowlistAllowsNothing(t *testing.T) {
 func TestSeededOpRefsHasNoActiveEntries(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+	t.Setenv("PIX_HOME", dir) // op-refs.env resolves under PIX_HOME alone (QA F5)
 	// config.SeedOpRefs resolves through config.OpRefsPath (PIX_HOME only, QA
 	// F5); PIX_CONFIG above still isolates secret.DefaultOpRefsPath's OWN
 	// resolution for the other callers in this file, but this one needs
@@ -319,13 +321,13 @@ func TestSecretCheckMissingRefsHintsSet(t *testing.T) {
 // backed by a plain map — no real disk touched). ---
 
 // memEnv builds a hostenv.Env whose readFile/writeFile operate on an in-memory
-// files map, and whose getenv resolves PIX_CONFIG so DefaultOpRefsPath
-// lines up with the fake path used by the test.
-func memEnv(files map[string]string) hostenv.Env {
-	return hostenv.Env{System: &systest.Fake{GetenvFn: func(name string) string {
-		if name == "PIX_CONFIG" {
-			return "/fake/config/config.toml"
-		}
+// files map. The caller sets $PIX_HOME to fakeHome (memHome below) so
+// DefaultOpRefsPath — PIX_HOME-only now (QA F5) — lines up with fakeRefsPath;
+// nothing here touches a real directory.
+func memEnv(t *testing.T, files map[string]string) hostenv.Env {
+	t.Helper()
+	t.Setenv("PIX_HOME", fakeHome) // op-refs.env resolves under PIX_HOME alone (QA F5)
+	return hostenv.Env{System: &systest.Fake{GetenvFn: func(string) string {
 		return ""
 	}, ReadFileFn: func(path string) (string, error) {
 		if c, ok := files[path]; ok {
@@ -338,12 +340,14 @@ func memEnv(files map[string]string) hostenv.Env {
 	}}}
 }
 
-const fakeRefsPath = "/fake/config/op-refs.env"
+const fakeHome = "/fake/config"
+
+const fakeRefsPath = fakeHome + "/op-refs.env"
 
 func TestSecretSetUpsertsNewKey(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "# header\nSLACK_TOKEN=op://Private/Slack/credential\n"}
 	var out bytes.Buffer
-	RunSecretSet(memEnv(files), &out, "GITHUB_TOKEN", "op://Private/GitHub/credential", nil)
+	RunSecretSet(memEnv(t, files), &out, "GITHUB_TOKEN", "op://Private/GitHub/credential", nil)
 	got := files[fakeRefsPath]
 	want := "# header\nSLACK_TOKEN=op://Private/Slack/credential\nGITHUB_TOKEN=op://Private/GitHub/credential\n"
 	if got != want {
@@ -356,7 +360,7 @@ func TestSecretSetUpsertsNewKey(t *testing.T) {
 
 func TestSecretSetReplacesExistingKeyPreservingOthers(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "# a comment\nSLACK_TOKEN=op://Private/Slack/old\n\nGOG_ACCOUNT=me@example.com\n"}
-	RunSecretSet(memEnv(files), &bytes.Buffer{}, "SLACK_TOKEN", "op://Private/Slack/new", nil)
+	RunSecretSet(memEnv(t, files), &bytes.Buffer{}, "SLACK_TOKEN", "op://Private/Slack/new", nil)
 	got := files[fakeRefsPath]
 	want := "# a comment\nSLACK_TOKEN=op://Private/Slack/new\n\nGOG_ACCOUNT=me@example.com\n"
 	if got != want {
@@ -370,7 +374,7 @@ func TestSecretSetReplacesExistingKeyPreservingOthers(t *testing.T) {
 func TestSecretSetRejectsNonRefForSecretKey(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
-	err := RunSecretSet(memEnv(files), &out, "SLACK_TOKEN", "xoxb-pasted-secret-value", nil)
+	err := RunSecretSet(memEnv(t, files), &out, "SLACK_TOKEN", "xoxb-pasted-secret-value", nil)
 	if got := cli.ExitCode(err); got != 2 {
 		t.Errorf("exit code = %d, want 2 (err = %v)", got, err)
 	}
@@ -393,7 +397,7 @@ func TestSecretSetRejectsNonRefForSecretKey(t *testing.T) {
 func TestSecretSetRejectsControlChars(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
-	err := RunSecretSet(memEnv(files), &out, "GITHUB_TOKEN", "op://V/I/f\nSLACK_TOKEN=xoxb-injected", nil)
+	err := RunSecretSet(memEnv(t, files), &out, "GITHUB_TOKEN", "op://V/I/f\nSLACK_TOKEN=xoxb-injected", nil)
 	if got := cli.ExitCode(err); got != 2 {
 		t.Errorf("exit code = %d, want 2 (err = %v)", got, err)
 	}
@@ -415,7 +419,7 @@ func TestSecretSetRejectsControlChars(t *testing.T) {
 func TestSecretSetAllowsNonSecretAllowlistLiteral(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
-	if err := RunSecretSet(memEnv(files), &out, "GOG_ACCOUNT", "me@example.com",
+	if err := RunSecretSet(memEnv(t, files), &out, "GOG_ACCOUNT", "me@example.com",
 		NonSecret{"GOG_ACCOUNT": true}); err != nil {
 		t.Fatalf("a pack-authorized literal must be accepted: %v (out=%q)", err, out.String())
 	}
@@ -438,7 +442,7 @@ func TestSecretSetRejectsLiteralWithoutAllowlist(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			files := map[string]string{fakeRefsPath: "X=1\n"}
 			var out bytes.Buffer
-			err := RunSecretSet(memEnv(files), &out, "GOG_ACCOUNT", "me@example.com", allow)
+			err := RunSecretSet(memEnv(t, files), &out, "GOG_ACCOUNT", "me@example.com", allow)
 			if got := cli.ExitCode(err); got != 2 {
 				t.Errorf("exit code = %d, want 2 (err = %v)", got, err)
 			}
@@ -467,7 +471,7 @@ func TestUpsertOpRefCanonicalizesConflictingDuplicates(t *testing.T) {
 func TestSecretSetKeepsLiteralSpacedField(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
-	RunSecretSet(memEnv(files), &out, "OPENAI_API_KEY", "op://Docker/OPENAI_API_KEY/api key", nil)
+	RunSecretSet(memEnv(t, files), &out, "OPENAI_API_KEY", "op://Docker/OPENAI_API_KEY/api key", nil)
 	got := files[fakeRefsPath]
 	if !strings.Contains(got, "OPENAI_API_KEY=op://Docker/OPENAI_API_KEY/api key") {
 		t.Errorf("content after set = %q, want the space kept literal", got)
@@ -486,7 +490,7 @@ func TestSecretSetKeepsLiteralSpacedField(t *testing.T) {
 // stored ref would never resolve.
 func TestSecretSetNormalizesPercentEncodedSpaceToLiteral(t *testing.T) {
 	files := map[string]string{fakeRefsPath: ""}
-	env := memEnv(files)
+	env := memEnv(t, files)
 	var out bytes.Buffer
 	RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://Vault/Item/api%20key", nil)
 
@@ -502,6 +506,7 @@ func TestSecretSetNormalizesPercentEncodedSpaceToLiteral(t *testing.T) {
 func TestSecretSetSeedsFileWhenAbsent(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+	t.Setenv("PIX_HOME", dir) // op-refs.env resolves under PIX_HOME alone (QA F5)
 	// config.OpRefsPath (read below) resolves through PIX_HOME only (QA F5);
 	// pointed at the SAME dir as PIX_CONFIG above so RunSecretSet's write
 	// (via secret.DefaultOpRefsPath) and this test's read agree on one path.
@@ -527,7 +532,7 @@ func TestSecretSetSeedsFileWhenAbsent(t *testing.T) {
 func TestSecretRmRemovesKeyPreservingRest(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "# header\nSLACK_TOKEN=op://Private/Slack/credential\nGOG_ACCOUNT=me@example.com\n"}
 	var out bytes.Buffer
-	RunSecretRm(memEnv(files), &out, "SLACK_TOKEN")
+	RunSecretRm(memEnv(t, files), &out, "SLACK_TOKEN")
 	got := files[fakeRefsPath]
 	want := "# header\nGOG_ACCOUNT=me@example.com\n"
 	if got != want {
@@ -541,7 +546,7 @@ func TestSecretRmRemovesKeyPreservingRest(t *testing.T) {
 func TestSecretRmMissingKeyIsCleanNoop(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "SLACK_TOKEN=op://Private/Slack/credential\n"}
 	var out bytes.Buffer
-	RunSecretRm(memEnv(files), &out, "NOPE_NOT_THERE")
+	RunSecretRm(memEnv(t, files), &out, "NOPE_NOT_THERE")
 	if files[fakeRefsPath] != "SLACK_TOKEN=op://Private/Slack/credential\n" {
 		t.Errorf("rm on a missing key must not modify the file, got %q", files[fakeRefsPath])
 	}
@@ -552,14 +557,14 @@ func TestSecretRmMissingKeyIsCleanNoop(t *testing.T) {
 
 func TestSecretRmMissingFileIsCleanNoop(t *testing.T) {
 	var out bytes.Buffer
-	RunSecretRm(memEnv(map[string]string{}), &out, "SLACK_TOKEN")
+	RunSecretRm(memEnv(t, map[string]string{}), &out, "SLACK_TOKEN")
 	if !strings.Contains(out.String(), "not found") {
 		t.Errorf("output = %q, want a clear missing-file message", out.String())
 	}
 }
 
 func TestSecretSetAndRmFailOnUnreadableOpRefs(t *testing.T) {
-	env := memEnv(map[string]string{})
+	env := memEnv(t, map[string]string{})
 	systest.Of(env.System).ReadFileFn = func(string) (string, error) { return "", os.ErrPermission }
 
 	var setOut bytes.Buffer
@@ -584,7 +589,7 @@ func TestSecretSetAndRmFailOnUnreadableOpRefs(t *testing.T) {
 // trip, not just each half in isolation.
 func TestSecretSetThenRm_FullLifecycle(t *testing.T) {
 	files := map[string]string{fakeRefsPath: ""}
-	env := memEnv(files)
+	env := memEnv(t, files)
 
 	var setOut bytes.Buffer
 	if err := RunSecretSet(env, &setOut, "OPENAI_API_KEY", "op://v/openai/key", nil); err != nil {
@@ -615,7 +620,7 @@ func TestModelKeyMissingMessage_NamesNoRemovedVerb(t *testing.T) {
 	removed := []string{"pix models", "pix secret sync", "secret sync"}
 
 	t.Run("refs absent", func(t *testing.T) {
-		env := memEnv(map[string]string{})
+		env := memEnv(t, map[string]string{})
 		msg := ModelKeyMissingMessage(env)
 		for _, r := range removed {
 			if strings.Contains(msg, r) {
@@ -628,7 +633,7 @@ func TestModelKeyMissingMessage_NamesNoRemovedVerb(t *testing.T) {
 	})
 
 	t.Run("refs present", func(t *testing.T) {
-		env := memEnv(map[string]string{fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n"})
+		env := memEnv(t, map[string]string{fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n"})
 		msg := ModelKeyMissingMessage(env)
 		for _, r := range removed {
 			if strings.Contains(msg, r) {

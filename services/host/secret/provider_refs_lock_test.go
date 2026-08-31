@@ -48,7 +48,7 @@ func lockWindow(t *testing.T, events []string, lockPath string) (first, last int
 func TestSecretSetHoldsLockAcrossFileTransaction(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "# header\n"}
 	var events []string
-	env := memEnv(files)
+	env := memEnv(t, files)
 	origRead, origWrite := systest.Of(env.System).ReadFileFn, systest.Of(env.System).WriteFileFn
 	systest.Of(env.System).ReadFileFn = func(p string) (string, error) {
 		events = append(events, "read "+p)
@@ -85,7 +85,7 @@ func TestSecretSetHoldsLockAcrossFileTransaction(t *testing.T) {
 func TestSecretRmHoldsLockAcrossFileTransaction(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n"}
 	var events []string
-	env := memEnv(files)
+	env := memEnv(t, files)
 	origRead, origWrite := systest.Of(env.System).ReadFileFn, systest.Of(env.System).WriteFileFn
 	systest.Of(env.System).ReadFileFn = func(p string) (string, error) {
 		events = append(events, "read "+p)
@@ -117,6 +117,13 @@ func TestSecretRmHoldsLockAcrossFileTransaction(t *testing.T) {
 	}
 }
 
+// syncTestHome is the VIRTUAL PIX_HOME these lock tests point at: every read
+// below is served by the fake ReadFileFn keyed on the resolved path, so no
+// real directory is ever touched. Each test sets $PIX_HOME to it, because
+// op-refs.env resolves under PIX_HOME alone now (QA F5) — the old
+// XDG_CONFIG_HOME fake this file used is not consulted by anything any more.
+const syncTestHome = "/cfg-synctest"
+
 // --- deterministic lock-window: syncProviderKeys / EnsureProviderKeysFromRefs ---
 
 // syncEnv builds a hostenv.Env over a hermetic temp config dir for
@@ -126,8 +133,8 @@ func TestSecretRmHoldsLockAcrossFileTransaction(t *testing.T) {
 // window. opReadVal is returned for every `op read`; sbxLsOut is returned for
 // `sbx secret ls`.
 func syncEnv(refsContent, opReadVal, sbxLsOut string, events *[]string) (hostenv.Env, string) {
-	dir := "/cfg-synctest"
-	refsPath := filepath.Join(dir, "pix", "op-refs.env")
+	dir := syncTestHome
+	refsPath := filepath.Join(dir, "op-refs.env")
 	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
 		if k == "XDG_CONFIG_HOME" {
 			return dir
@@ -161,6 +168,7 @@ func syncEnv(refsContent, opReadVal, sbxLsOut string, events *[]string) (hostenv
 // pushes.
 func TestSyncProviderKeysHoldsLockAcrossReadResolveSbxSync(t *testing.T) {
 	var events []string
+	t.Setenv("PIX_HOME", syncTestHome)
 	env, refsPath := syncEnv("ANTHROPIC_API_KEY=op://v/anthropic/key\n", "sk-val", "", &events)
 	systest.Of(env.System).LockFn = systest.NewLockRecorder(t.Fatalf, &events).Lock
 
@@ -195,6 +203,7 @@ func TestSyncProviderKeysHoldsLockAcrossReadResolveSbxSync(t *testing.T) {
 // read/sbx-ls/op-read/sbx-set pass.
 func TestEnsureProviderKeysFromRefsHoldsLockAcrossReadResolveSbxSync(t *testing.T) {
 	var events []string
+	t.Setenv("PIX_HOME", syncTestHome)
 	env, refsPath := syncEnv("GEMINI_API_KEY=op://v/gemini/key\n", "sk-val", "", &events)
 	systest.Of(env.System).LockFn = systest.NewLockRecorder(t.Fatalf, &events).Lock
 
@@ -233,7 +242,8 @@ func TestEnsureProviderKeysFromRefsHoldsLockAcrossReadResolveSbxSync(t *testing.
 // real flock.
 func TestOfferOnePasswordKeysWritesRefUnderOneLockThenSyncsAfterRelease(t *testing.T) {
 	dir := "/cfg-offertest"
-	refsPath := filepath.Join(dir, "pix", "op-refs.env")
+	t.Setenv("PIX_HOME", dir) // op-refs.env resolves under PIX_HOME alone (QA F5)
+	refsPath := filepath.Join(dir, "op-refs.env")
 	files := map[string]string{}
 	var events []string
 	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
@@ -316,6 +326,7 @@ func TestOfferOnePasswordKeysWritesRefUnderOneLockThenSyncsAfterRelease(t *testi
 
 func TestLockAcquisitionErrorFailsSyncProviderKeys(t *testing.T) {
 	var events []string
+	t.Setenv("PIX_HOME", syncTestHome)
 	env, _ := syncEnv("ANTHROPIC_API_KEY=op://v/a/k\n", "sk-val", "", &events)
 	systest.Of(env.System).LockFn = func(string, func() error) error { return errors.New("lock dir unwritable") }
 
@@ -334,6 +345,7 @@ func TestLockAcquisitionErrorFailsSyncProviderKeys(t *testing.T) {
 
 func TestLockAcquisitionErrorMakesEnsureProviderKeysFromRefsANoOp(t *testing.T) {
 	var events []string
+	t.Setenv("PIX_HOME", syncTestHome)
 	env, _ := syncEnv("ANTHROPIC_API_KEY=op://v/a/k\n", "sk-val", "", &events)
 	systest.Of(env.System).LockFn = func(string, func() error) error { return errors.New("lock dir unwritable") }
 
@@ -373,7 +385,8 @@ func realFileEnv(t *testing.T) (hostenv.Env, string) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.toml")
-	t.Setenv("PIX_CONFIG", cfg) // keeps any config.* fallback in the temp dir too
+	t.Setenv("PIX_CONFIG", cfg)             // keeps any config.* fallback in the temp dir too
+	t.Setenv("PIX_HOME", filepath.Dir(cfg)) // op-refs.env resolves under PIX_HOME alone (QA F5)
 	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
 		if k == "PIX_CONFIG" {
 			return cfg
@@ -386,7 +399,7 @@ func realFileEnv(t *testing.T) (hostenv.Env, string) {
 		time.Sleep(2 * time.Millisecond) // widen the read..write race window
 		return os.WriteFile(p, d, perm)
 	}, LockFn: sys.Lock}}
-	if err := os.WriteFile(DefaultOpRefsPath(env), []byte("# header\n"), 0o600); err != nil {
+	if err := os.WriteFile(DefaultOpRefsPath(), []byte("# header\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return env, dir
@@ -411,7 +424,7 @@ func TestConcurrentSecretSetSerializedByRealFlock(t *testing.T) {
 			t.Fatalf("concurrent set %d failed: %v", i, err)
 		}
 	}
-	content, err := os.ReadFile(DefaultOpRefsPath(env))
+	content, err := os.ReadFile(DefaultOpRefsPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +476,7 @@ func TestProviderKeySetAndRmNoDeadlockUnderRealFlock(t *testing.T) {
 
 func TestLockAcquisitionErrorFailsSecretSetAndRm(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n"}
-	env := memEnv(files)
+	env := memEnv(t, files)
 	systest.Of(env.System).LockFn = func(string, func() error) error { return errors.New("lock dir unwritable") }
 
 	var out bytes.Buffer

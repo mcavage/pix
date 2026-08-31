@@ -34,7 +34,7 @@ const providerRefsLockName = "provider-refs.lock"
 // refs file it serializes (derived from the same injected env as
 // DefaultOpRefsPath so it stays hermetic under test).
 func ProviderRefsLockPath(env hostenv.Env) string {
-	return filepath.Join(filepath.Dir(DefaultOpRefsPath(env)), providerRefsLockName)
+	return filepath.Join(filepath.Dir(DefaultOpRefsPath()), providerRefsLockName)
 }
 
 // WithProviderRefsLock runs fn holding the exclusive provider-refs

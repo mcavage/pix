@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"pix/host/config"
 	"pix/host/health"
 	"pix/host/workflow/launch"
 )
@@ -296,45 +295,6 @@ func TestLaunchGateProbeModelKeysUsesTheProductionBudget(t *testing.T) {
 	got := launch.ProbeModelKeys(ctx, bin, "secret", "ls")
 	if got.Effective() != want.Effective() || got.Detail != want.Detail {
 		t.Errorf("ProbeModelKeys = %+v, want the same as an explicit health.StatusBudget call = %+v", got, want)
-	}
-}
-
-// TestLaunchGateEvidenceCarriesARunnableFix: every warning row a launch prints
-// states an observation, and every VERIFIED gap carries an exact command.
-// Anything unknown carries none — run never guesses a repair for something it
-// could not check.
-func TestLaunchGateEvidenceCarriesARunnableFix(t *testing.T) {
-	fixFirstTokens := map[string]bool{"pix": true, "pix-host": true, "brew": true, "op": true, "sbx": true,
-		"gh": true, "ollama": true, "docker": true, "git": true, "launchctl": true, "systemctl": true}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	keys := launch.ProbeModelKeys(ctx, keyStore(t, "keystore", "#!/bin/sh\necho github\n"), "secret", "ls")
-	// A memory-enabled config with nothing listening: the second row is a real
-	// probe of a real (closed) port, not a fabricated result.
-	snap := launch.FastSnapshot(ctx, &config.Config{Services: []string{"memory"}}, keys)
-	if len(snap.Results) < 2 {
-		t.Fatalf("the fast snapshot must carry the key evidence and the memory probe: %+v", snap.Results)
-	}
-	for _, r := range snap.Results {
-		if r.OK() {
-			continue
-		}
-		if strings.TrimSpace(r.Evidence) == "" {
-			t.Errorf("%s is %s with no evidence", r.Name, r.Effective())
-		}
-		if !r.Missing() {
-			if r.Fix != "" {
-				t.Errorf("%s could not be checked yet offers the fix %q", r.Name, r.Fix)
-			}
-			continue
-		}
-		if strings.TrimSpace(r.Fix) == "" {
-			t.Errorf("verified gap %q carries no fix command", r.Name)
-			continue
-		}
-		if first := strings.Fields(r.Fix)[0]; !fixFirstTokens[first] {
-			t.Errorf("fix for %q starts with %q, which is not a command: %q", r.Name, first, r.Fix)
-		}
 	}
 }
 
