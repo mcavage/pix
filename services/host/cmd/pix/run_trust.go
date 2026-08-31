@@ -124,7 +124,13 @@ func gateEnvTrust(d *cli.Deps, snap envTrustSnapshot, checkDrift bool) error {
 				name)
 		}
 	}
-	if trustAcceptedForFingerprint(snap.home, snap.sel, snap.fingerprint) {
+	// Zero host footprint (BillOfMaterials.Tier1 false) needs no acceptance
+	// at all: nothing runs on this host, no credential is handed out, and no
+	// mount is expanded, so there is no prompt and no trust-state write. The
+	// drift check above still ran, so a file changed after resolution is
+	// refused before this point rather than waved through as "nothing to
+	// review" — the recheck reads the environment as it is NOW.
+	if trustSatisfied(snap.home, snap.sel, snap.bom, snap.fingerprint) {
 		return nil
 	}
 	if !d.Interactive {

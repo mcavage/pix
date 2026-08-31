@@ -71,7 +71,7 @@ func resolveRunEnvironment(explicit string) (launch.EnvSelection, envTrustSnapsh
 	if err != nil {
 		return launch.EnvSelection{}, envTrustSnapshot{}, err
 	}
-	reviewed := trustAcceptedForFingerprint(home, sel, snap.fingerprint)
+	reviewed := trustSatisfied(home, sel, snap.bom, snap.fingerprint)
 	return launch.EnvSelection{
 		Name:     loaded.Name,
 		Root:     loaded.Root,

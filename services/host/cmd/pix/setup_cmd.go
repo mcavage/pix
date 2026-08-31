@@ -198,7 +198,7 @@ func setupSelectedEnvironment(d *cli.Deps, home pixhome.Paths, name string) erro
 	if err != nil {
 		return err
 	}
-	if !trustAcceptedForFingerprint(home, sel, fp) {
+	if !trustSatisfied(home, sel, bom, fp) {
 		// runEnvTrust accepted SOMETHING and this snapshot is not it: the
 		// environment changed under us between review and use. Fail closed.
 		return fmt.Errorf("pix setup --env %s: the environment changed after its trust review; re-run: pix env trust %s", name, name)
