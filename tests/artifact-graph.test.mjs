@@ -148,6 +148,7 @@ test("the runtime archive stages skills/agents/settings/keybindings/themes into 
 	assert.ok(fs.existsSync(archive));
 
 	const listing = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" });
+	assert.doesNotMatch(listing, /(^|\/)\._[^/]*$/m, "runtime archive must not contain macOS AppleDouble members");
 	for (const member of [
 		"runtime/9.9.9/skills/",
 		"runtime/9.9.9/agents/",
@@ -212,6 +213,7 @@ test("the launcher's bundle file names match what the release targets actually w
 	assert.match(makefile, /out\/pix-runtime-\$\(VERSION\)\.tar\.gz/);
 	const archiveScript = fs.readFileSync(path.join(repoRoot, "scripts/release/build-runtime-archive.sh"), "utf8");
 	assert.match(archiveScript, /pix-runtime-\$\{VERSION\}\.tar\.gz/);
+	assert.match(archiveScript, /export COPYFILE_DISABLE=1/, "macOS builds must suppress synthetic AppleDouble archive members");
 });
 
 test("install.sh and the Homebrew formula install exactly the pix binary, no pix-host", () => {

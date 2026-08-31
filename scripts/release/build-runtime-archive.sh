@@ -21,6 +21,11 @@
 # Usage: build-runtime-archive.sh <version> [out-tar-gz-path]
 set -euo pipefail
 
+# macOS archive tools otherwise synthesize AppleDouble `._*` members for
+# extended attributes. Those members are outside Pix's canonical runtime tree
+# and are correctly refused by the installer, so suppress them at the source.
+export COPYFILE_DISABLE=1
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:?usage: build-runtime-archive.sh <version> [out-tar-gz-path]}"
 OUT="${2:-$ROOT/out/pix-runtime-${VERSION}.tar.gz}"
