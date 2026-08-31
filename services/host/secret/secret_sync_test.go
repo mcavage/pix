@@ -32,39 +32,16 @@ func fakeSyncEnv(refs string, opReadVal string, sbxSetErr error, capture *[]stri
 	}}}
 }
 
-func TestSyncProviderKeys_Success(t *testing.T) {
-	refs := "ANTHROPIC_API_KEY=op://Private/anthropic/key\nGEMINI_API_KEY=op://Private/gemini/key\n"
-	var calls []string
-	env := fakeSyncEnv(refs, "sk-secret-value\n", nil, &calls)
-	var out bytes.Buffer
-	synced, failed, fatal := syncProviderKeys(env, &out)
-	if fatal != nil || failed != 0 || synced != 2 {
-		t.Fatalf("synced=%d failed=%d fatal=%v; out=%q", synced, failed, fatal, out.String())
-	}
-	// The resolved value must NEVER be printed.
-	if strings.Contains(out.String(), "sk-secret-value") {
-		t.Error("resolved secret value leaked into output")
-	}
-	// It must map ENV var -> sbx secret name (anthropic, google) and pass the value to sbx.
-	joined := strings.Join(calls, "\n")
-	if !strings.Contains(joined, "sbx secret set -f -g anthropic -t sk-secret-value") ||
-		!strings.Contains(joined, "sbx secret set -f -g google -t sk-secret-value") {
-		t.Errorf("expected sbx secret set for anthropic+google, got:\n%s", joined)
-	}
-}
-
 // A duplicate ANTHROPIC_API_KEY line must resolve the FIRST conflicting ref
 // — never whichever duplicate happens to land last in the map — matching
-// CurrentOpRef/mirrorProviderRefsToHostModeLocked's first-wins semantics
-// (see TestMirrorProviderRefsToHostModeUsesFirstConflictingRef).
-func TestSyncProviderKeysUsesFirstConflictingRef(t *testing.T) {
+// CurrentOpRef's first-wins semantics.
+func TestPrepareSandboxSecretsUsesFirstConflictingRef(t *testing.T) {
 	refs := "ANTHROPIC_API_KEY=op://vault/new/key\nANTHROPIC_API_KEY=op://vault/old/key\n"
 	var calls []string
 	env := fakeSyncEnv(refs, "sk-secret-value\n", nil, &calls)
 	var out bytes.Buffer
-	synced, failed, fatal := syncProviderKeys(env, &out)
-	if fatal != nil || failed != 0 || synced != 1 {
-		t.Fatalf("synced=%d failed=%d fatal=%v; out=%q", synced, failed, fatal, out.String())
+	if err := PrepareSandboxSecrets(env, "pix-demo", &out, ScopedSecretOptions{}); err != nil {
+		t.Fatalf("PrepareSandboxSecrets: %v out=%q", err, out.String())
 	}
 	joined := strings.Join(calls, "\n")
 	if !strings.Contains(joined, "op read op://vault/new/key") {
@@ -72,15 +49,6 @@ func TestSyncProviderKeysUsesFirstConflictingRef(t *testing.T) {
 	}
 	if strings.Contains(joined, "op read op://vault/old/key") {
 		t.Errorf("must not read the second/duplicate conflicting ref, got:\n%s", joined)
-	}
-}
-
-func TestSyncProviderKeys_OpMissing(t *testing.T) {
-	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "ANTHROPIC_API_KEY=op://a/b/c\n", nil }, LookPathFn: func(name string) (string, error) { return "", fmt.Errorf("not found") }}}
-	var out bytes.Buffer
-	_, _, fatal := syncProviderKeys(env, &out)
-	if fatal == nil {
-		t.Fatal("op missing should be a fatal precondition error")
 	}
 }
 
@@ -94,71 +62,6 @@ func TestProviderKeyRefsPresent(t *testing.T) {
 	env2 := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "SLACK_TOKEN=op://a/b/c\n", nil }}}
 	if ProviderKeyRefsPresent(env2) {
 		t.Error("non-provider ref must not count as a provider key")
-	}
-}
-
-// EnsureProviderKeysFromRefs must resolve ONLY keys missing from sbx, and must
-// never call `op read` for a key sbx already has (no prompt on later launches).
-func TestEnsureProviderKeysFromRefs_OnlyMissing(t *testing.T) {
-	refs := "ANTHROPIC_API_KEY=op://P/anthropic/key\nGEMINI_API_KEY=op://P/gemini/key\n"
-	var calls []string
-	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return refs, nil }, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
-		calls = append(calls, name+" "+strings.Join(args, " "))
-		switch {
-		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
-			return "anthropic\n", nil // anthropic already present; gemini/google missing
-		case name == "op" && len(args) >= 1 && args[0] == "--version":
-			return "2.0", nil
-		case name == "op" && len(args) >= 1 && args[0] == "account":
-			return "acct", nil
-		case name == "op" && len(args) >= 1 && args[0] == "read":
-			return "val\n", nil
-		}
-		return "", nil
-	}}}
-	var out bytes.Buffer
-	EnsureProviderKeysFromRefs(env, &out)
-	joined := strings.Join(calls, "\n")
-	// gemini -> google should be resolved and set.
-	if !strings.Contains(joined, "sbx secret set -f -g google -t val") {
-		t.Errorf("missing key (google) should have been resolved:\n%s", joined)
-	}
-	// anthropic is already in sbx: it must NOT be op-read (no prompt).
-	if strings.Contains(joined, "op read op://P/anthropic/key") {
-		t.Error("must not op-read a key that sbx already has")
-	}
-}
-
-// A duplicate GEMINI_API_KEY line must resolve the FIRST conflicting ref, same
-// as syncProviderKeys and CurrentOpRef/mirror.
-func TestEnsureProviderKeysFromRefsUsesFirstConflictingRef(t *testing.T) {
-	refs := "GEMINI_API_KEY=op://vault/new/key\nGEMINI_API_KEY=op://vault/old/key\n"
-	var calls []string
-	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return refs, nil }, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
-		calls = append(calls, name+" "+strings.Join(args, " "))
-		switch {
-		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
-			return "", nil // google not present yet
-		case name == "op" && len(args) >= 1 && args[0] == "--version":
-			return "2.0", nil
-		case name == "op" && len(args) >= 1 && args[0] == "account":
-			return "acct", nil
-		case name == "op" && len(args) >= 1 && args[0] == "read":
-			return "val\n", nil
-		}
-		return "", nil
-	}}}
-	var out bytes.Buffer
-	EnsureProviderKeysFromRefs(env, &out)
-	joined := strings.Join(calls, "\n")
-	if !strings.Contains(joined, "op read op://vault/new/key") {
-		t.Errorf("expected op read of the FIRST conflicting ref, got:\n%s", joined)
-	}
-	if strings.Contains(joined, "op read op://vault/old/key") {
-		t.Errorf("must not read the second/duplicate conflicting ref, got:\n%s", joined)
-	}
-	if !strings.Contains(joined, "sbx secret set -f -g google -t val") {
-		t.Errorf("expected google resolved from the first conflicting ref, got:\n%s", joined)
 	}
 }
 
@@ -278,13 +181,12 @@ func TestOpReadNonEmpty_TrimsWhitespaceAndRejectsWhitespaceOnly(t *testing.T) {
 	}
 }
 
-// --- item 3: syncProviderKeys redacts resolved values from output+error ---
+// --- scoped preparation redacts resolved values from output+error ---
 
-// syncProviderKeys must redact the resolved value from BOTH sbx's own raw
-// output and the wrapping Go error text before printing either — mirrors
-// TestSyncProviderKeyToSbx_RedactsValueFromOutputAndError but for the
-// legacy/general sync path.
-func TestSyncProviderKeys_RedactsValueFromOutputAndError(t *testing.T) {
+// PrepareSandboxSecrets must redact the resolved value from BOTH sbx's own raw
+// output and the wrapping Go error text before printing either: a failing
+// `sbx secret set` can echo the whole argv, and the argv carries the value.
+func TestPrepareSandboxSecrets_RedactsValueFromOutputAndError(t *testing.T) {
 	const secretVal = "sk-should-never-print-either"
 	refs := "ANTHROPIC_API_KEY=op://Private/anthropic/key\n"
 	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return refs, nil }, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
@@ -299,15 +201,16 @@ func TestSyncProviderKeys_RedactsValueFromOutputAndError(t *testing.T) {
 			// Simulate sbx echoing the full failed command (including the
 			// secret value) back in its own stdout/stderr AND the wrapping Go
 			// error carrying the same argv.
-			return "sbx: command failed: sbx secret set -f -g anthropic -t " + secretVal,
+			return "sbx: command failed: sbx secret set -f --sandbox pix-demo anthropic -t " + secretVal,
 				fmt.Errorf("exit status 1: -t %s", secretVal)
 		}
 		return "", nil
 	}}}
 	var out bytes.Buffer
-	synced, failed, fatal := syncProviderKeys(env, &out)
-	if fatal != nil || synced != 0 || failed != 1 {
-		t.Fatalf("synced=%d failed=%d fatal=%v; out=%q", synced, failed, fatal, out.String())
+	if err := PrepareSandboxSecrets(env, "pix-demo", &out, ScopedSecretOptions{}); err == nil {
+		t.Fatalf("want a failure when the only model key cannot be written; out=%q", out.String())
+	} else if strings.Contains(err.Error(), secretVal) {
+		t.Errorf("the value leaked into the error: %v", err)
 	}
 	if strings.Contains(out.String(), secretVal) {
 		t.Errorf("resolved secret value must never appear in printed output, got:\n%s", out.String())

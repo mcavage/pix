@@ -234,6 +234,9 @@ func TestDeletionSweep_NoSecondConfigSchemaOrMCPChannel(t *testing.T) {
 		if abs, _ := filepath.Abs(path); abs == self {
 			return
 		}
+		if strings.HasSuffix(path, "_test.go") {
+			return // a test may legitimately name what it proves absent
+		}
 		for sym, why := range banned {
 			if strings.Contains(content, sym) {
 				t.Errorf("%s mentions %q: %s was deleted in round 4 and must not come back", path, sym, why)
@@ -298,6 +301,75 @@ func TestDeletionSweep_OpRefsResolvesUnderPixHomeOnly(t *testing.T) {
 		}
 		if m := bad.FindString(content); m != "" {
 			t.Errorf("%s reads %s: Pix resolves every one of its own files under PIX_HOME alone", path, m)
+		}
+	})
+}
+
+// TestDeletionSweep_NoGlobalSbxSecretWrite is Wave C's sentinel: Pix never
+// writes a GLOBAL sbx secret. A global (`sbx secret set -g <name>`) is
+// host-wide — every sandbox on the machine reads it, including ones another
+// PIX_HOME created — so it makes a host-wide store the real owner of a
+// PIX_HOME's credentials, hides rotations behind a recreate, and lets a second
+// stack inherit the first one's keys. The scoped form (`-f --sandbox <name>`)
+// is the only write shape, and secret.setScopedSbxSecret is the only site.
+//
+// Two claims, both grep-shaped for the same reason the rest of this file is:
+// the NAMES must not come back, whatever the code around them looks like.
+func TestDeletionSweep_NoGlobalSbxSecretWrite(t *testing.T) {
+	self, err := filepath.Abs("deletion_sentinel_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A `sbx secret set` argv with a global flag, in any of the spellings Go
+	// source can produce it in.
+	globalWrite := regexp.MustCompile(`"secret",\s*"set"[^)]*"(-g|--global)"|secret set -f -g|secret set -g`)
+	var writeSites []string
+	walkGoSource(t, hostRoot(t), func(path, content string) {
+		if abs, _ := filepath.Abs(path); abs == self {
+			return
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			return // a test may legitimately assert the global form is ABSENT
+		}
+		if m := globalWrite.FindString(content); m != "" {
+			t.Errorf("%s writes a GLOBAL sbx secret (%s): Pix writes sandbox-scoped secrets only", path, m)
+		}
+		if strings.Contains(content, `"secret", "set"`) {
+			writeSites = append(writeSites, path)
+		}
+	})
+	// ONE write site, so the flags and the leak posture cannot diverge.
+	if len(writeSites) != 1 || !strings.HasSuffix(writeSites[0], filepath.Join("secret", "scoped.go")) {
+		t.Errorf("`sbx secret set` is invoked from %v; the only permitted site is secret/scoped.go's setScopedSbxSecret", writeSites)
+	}
+}
+
+// TestDeletionSweep_NoGlobalSecretSyncSurface proves the global-sync internals
+// are deleted, not merely unreferenced: there is no function that pushes this
+// host's refs into the host-wide store, and no `pix secret sync` verb came
+// back to call one.
+func TestDeletionSweep_NoGlobalSecretSyncSurface(t *testing.T) {
+	self, err := filepath.Abs("deletion_sentinel_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	banned := map[string]string{
+		"syncProviderKeys":           "the global provider-key sync",
+		"EnsureProviderKeysFromRefs": "the lazy global fill",
+		"setSbxSecret(":              "the global secret writer",
+		"syncCmd struct":             "the removed `pix secret sync` verb",
+	}
+	walkGoSource(t, hostRoot(t), func(path, content string) {
+		if abs, _ := filepath.Abs(path); abs == self {
+			return
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			return // a test may legitimately name what it proves absent
+		}
+		for sym, why := range banned {
+			if strings.Contains(content, sym) {
+				t.Errorf("%s mentions %q: %s was deleted in the credential de-globalization and must not come back", path, sym, why)
+			}
 		}
 	})
 }

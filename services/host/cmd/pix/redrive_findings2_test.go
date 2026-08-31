@@ -183,14 +183,18 @@ func TestProbeSbxSecrets_HangingSbxIsErrorNotAbsent(t *testing.T) {
 	}
 }
 
-// TestSbxModelKeyState_HangingProbeUnknownProceeds pins run's launch-preflight
-// tri-state under a hang: probeOK=false (unknown), which under the existing
-// rule PROCEEDS — only a POSITIVELY confirmed missing key blocks a launch.
-func TestSbxModelKeyState_HangingProbeUnknownProceeds(t *testing.T) {
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
-	present, probeOK := launch.SbxModelKeyState(env)
+// TestConfiguredModelKeyState_UnreadableRefsUnknownProceeds pins run's
+// launch-preflight tri-state when the evidence cannot be read: probeOK=false
+// (unknown), which under the existing rule PROCEEDS — only a POSITIVELY
+// answered "no model ref is configured" blocks a launch.
+func TestConfiguredModelKeyState_UnreadableRefsUnknownProceeds(t *testing.T) {
+	env := hostenv.Env{System: &systest.Fake{
+		LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		IsFileFn:   func(string) bool { return true },
+		ReadFileFn: func(string) (string, error) { return "", fmt.Errorf("permission denied") }}}
+	present, probeOK := launch.ConfiguredModelKeyState(env)
 	if present || probeOK {
-		t.Errorf("hanging preflight must be (present=false, probeOK=false) so run proceeds, got (%v,%v)", present, probeOK)
+		t.Errorf("unreadable refs must be (present=false, probeOK=false) so run proceeds, got (%v,%v)", present, probeOK)
 	}
 }
 

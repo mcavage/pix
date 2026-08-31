@@ -13,10 +13,12 @@ import (
 	"fmt"
 
 	"pix/host/cli"
+	"pix/host/config"
 	"pix/host/container"
 	"pix/host/envsetup"
 	"pix/host/pixhome"
 	"pix/host/release"
+	"pix/host/secret"
 	nativeenv "pix/host/workflow/env"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/provision"
@@ -112,6 +114,7 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 		return err
 	}
 	renderSetupResult(d, home, res, c.Verbose)
+	setupCredentials(d)
 	if c.Env != "" {
 		if eerr := setupSelectedEnvironment(d, home, c.Env); eerr != nil {
 			return eerr
@@ -121,6 +124,43 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 		return cli.SilentError{Code: 1}
 	}
 	return nil
+}
+
+// setupCredentials is setup's credential step, and it is deliberately small:
+// establish THIS PIX_HOME's refs file, and offer to fill it when there is
+// someone to ask. It never inspects, writes or repairs a host-global sbx
+// secret — a global belongs to whoever pushed it, Pix reads only its own refs,
+// and the values themselves are resolved per sandbox at launch. So a host
+// covered in globals still gets its own refs file and still gets offered the
+// 1Password prompt: inheriting another stack's credentials is not setup
+// finishing early, it is setup never having run.
+//
+// It claims nothing about a model being ready. Nothing here resolved a ref,
+// so the honest close is the command that configures one.
+func setupCredentials(d *cli.Deps) {
+	path, created, err := config.SeedOpRefs()
+	if err != nil {
+		fmt.Fprintf(d.Err, "pix setup: could not create the secrets file (%s): %v\n", path, err)
+		return
+	}
+	if created {
+		fmt.Fprintf(d.Out, "pix setup: created %s (op:// references only; no secret is ever stored there)\n", path)
+	} else {
+		fmt.Fprintf(d.Out, "pix setup: secrets file present at %s\n", path)
+	}
+	env := defaultShellEnv()
+	if d.Interactive {
+		// Fires only when op is installed AND no provider ref is configured
+		// yet (OfferOnePasswordKeys' own gate) — never a nag, never a claim.
+		secret.OfferOnePasswordKeys(env, d.In, d.Out, true)
+	}
+	if secret.ProviderKeyRefsPresent(env) {
+		fmt.Fprintln(d.Out, "pix setup: model keys are configured as 1Password refs; each run resolves them into that run's own sandbox.")
+		return
+	}
+	fmt.Fprintln(d.Out, "pix setup: no model provider key is configured yet. Next:")
+	fmt.Fprintln(d.Out, "  pix secret set ANTHROPIC_API_KEY op://vault/item/field   (repeat per provider)")
+	fmt.Fprintln(d.Out, "  pix secret check                                          (resolve every ref through op; no values printed)")
 }
 
 // setupSelectedEnvironment is `--env NAME`'s whole job (surface §3.6): sets

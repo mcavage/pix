@@ -165,12 +165,13 @@ func BuildTrustedHostState(cfg *config.Config, env hostenv.Env) HostState {
 	if secret.ProviderKeyRefsPresent(env) {
 		source = "1password"
 	}
-	// GLOBAL only. `sbx secret ls` lists sandbox-scoped secrets too, and a
-	// substring match on it reported github as available on a host where it was
-	// pinned to a single sandbox: the agent believed that, committed, and could
-	// not push. A credential one box can use is not one this payload may promise
-	// to every box.
-	ghState, _ := secret.ProbeGitHubSecret(env)
+	// The github answer comes from THIS PIX_HOME's configured GITHUB_TOKEN
+	// ref, because that is what actually reaches the box: every launch writes
+	// it as a service secret scoped to the sandbox it is entering. A
+	// host-global github secret is not this payload's evidence — the agent
+	// reads this to decide whether it can push, and a credential Pix does not
+	// give it is not one this payload may promise.
+	ghState, _ := secret.ProbeGitHubCredential(env)
 	hs := BuildHostState(cfg, sbxOut, sbxOK, env.DialLocal, source, ghState == secret.GitHubSecretGlobal)
 	hs.Identity = ReadGitIdentity(env)
 	return hs

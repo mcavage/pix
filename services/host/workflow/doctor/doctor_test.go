@@ -80,9 +80,13 @@ func healthyHost(t *testing.T) (*config.Config, Options) {
 		SbxArgs:      []string{"healthy"},
 		KeyStoreBin:  bin,
 		KeyStoreArgs: []string{"keys"},
-		// A healthy host has a GLOBAL github secret. Left unset this would ask the
-		// real sbx and report whatever the developer's machine holds.
+		// A healthy host configures a GITHUB_TOKEN ref, so every sandbox pix
+		// launches is given a github credential. Left unset this would read
+		// the developer's own refs file.
 		GitHubScope: func() (int, []string) { return health.GitHubGlobal, nil },
+		// ...and holds no host-global sbx secret for pix to ignore. Left unset
+		// this would ask the real sbx.
+		GlobalSecrets: func() ([]string, bool) { return nil, true },
 	}
 }
 
@@ -107,7 +111,7 @@ func TestProbes_CoverTheWholeHostSurface(t *testing.T) {
 	for _, p := range Probes(&config.Config{}, Options{}) {
 		names = append(names, p.Name())
 	}
-	want := []string{"sbx", "providers", "github"}
+	want := []string{"sbx", "providers", "github", "sbx-globals"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("probe set = %v, want %v", names, want)
 	}

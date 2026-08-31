@@ -124,10 +124,10 @@ func TestSecretRmHoldsLockAcrossFileTransaction(t *testing.T) {
 // XDG_CONFIG_HOME fake this file used is not consulted by anything any more.
 const syncTestHome = "/cfg-synctest"
 
-// --- deterministic lock-window: syncProviderKeys / EnsureProviderKeysFromRefs ---
+// --- deterministic lock-window: scoped credential preparation ---
 
-// syncEnv builds a hostenv.Env over a hermetic temp config dir for
-// syncProviderKeys / EnsureProviderKeysFromRefs lock tests: op
+// syncEnv builds a hostenv.Env over a hermetic temp config dir for the
+// PrepareSandboxSecrets lock tests: op
 // installed+signed-in, sbx on PATH, and a recording run/readFile so the test
 // can assert every secrets.env read and op/sbx call landed inside the lock
 // window. opReadVal is returned for every `op read`; sbxLsOut is returned for
@@ -161,21 +161,20 @@ func syncEnv(refsContent, opReadVal, sbxLsOut string, events *[]string) (hostenv
 	return env, refsPath
 }
 
-// syncProviderKeys must hold the provider-refs lock across its WHOLE
-// read-op-refs / op-read / sbx-set transaction — one acquisition, everything
-// inside the window — so a concurrent `secret set`/`secret rm` can never
-// change secrets.env between the snapshot it reads and the sbx values it
-// pushes.
-func TestSyncProviderKeysHoldsLockAcrossReadResolveSbxSync(t *testing.T) {
+// PrepareSandboxSecrets must hold the provider-refs lock across its WHOLE
+// read-op-refs / op-read / scoped-sbx-set transaction — one acquisition,
+// everything inside the window — so a concurrent `secret set`/`secret rm` can
+// never change secrets.env between the snapshot it reads and the values it
+// gives the sandbox.
+func TestPrepareSandboxSecretsHoldsLockAcrossReadResolveScopedWrite(t *testing.T) {
 	var events []string
 	t.Setenv("PIX_HOME", syncTestHome)
 	env, refsPath := syncEnv("ANTHROPIC_API_KEY=op://v/anthropic/key\n", "sk-val", "", &events)
 	systest.Of(env.System).LockFn = systest.NewLockRecorder(t.Fatalf, &events).Lock
 
 	var out bytes.Buffer
-	synced, failed, fatal := syncProviderKeys(env, &out)
-	if fatal != nil || failed != 0 || synced != 1 {
-		t.Fatalf("synced=%d failed=%d fatal=%v out=%q", synced, failed, fatal, out.String())
+	if err := PrepareSandboxSecrets(env, "pix-demo", &out, ScopedSecretOptions{}); err != nil {
+		t.Fatalf("PrepareSandboxSecrets: %v out=%q", err, out.String())
 	}
 
 	lockPath := ProviderRefsLockPath(env)
@@ -199,48 +198,11 @@ func TestSyncProviderKeysHoldsLockAcrossReadResolveSbxSync(t *testing.T) {
 	}
 }
 
-// EnsureProviderKeysFromRefs must likewise hold the lock across its whole
-// read/sbx-ls/op-read/sbx-set pass.
-func TestEnsureProviderKeysFromRefsHoldsLockAcrossReadResolveSbxSync(t *testing.T) {
-	var events []string
-	t.Setenv("PIX_HOME", syncTestHome)
-	env, refsPath := syncEnv("GEMINI_API_KEY=op://v/gemini/key\n", "sk-val", "", &events)
-	systest.Of(env.System).LockFn = systest.NewLockRecorder(t.Fatalf, &events).Lock
-
-	var out bytes.Buffer
-	EnsureProviderKeysFromRefs(env, &out)
-	if !strings.Contains(out.String(), "resolved google") {
-		t.Fatalf("expected google to be resolved, got: %s", out.String())
-	}
-
-	lockPath := ProviderRefsLockPath(env)
-	if got := systest.CountEvents(events, "acquire "); got != 1 {
-		t.Fatalf("want exactly 1 lock acquisition, got %d: %v", got, events)
-	}
-	first, last := lockWindow(t, events, lockPath)
-	sawRefsRead := false
-	for i, e := range events {
-		if e == "read "+refsPath {
-			sawRefsRead = true
-		}
-		if strings.HasPrefix(e, "read ") || strings.HasPrefix(e, "run ") {
-			if i < first || i > last {
-				t.Errorf("event outside the lock window: %q (index %d, window %d..%d)", e, i, first, last)
-			}
-		}
-	}
-	if !sawRefsRead {
-		t.Fatalf("expected secrets.env read, events: %v", events)
-	}
-}
-
-// OfferOnePasswordKeys must write each provider's secrets.env + hostmode.env
-// pair under ONE lock acquisition (never two separate windows for the same
-// pair, never nested), and its final syncProviderKeys call must acquire its
-// OWN lock only AFTER every per-provider write lock has already been
-// released — calling it from inside a still-held lock would deadlock the
-// real flock.
-func TestOfferOnePasswordKeysWritesRefUnderOneLockThenSyncsAfterRelease(t *testing.T) {
+// OfferOnePasswordKeys must write each provider's ref under ONE lock
+// acquisition (never two separate windows for the same write, never nested),
+// and it must acquire NO further lock afterwards: saving the ref is the whole
+// job now, because nothing is resolved or pushed anywhere host-wide.
+func TestOfferOnePasswordKeysWritesRefUnderOneLockAndSyncsNothing(t *testing.T) {
 	dir := "/cfg-offertest"
 	t.Setenv("PIX_HOME", dir) // secrets.env resolves under PIX_HOME alone (QA F5)
 	refsPath := filepath.Join(dir, "secrets.env")
@@ -276,19 +238,15 @@ func TestOfferOnePasswordKeysWritesRefUnderOneLockThenSyncsAfterRelease(t *testi
 	systest.Of(env.System).LockFn = systest.NewLockRecorder(t.Fatalf, &events).Lock
 
 	// Accept the offer, paste ONE ref (anthropic), blank the other two so the
-	// pair-write happens exactly once before the loop finishes and falls
-	// through to the final sync call.
+	// ref-write happens exactly once.
 	var out bytes.Buffer
 	OfferOnePasswordKeys(env, strings.NewReader("y\nop://v/anthropic/key\n\n\n"), &out, true)
 
 	lockPath := ProviderRefsLockPath(env)
-	// Exactly two acquisitions: the anthropic pair-write, then the final sync
-	// — never more (a correct pair-write is ONE lock call, not two) and
-	// recordingFlock already fails the test outright on any NESTED
-	// acquisition (the deadlock case), so surviving to this assertion is
-	// itself proof the two acquisitions never overlapped.
-	if got := systest.CountEvents(events, "acquire "); got != 2 {
-		t.Fatalf("want exactly 2 lock acquisitions (1 ref-write + 1 sync), got %d: %v", got, events)
+	// Exactly ONE acquisition: the anthropic ref-write. A second one would
+	// mean something still resolves or mirrors after the write.
+	if got := systest.CountEvents(events, "acquire "); got != 1 {
+		t.Fatalf("want exactly 1 lock acquisition (the ref-write), got %d: %v", got, events)
 	}
 	var acquireIdx, releaseIdx []int
 	for i, e := range events {
@@ -299,8 +257,8 @@ func TestOfferOnePasswordKeysWritesRefUnderOneLockThenSyncsAfterRelease(t *testi
 			releaseIdx = append(releaseIdx, i)
 		}
 	}
-	if len(acquireIdx) != 2 || len(releaseIdx) != 2 {
-		t.Fatalf("expected 2 acquire/release pairs, got acquire=%v release=%v", acquireIdx, releaseIdx)
+	if len(acquireIdx) != 1 || len(releaseIdx) != 1 {
+		t.Fatalf("expected 1 acquire/release pair, got acquire=%v release=%v", acquireIdx, releaseIdx)
 	}
 	firstAcquire, firstRelease := acquireIdx[0], releaseIdx[0]
 	sawRefsWrite := false
@@ -315,44 +273,30 @@ func TestOfferOnePasswordKeysWritesRefUnderOneLockThenSyncsAfterRelease(t *testi
 	if !sawRefsWrite {
 		t.Fatalf("expected an secrets.env write, events: %v", events)
 	}
-	// The sync call's lock acquisition must start strictly after the
-	// ref-write's lock released — sequential, never overlapping.
-	if secondAcquire := acquireIdx[1]; secondAcquire <= firstRelease {
-		t.Fatalf("sync's lock acquisition (index %d) must start after the ref-write lock released (index %d)", secondAcquire, firstRelease)
+	// No sbx write at all: accepting the offer saves refs, it does not push a
+	// credential anywhere.
+	for _, e := range events {
+		if strings.HasPrefix(e, "run sbx secret set") {
+			t.Errorf("the offer wrote an sbx secret: %q", e)
+		}
 	}
 }
 
-// --- lock acquisition failure fails syncProviderKeys / EnsureProviderKeysFromRefs / offer honestly ---
+// --- lock acquisition failure fails scoped preparation / offer honestly ---
 
-func TestLockAcquisitionErrorFailsSyncProviderKeys(t *testing.T) {
+func TestLockAcquisitionErrorFailsPrepareSandboxSecrets(t *testing.T) {
 	var events []string
 	t.Setenv("PIX_HOME", syncTestHome)
 	env, _ := syncEnv("ANTHROPIC_API_KEY=op://v/a/k\n", "sk-val", "", &events)
 	systest.Of(env.System).LockFn = func(string, func() error) error { return errors.New("lock dir unwritable") }
 
 	var out bytes.Buffer
-	_, _, fatal := syncProviderKeys(env, &out)
-	if fatal == nil {
-		t.Fatal("syncProviderKeys must fail when the lock cannot be acquired")
+	err := PrepareSandboxSecrets(env, "pix-demo", &out, ScopedSecretOptions{})
+	if err == nil {
+		t.Fatal("PrepareSandboxSecrets must fail when the lock cannot be acquired")
 	}
-	if !strings.Contains(out.String(), "could not lock provider refs") {
-		t.Errorf("output = %q, want a lock failure message", out.String())
-	}
-	if len(events) != 0 {
-		t.Errorf("must not read/act on secrets.env when the lock cannot be acquired, events: %v", events)
-	}
-}
-
-func TestLockAcquisitionErrorMakesEnsureProviderKeysFromRefsANoOp(t *testing.T) {
-	var events []string
-	t.Setenv("PIX_HOME", syncTestHome)
-	env, _ := syncEnv("ANTHROPIC_API_KEY=op://v/a/k\n", "sk-val", "", &events)
-	systest.Of(env.System).LockFn = func(string, func() error) error { return errors.New("lock dir unwritable") }
-
-	var out bytes.Buffer
-	EnsureProviderKeysFromRefs(env, &out)
-	if !strings.Contains(out.String(), "could not lock provider refs") {
-		t.Errorf("output = %q, want a lock failure message", out.String())
+	if !strings.Contains(err.Error(), "could not lock provider refs") {
+		t.Errorf("error = %v, want a lock failure message", err)
 	}
 	if len(events) != 0 {
 		t.Errorf("must not read/act on secrets.env when the lock cannot be acquired, events: %v", events)
@@ -371,8 +315,8 @@ func TestLockAcquisitionErrorSkipsProviderInOfferOnePasswordKeys(t *testing.T) {
 	if !strings.Contains(out.String(), "could not lock provider refs for anthropic") {
 		t.Errorf("output = %q, want a per-provider lock failure message", out.String())
 	}
-	if strings.Contains(out.String(), "Resolving from 1Password") {
-		t.Error("must not proceed to sync when every provider write failed to lock")
+	if strings.Contains(out.String(), "Saved.") {
+		t.Error("must not claim a ref was saved when every provider write failed to lock")
 	}
 }
 

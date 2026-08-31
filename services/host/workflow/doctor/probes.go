@@ -38,8 +38,12 @@ type Options struct {
 	// Env is the host environment a probe may need (e.g. to ask sbx for the
 	// GitHub secret's scope).
 	Env hostenv.Env
-	// GitHubScope overrides how the github row is answered. Nil means ask sbx.
+	// GitHubScope overrides how the github row is answered. Nil means read
+	// this PIX_HOME's configured refs.
 	GitHubScope func() (int, []string)
+	// GlobalSecrets overrides the read-only enumeration of host-global sbx
+	// secrets Pix ignores. Nil means ask sbx.
+	GlobalSecrets func() ([]string, bool)
 	// Workspace is the directory whose sandbox the attachment answer is
 	// about. Empty means "no sandbox context", and attachment is unknown.
 	Workspace string
@@ -77,6 +81,11 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 		// secret the agent commits and then cannot push. Reported here rather
 		// than discovered at the end of a task.
 		health.GitHubSecretProbe{Fix: secret.GitHubSecretFix, Scope: githubScope(o)},
+		// Read-only, and deliberately not a repair: a host can hold GLOBAL sbx
+		// secrets (an older pix, another stack, a hand-run `sbx secret set`)
+		// that Pix ignores entirely. Saying so is the difference between "my
+		// key is right there" and understanding why it does nothing.
+		health.IgnoredGlobalSecretsProbe{Fix: secret.GlobalSecretRemoveFix, Scan: globalSecretScan(o)},
 	}
 }
 
@@ -88,9 +97,18 @@ func githubScope(o Options) func() (int, []string) {
 		return o.GitHubScope
 	}
 	return func() (int, []string) {
-		state, boxes := secret.ProbeGitHubSecret(o.Env)
+		state, boxes := secret.ProbeGitHubCredential(o.Env)
 		return int(state), boxes
 	}
+}
+
+// globalSecretScan enumerates the global secrets Pix ignores, through the
+// Options seam when a test supplies one.
+func globalSecretScan(o Options) func() ([]string, bool) {
+	if o.GlobalSecrets != nil {
+		return o.GlobalSecrets
+	}
+	return func() ([]string, bool) { return secret.ProbeGlobalSecrets(o.Env) }
 }
 
 // Check runs the whole set and returns the one Snapshot both verbs render.

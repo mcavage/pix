@@ -306,10 +306,10 @@ func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string, nonSe
 	// sync" for a tool key — both of which exit 2 (unknown command) in v2
 	// (docs/design/pix-v2-surface.md §3: secret is list/set/rm/check; there is
 	// no models or sync verb at all). There is also no separate "wiring" or
-	// "sync" ritual left to point at: EnsureProviderKeysFromRefs already runs
-	// this exact resolve-from-1Password-into-sbx step automatically before a
-	// launch (the "NO-RITUAL path", sync.go), for a model-provider key and a
-	// tool key alike, so the honest next step is the same for both.
+	// "sync" ritual left to point at: every launch resolves this PIX_HOME's
+	// refs into the sandbox it is about to enter (scoped.go), for a
+	// model-provider key and a tool key alike, so the honest next step is the
+	// same for both.
 	if _, known := providerKeyRefs[key]; known {
 		fmt.Fprintf(out, "%s is stored. A fresh `pix run` resolves it automatically (or verify it now: pix secret check)\n", key)
 	}

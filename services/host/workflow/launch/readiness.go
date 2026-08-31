@@ -12,39 +12,40 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"pix/host/config"
 	"pix/host/health"
+	"pix/host/hostenv"
 	"pix/host/secret"
 )
 
-// ProbeModelKeys runs the ONE launch-gate probe: does the key store list at
-// least one model provider key. bin/args default to `sbx secret ls`; a test
-// points them at a fixture executable so the real exec path still runs.
-// Production always pays health.StatusBudget (2s); ProbeModelKeysBudget is the
-// seam a test uses to prove the TIMEOUT arm of the tri-state WITHOUT waiting
-// out that real production window.
-func ProbeModelKeys(ctx context.Context, bin string, args ...string) health.Result {
-	return ProbeModelKeysBudget(ctx, health.StatusBudget, bin, args...)
-}
-
-// ProbeModelKeysBudget is ProbeModelKeys with an explicit per-probe budget. It
-// exists for exactly one caller outside this file: a test that must prove a
-// timed-out key store reads as unknown (never a refusal) without depending on
-// a real subprocess actually surviving the full production health.StatusBudget
-// — a dependency that is both slow (every CI run pays the full timeout) and
-// environment-sensitive (a loaded box can blow past it before the process is
-// even killed). Production has exactly one caller of this budget knob:
-// ProbeModelKeys itself, always with health.StatusBudget.
-func ProbeModelKeysBudget(ctx context.Context, budget time.Duration, bin string, args ...string) health.Result {
-	if bin == "" {
-		bin, args = "sbx", []string{"secret", "ls"}
+// ProbeModelKeys runs the ONE launch-gate probe: does THIS PIX_HOME configure
+// at least one model provider op:// ref. It reads the refs file and nothing
+// else — no `sbx secret ls`, because a host-wide sbx secret is not this
+// launcher's credential (see bootstrap.go) and answering the gate with one is
+// how a stack with no keys of its own launched on another stack's.
+//
+// TRI-STATE, unchanged in meaning: a refs file that exists and could not be
+// read is StatusUnknown and PROCEEDS; only a positively answered "no model ref
+// is configured" is StatusAbsent, and only that refuses.
+func ProbeModelKeys(env hostenv.Env) health.Result {
+	names, state := secret.ConfiguredModelRefs(env)
+	if state != secret.RefsAnswered {
+		return health.Result{Name: "providers", Status: health.StatusUnknown, Required: true,
+			Detail:   "could not read the configured refs",
+			Evidence: "reading " + secret.DefaultOpRefsPath() + " failed"}
 	}
-	snap := health.Run(ctx, budget, health.ProviderKeyProbe{
-		Bin: bin, Args: args, Want: secret.ModelProviders, AnyOf: true, Label: "providers",
-	})
-	return snap.Results[0]
+	if len(names) == 0 {
+		return health.Result{Name: "providers", Status: health.StatusAbsent, Required: true,
+			Detail:   "no model provider ref is configured",
+			Fix:      fmt.Sprintf(health.SecretSetFix, "ANTHROPIC_API_KEY"),
+			Evidence: secret.DefaultOpRefsPath() + " configures none of " + strings.Join(secret.ModelProviders, ", ")}
+	}
+	return health.Result{Name: "providers", Status: health.StatusReady, Required: true,
+		Detail:   strings.Join(names, ", ") + " configured",
+		Evidence: "op:// refs in " + secret.DefaultOpRefsPath() + ", resolved into each sandbox at launch"}
 }
 
 // RefusesLaunch reports whether the key probe POSITIVELY established that this
