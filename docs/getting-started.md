@@ -32,6 +32,22 @@ needs none. Local inference
 directly in an environment's own `pix.toml`, not chosen in setup. Your first
 sandbox launches once a callable model is confirmed.
 
+### Upgrades
+
+`brew upgrade mcavage/tap/pix` replaces the binary and the release bundle
+beside it. The next ordinary `pix` notices that this `PIX_HOME` is still on
+the previous release and reconciles the stack artifacts Pix owns, printing
+one line about it. `pix setup` remains the first-run and repair command,
+not an upgrade chore.
+
+A launch approves one thing on your behalf and says so here: `sbx env
+create` renders its own plan and asks its own "Approve this plan?" for a
+document Pix has already composed, fingerprinted, and put through its own
+trust review. Pix answers that duplicate prompt internally, after its own
+gate, and never displays the raw plan, because that text contains the
+`pix-memory` URL with its bearer token in the query string. If a create
+fails, you get the reason with every credential redacted.
+
 ## 2. Your first sandbox
 
 ```bash

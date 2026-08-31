@@ -87,6 +87,15 @@ references, without choosing a provider for you; the explicit path is
 own `pix.toml` (section 5).
 A gap it cannot repair is printed with the exact command that fixes it.
 
+`pix setup` is for first run and for repair. You do not run it after every
+upgrade: when `brew upgrade` (or a new local bundle) leaves this `PIX_HOME`
+on the previous release, the next ordinary `pix` reconciles the artifacts
+Pix itself owns — runtime, pinned images, default environment, this stack's
+`pix-memory` container and its scoped MCP registration — and prints one
+line saying so. It never resolves a credential, accepts an environment's
+trust, or runs a `[[setup]]` hook on its own; those stay in `pix setup`. A
+machine with no installed release at all is still an explicit first run.
+
 ## 3. How to tell it worked
 
 ```bash

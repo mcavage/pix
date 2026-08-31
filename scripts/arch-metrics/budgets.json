@@ -21,13 +21,13 @@
     },
     "pix/host/cmd/pix": {
       "_prod_loc_note": "Environment [[setup]] hooks (the v2 replacement for pack-authored install/auth hooks): a real capability addition, not accumulation. setup_cmd.go's runSetupHooks wires `pix setup --env NAME` to the envsetup runner (+1 edge for pix/host/envsetup) and env_cmd.go's renderTrustBill now prints each hook's id/kind/required/check argv/apply argv/sha256 in the DEFAULT consent screen, since a count is not consent. Setup-hook TOCTOU/inputs hardening: env_cmd.go now renders each hook's declared `inputs` (path + sha256) and quotes every argv element individually (safeArgv) instead of a bare space-Join, so a reviewer sees the real argument boundaries os/exec will use. Coexistence review fixes: pix task rm resolves this stack's id and routes teardown through launch.RemoveScopedPixSandbox, so it can never force-remove another PIX_HOME's sandbox, and pix setup renders the new present-but-UNVERIFIED memory MCP registration state with its exact manual remedy (inspect, rm, rerun) instead of one line that called an unprobed registration present.",
-      "prod_loc": 4105,
+      "prod_loc": 4580,
       "test_loc": 6667,
       "exports": 5,
       "exports_used_externally": 0,
       "exits": 1,
       "streams": 3,
-      "globals": 18,
+      "globals": 22,
       "init": 1,
       "edges": 26,
       "parser_families": {
@@ -35,7 +35,8 @@
         "core": 10,
         "test": 48
       },
-      "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port."
+      "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
+      "_launch_ux_note": "Launch UX wave: (1) trustSatisfied \u2014 one Tier1-aware answer every trust caller asks, so a zero-footprint environment is never prompted for and writes no trust state; (2) run_create_quiet.go \u2014 the create child's own stdio seam: Pix answers sbx 0.41's duplicate \"Approve this plan?\" internally after its OWN trust gate, captures that child's output instead of printing it, and renders a bounded, token-redacted diagnostic only on failure; (3) upgrade_auto.go + setup_cmd.go's extracted machineSetup \u2014 pix run reconciles this home's machine-owned stack artifacts when the bundle beside the binary no longer matches the installed manifest, with credentials, environment trust and setup hooks deliberately left in the setup command. Rebaselined ONCE to the EXACT current values, no slack. New globals are the auto-upgrade seam var and the create-child constants; no new package edges beyond the ones already declared."
     },
     "pix/host/config": {
       "_prod_loc_note": "QA F5: config.Path/StateDir/DataDir/configDir now delegate to pixhome.Dir() (PIX_HOME) instead of re-deriving PIX_CONFIG/XDG_*/~/.config fallbacks inline \u2014 net prod_loc SHRANK (fewer resolution branches) but config now imports pixhome (edges 0 -> 1), closing the last executable-state escape. Coexistence docs sync: OpRefsMentalModel/OpRefsTemplate reworded to drop stale pack/host-global-gateway prose and explain the ref feeds a per-sandbox scoped credential OR a declared MCP server's own host command, +3 prod_loc, no behavior change.",
@@ -378,7 +379,7 @@
     },
     "pix/host/workflow/launch": {
       "_prod_loc_note": "Review round 1 blocker #2 fix: FindPositivelyIdentified (the running-or-stopped identity check DecideEnvAttach's reattach gate now uses) and DecideEnvAttach's relaxed running-or-stopped gate. Real new logic (a stopped sandbox used to be refused outright by this gate), not accumulation. Round-7 adds EffectiveInferenceConfig: the production merge of a selected environment's pix.toml [inference.*] over machine config into an ephemeral, never-persisted snapshot for SynthesizeInferenceKit/CallableRuntimeModels/roster validation. Coexistence review fix (INFO): RemoveScopedPixSandbox, now the ONLY exported forced-removal seam, validates a RECORDED sandbox name against this stack's id before any argv is composed; the unscoped form is unexported, so no package outside launch can reach it.",
-      "prod_loc": 5149,
+      "prod_loc": 5172,
       "test_loc": 7337,
       "exports": 193,
       "exports_used_externally": 62,
@@ -391,7 +392,8 @@
         "core": 15,
         "test": 27
       },
-      "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port."
+      "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
+      "_launch_ux_note": "Launch UX wave: SessionDeps.SpawnCreate, the dedicated create-child seam (and spawnCreate's fallback to Spawn). The create is the ONE non-interactive child of a launch and needs the opposite stdio from a session; telling the two apart by seam rather than by sniffing argv is what keeps a future create-argv change from silently re-routing the user's terminal. Rebaselined ONCE to the EXACT current value, no slack."
     },
     "pix/host/workflow/models": {
       "prod_loc": 845,
