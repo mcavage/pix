@@ -20,8 +20,8 @@ var explicitBodyRe = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-
 // there is no bypass of stack scoping through this seam:
 //
 //   - a SHORT logical name (does not start with Prefix, and is itself a
-//     safe argv token) is SCOPED to stackID: "pix-<stackID>-<name>",
-//     truncated to fit MaxNameLen exactly like a derived name is.
+//     safe argv token) is SCOPED to stackID: "pix-<stackID>-<name>", and is
+//     REFUSED outright if it does not fit MaxNameLen.
 //   - a name that is ALREADY a full, safely-charactered pix-* name AND is
 //     scoped to stackID (stack.IsScopedSandboxName) travels verbatim — the
 //     round-trip case, e.g. re-typing a name `pix ls` just printed.
@@ -57,29 +57,21 @@ func ScopeExplicitName(stackID, requested string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return composeExplicit(prefix, requested), nil
+	return composeExplicit(prefix, requested)
 }
 
-// composeExplicit bounds "<prefix><name>" to MaxNameLen. Unlike compose
-// (name.go), there is no fixed-length digest suffix to preserve here — the
-// caller's own name IS the identity — so truncation, when needed at all,
-// simply cuts name to whatever budget remains after prefix.
-func composeExplicit(prefix, name string) string {
+// composeExplicit joins "<prefix><name>" and REFUSES anything longer than
+// MaxNameLen. Unlike compose (name.go), there is no digest here to keep the
+// result distinct: the caller's own name IS the identity, so cutting it to
+// fit is how `--name <sixty-chars>-alpha` and `--name <sixty-chars>-beta`
+// silently become one sandbox — the second run would attach to the first
+// run's box. A refusal that states the budget is the only answer that cannot
+// alias.
+func composeExplicit(prefix, name string) (string, error) {
 	full := prefix + name
 	if len(full) <= MaxNameLen {
-		return full
+		return full, nil
 	}
-	budget := MaxNameLen - len(prefix)
-	if budget < 1 {
-		budget = 1
-	}
-	trimmed := name
-	if len(trimmed) > budget {
-		trimmed = trimmed[:budget]
-	}
-	trimmed = strings.TrimRight(trimmed, "-")
-	if trimmed == "" {
-		trimmed = "n"
-	}
-	return prefix + trimmed
+	return "", fmt.Errorf("sandbox: name %q is too long: this pix stack's names carry a %d-character prefix (%s), leaving %d characters for a name, and %q is %d",
+		name, len(prefix), prefix, MaxNameLen-len(prefix), name, len(name))
 }

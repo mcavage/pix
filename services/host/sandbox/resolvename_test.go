@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -79,19 +80,48 @@ func TestScopeExplicitName_RejectsMalformedStackID(t *testing.T) {
 	}
 }
 
-// TestScopeExplicitName_LongNameFits: an overlong short logical name is
-// truncated to fit MaxNameLen rather than producing an oversized sandbox
-// name sbx itself would refuse.
-func TestScopeExplicitName_LongNameFits(t *testing.T) {
+// TestScopeExplicitName_OverlongNameIsRefusedNotTruncated: truncating a name
+// the user CHOSE is how two different requests silently become one sandbox.
+// The budget is stated in the refusal so the fix is obvious.
+func TestScopeExplicitName_OverlongNameIsRefusedNotTruncated(t *testing.T) {
 	got, err := ScopeExplicitName(testStackA, strings.Repeat("n", 200))
+	if err == nil {
+		t.Fatalf("ScopeExplicitName = %q, nil; want a refusal rather than a truncated name", got)
+	}
+	budget := MaxNameLen - len(Prefix+testStackA+"-")
+	if !strings.Contains(err.Error(), strconv.Itoa(budget)) {
+		t.Errorf("the refusal must name the available budget (%d characters), got: %v", budget, err)
+	}
+}
+
+// TestScopeExplicitName_TwoLongNamesCannotAlias is the collision itself: two
+// distinct names that share a long prefix must never resolve to the same
+// sandbox. Under truncation they did, so `pix run --name <a>` would attach to
+// the sandbox `pix run --name <b>` created.
+func TestScopeExplicitName_TwoLongNamesCannotAlias(t *testing.T) {
+	base := strings.Repeat("n", 60)
+	a, errA := ScopeExplicitName(testStackA, base+"-alpha")
+	b, errB := ScopeExplicitName(testStackA, base+"-beta")
+	if errA == nil || errB == nil {
+		t.Fatalf("both overlong names must be refused, got %q (%v) and %q (%v)", a, errA, b, errB)
+	}
+}
+
+// TestScopeExplicitName_LongestFittingNameIsAccepted pins the boundary from
+// the other side: a name that fits EXACTLY is not collateral damage of the
+// refusal above.
+func TestScopeExplicitName_LongestFittingNameIsAccepted(t *testing.T) {
+	budget := MaxNameLen - len(Prefix+testStackA+"-")
+	name := strings.Repeat("n", budget)
+	got, err := ScopeExplicitName(testStackA, name)
 	if err != nil {
-		t.Fatalf("ScopeExplicitName: %v", err)
+		t.Fatalf("a name that fits exactly must be accepted: %v", err)
 	}
-	if len(got) > MaxNameLen {
-		t.Fatalf("ScopeExplicitName produced %q, length %d exceeds MaxNameLen %d", got, len(got), MaxNameLen)
+	if len(got) != MaxNameLen {
+		t.Errorf("ScopeExplicitName(%q) = %q (len %d), want exactly MaxNameLen %d", name, got, len(got), MaxNameLen)
 	}
-	if !strings.HasPrefix(got, Prefix+testStackA+"-") {
-		t.Fatalf("ScopeExplicitName truncated form %q lost its stack scope", got)
+	if _, err := ScopeExplicitName(testStackA, name+"x"); err == nil {
+		t.Errorf("one character past the budget must be refused")
 	}
 }
 

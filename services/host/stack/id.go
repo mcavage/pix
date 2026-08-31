@@ -3,7 +3,9 @@ package stack
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 
@@ -35,23 +37,57 @@ func ValidID(id string) error {
 // CanonicalPath resolves path to one canonical absolute form so two
 // different spellings of the SAME location (a relative path, an absolute
 // path, a path reached through a symlink) always resolve identically:
-// filepath.Abs, then filepath.EvalSymlinks when the path actually resolves,
-// then filepath.Clean. ID uses it to canonicalize PIX_HOME itself; a
-// capability naming a resource from some OTHER path (e.g. sandbox.Name's
-// workspace digest) reuses this SAME rule rather than duplicating the
-// Abs/EvalSymlinks/Clean chain a second time, so the two packages can never
-// silently diverge on what "the same directory" means. A failure to make
-// path absolute is returned as an error: an identity that cannot be pinned
-// down must never silently proceed under a different, wrong one.
+// filepath.Abs, then filepath.EvalSymlinks, then filepath.Clean. ID uses it
+// to canonicalize PIX_HOME itself; a capability naming a resource from some
+// OTHER path (e.g. sandbox.Name's workspace digest) reuses this SAME rule
+// rather than duplicating the Abs/EvalSymlinks/Clean chain a second time, so
+// the two packages can never silently diverge on what "the same directory"
+// means.
+//
+// Two failure modes are distinguished, because collapsing them is how an
+// identity silently changes underneath a running stack:
+//
+//   - The path (or an ancestor) IS there but cannot be resolved — a symlink
+//     loop, an unreadable parent directory, any I/O error. That is an ERROR.
+//     Falling back to the unresolved spelling would mint a stack id for a
+//     location nobody can name, and a later call that CAN resolve it would
+//     produce a different one.
+//   - The path does not exist YET (a PIX_HOME before `pix setup` creates it,
+//     a workspace named before it is checked out). Then the deepest EXISTING
+//     ancestor is resolved and the missing components are appended to it
+//     unchanged. That is the whole point: a home under a symlinked parent
+//     canonicalizes to the same string before and after the directory is
+//     created, so its stack id — and therefore its container, MCP and
+//     sandbox names — do not move the first time setup runs.
 func CanonicalPath(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", fmt.Errorf("stack: resolve path %q: %w", path, err)
 	}
-	if resolved, rerr := filepath.EvalSymlinks(abs); rerr == nil {
-		abs = resolved
+	abs = filepath.Clean(abs)
+
+	// missing collects the not-yet-existing trailing components, deepest
+	// LAST, so the walk up can rebuild them in order onto whatever ancestor
+	// finally resolves.
+	var missing []string
+	for cur := abs; ; {
+		resolved, rerr := filepath.EvalSymlinks(cur)
+		if rerr == nil {
+			parts := append([]string{resolved}, missing...)
+			return filepath.Clean(filepath.Join(parts...)), nil
+		}
+		if !errors.Is(rerr, fs.ErrNotExist) {
+			return "", fmt.Errorf("stack: resolve path %q: %w", path, rerr)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			// Even the filesystem root did not resolve: there is no
+			// existing ancestor to anchor an identity to.
+			return "", fmt.Errorf("stack: resolve path %q: no existing ancestor could be resolved", path)
+		}
+		missing = append([]string{filepath.Base(cur)}, missing...)
+		cur = parent
 	}
-	return filepath.Clean(abs), nil
 }
 
 // HashPrefix returns the first n lowercase hex characters of sha256(s),
