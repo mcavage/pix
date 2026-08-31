@@ -13,10 +13,16 @@ pix setup
 
 `setup` initializes `PIX_HOME` (default `~/.pix`) as a Git repository,
 installs the pinned `pix-agent` image and strict kit, creates and selects a
-default environment when none exists, and reconciles the `pix-memory`
-container. It does NOT install `sbx`; a missing host tool is reported with
-the exact install command, and setup is resumable, so you install it and run
-setup again.
+default environment when none exists, and reconciles this `PIX_HOME`'s own
+memory container. It does NOT install `sbx`; a missing host tool is reported
+with the exact install command, and setup is resumable, so you install it
+and run setup again.
+
+Every `PIX_HOME` is its own **stack**: a 16-hex id derived from that home's
+canonical path names its sandboxes, its memory container, and its two
+reserved MCP servers, so a second `PIX_HOME` on the same host runs alongside
+the first without either one touching the other's resources. See
+`docs/reference.md` §2 and §12 for what that means for memory and cleanup.
 
 There is no setup interview: it never asks how models should run. Add a
 direct API key with `pix secret set` (1Password reference only, never a
@@ -90,10 +96,10 @@ pix env                # environments under ~/.pix/envs, the default, trust stat
 
 An environment is a plain directory (`.sbxenv.yaml` plus an optional
 `pix.toml`); there is no registration command. Memory is a separate Docker
-container (`pix-memory`) reached through the sbx Gateway, operated only
-through `/recall`, `/remember`, `/forget`, and the `memory_*` MCP tools. A
-model is picked by name (`pix run --model provider/id`, or an environment's
-`pix.toml` `[models].main`): nothing resolves one for you.
+container, reached through the sbx Gateway, operated only through `/recall`,
+`/remember`, `/forget`, and the `memory_*` MCP tools. A model is picked by
+name (`pix run --model provider/id`, or an environment's `pix.toml`
+`[models].main`): nothing resolves one for you.
 
 ## 7. MCP servers and integrations
 

@@ -546,32 +546,35 @@ func OpRefsPath() string {
 
 // OpRefsMentalModel is the ≤4-line plain explanation of what secrets.env is, reused
 // VERBATIM in `pix setup`, the `secret` help, and the template header.
-const OpRefsMentalModel = `secrets.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
-host MCP server it resolves those refs from 1Password and injects them as env
-vars — the secret never touches disk or the sandbox. A server that needs no
-credentials needs no entry here at all.`
+const OpRefsMentalModel = `secrets.env maps ENV_VAR = op://vault/item/field. Each launch resolves every
+configured ref and hands it to sbx as a credential scoped to that one sandbox
+(model keys, tool keys, GITHUB_TOKEN), or passes an MCP server's own ref only
+to that server's host command. Pix never writes or prints a resolved value.`
 
 // OpRefsTemplate is the seed content for a fresh secrets.env: op:// references
 // ONLY, every example line COMMENTED OUT. There are no vendor examples here on
 // purpose — pix ships no built-in MCP server, so the only thing that can tell
-// you which ENV_VARs to add is the pack you activate, and it says so in its
-// own docs. A template that named vendors would go stale the moment one moved.
-const OpRefsTemplate = `# pix secrets.env — 1Password refs the sbx gateway resolves via
-# ` + "`op run --env-file`" + ` when it spawns each host MCP server.
+// you which ENV_VARs to add is the environment (its .sbxenv.yaml MCP servers,
+// or its pix.toml [host.mcp.<name>] annotation) you configure, and it says so
+// in its own docs. A template that named vendors would go stale the moment
+// one moved.
+const OpRefsTemplate = `# pix secrets.env — 1Password refs this launcher resolves, never secret values.
 #
-# secrets.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
-# host MCP server it resolves those refs from 1Password and injects them as env
-# vars — the secret never touches disk or the sandbox. A server that needs no
-# credentials needs no entry here at all.
+# secrets.env maps ENV_VAR = op://vault/item/field. Each launch resolves every
+# configured ref and hands it to sbx as a credential scoped to that one
+# sandbox (model provider keys, tool keys, GITHUB_TOKEN); a declared MCP
+# server's own refs are resolved the same way (` + "`op run --env-file`" + `) and
+# passed only to that server's host command. Pix never writes a resolved
+# value to disk or prints one.
 #
 # This file holds op://vault/item/field REFERENCES only. Everything secret
-# (tokens, keyring passwords) is an op:// ref resolved from 1Password at spawn
-# time — never a pasted secret. A NON-secret value (an account name, a home
-# directory) may be a plain literal, but only when the active pack declares
-# that variable as env_keys on the integration that needs it.
+# (tokens, keyring passwords) is an op:// ref resolved from 1Password at
+# launch time — never a pasted secret. A NON-secret value (an account name, a
+# home directory) may be a plain literal, but only when a declared
+# [host.mcp.<name>] entry names that variable in its own env_keys.
 #
-# A freshly-seeded file has zero entries: you add one when you wire a server,
-# and your pack's docs name the variable.
+# A freshly-seeded file has zero entries: add one when you configure a
+# provider key, or wire an MCP server whose own docs name the variable.
 #
 # Add one:  pix secret set ENV_VAR op://<vault>/<item>/<field>
 # Verify:   pix secret check
