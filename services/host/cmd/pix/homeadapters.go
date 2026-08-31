@@ -50,7 +50,7 @@ import (
 func homeContainerSpec(home pixhome.Paths) container.Spec {
 	image := ""
 	if m, err := release.LoadInstalled(home.Home); err == nil && m != nil {
-		image = "pix-memory@" + m.PixMemoryDigest
+		image = provision.MemoryImageRef(*m)
 	}
 	port := container.DefaultMemoryPort
 	if p, err := container.ReadMemoryPort(home); err == nil {

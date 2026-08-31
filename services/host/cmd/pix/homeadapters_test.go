@@ -8,8 +8,22 @@ import (
 	"testing"
 
 	"pix/host/container"
+	"pix/host/pixhome"
+	"pix/host/release"
 	"pix/host/workflow/provision"
 )
+
+func TestHomeContainerSpecUsesCanonicalReleaseImageReference(t *testing.T) {
+	home := pixhome.New(t.TempDir())
+	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	manifest := release.Manifest{Version: "1.2.3", PixAgentDigest: digest, PixMemoryDigest: digest, RuntimeDigest: digest, KitRevision: "abcdef1"}
+	if err := release.SaveInstalled(home.Home, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := homeContainerSpec(home).Image, provision.MemoryImageRef(manifest); got != want {
+		t.Fatalf("container image = %q, want canonical release reference %q", got, want)
+	}
+}
 
 func installSbxRegistrarFixture(t *testing.T, body string) string {
 	t.Helper()
