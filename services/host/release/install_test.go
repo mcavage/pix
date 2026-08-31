@@ -216,6 +216,49 @@ func TestInstallRuntimeReplacesAStaleSameVersionInstall(t *testing.T) {
 	}
 }
 
+// TestInstallRuntimeCannotEscapeViaMaliciousVersion is the defense-in-depth
+// proof: Version flows unquoted into RuntimeDir (filepath.Join(home,
+// "runtime", version)) and into extractRuntimeArchive's tar-entry prefix.
+// A manifest naming a traversal-shaped version must never reach
+// InstallRuntime at all — LoadBundle's ParseBundleManifest already calls
+// Manifest.Validate, so the malicious document is refused at load time,
+// long before any archive is staged or extracted.
+func TestInstallRuntimeCannotEscapeViaMaliciousVersion(t *testing.T) {
+	for _, version := range []string{
+		"../../escape",
+		"..",
+		"1.2.3/../../escape",
+		"/etc/passwd",
+	} {
+		t.Run(version, func(t *testing.T) {
+			dir := t.TempDir()
+			archive, digest := runtimeArchive(t, "1.2.3", nil)
+			if err := os.WriteFile(filepath.Join(dir, release.BundleManifestFile), shippedManifestJSON(version, digestA, digestA, digest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, release.RuntimeArchiveName("1.2.3")), archive, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := release.LoadBundle(dir)
+			if err == nil {
+				t.Fatalf("LoadBundle accepted a manifest naming version %q; a traversal-shaped version must be refused before any archive is staged", version)
+			}
+			if !strings.Contains(err.Error(), "version") {
+				t.Errorf("LoadBundle error = %q, want it to name the version problem", err)
+			}
+
+			// Nothing above home (a sibling of the temp home, standing in for
+			// "outside the intended runtime root") was ever created.
+			home := t.TempDir()
+			escaped := filepath.Join(filepath.Dir(home), "escape")
+			if _, statErr := os.Stat(escaped); !os.IsNotExist(statErr) {
+				t.Fatalf("a path escaping the runtime root was created: %s", escaped)
+			}
+		})
+	}
+}
+
 func writeHostileFile(t *testing.T, tw *tar.Writer, name string, typeflag byte, link string) {
 	t.Helper()
 	body := "x\n"

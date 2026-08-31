@@ -299,17 +299,19 @@ func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string, nonSe
 	// it fire N live inference probes would mean a dead provider API could fail a
 	// credential write. But saying nothing is what produced "I set the key and
 	// nothing happened, and I could not find where to finish", so name the next
-	// command here, where the user actually is.
-	if p, known := providerKeyRefs[key]; known {
-		if isModelProviderKey(key) {
-			fmt.Fprintf(out, "%s is stored but not yet wired to any model. Finish with: pix models add %s\n", key, p)
-		} else {
-			// A TOOL key has no `models add` step: it is wired the moment it reaches
-			// the sbx secret store, and the sandbox picks it up on its next launch.
-			// Saying "pix models add parallel" here would send the user to a command
-			// that rejects the name.
-			fmt.Fprintf(out, "%s is stored. Mirror it with: pix secret sync   (then a fresh `pix run` picks it up)\n", key)
-		}
+	// step here, where the user actually is.
+	//
+	// Security re-review (final findings): this used to name two REMOVED v1
+	// verbs — "pix models add <name>" for a model-provider key and "pix secret
+	// sync" for a tool key — both of which exit 2 (unknown command) in v2
+	// (docs/design/pix-v2-surface.md §3: secret is list/set/rm/check; there is
+	// no models or sync verb at all). There is also no separate "wiring" or
+	// "sync" ritual left to point at: EnsureProviderKeysFromRefs already runs
+	// this exact resolve-from-1Password-into-sbx step automatically before a
+	// launch (the "NO-RITUAL path", sync.go), for a model-provider key and a
+	// tool key alike, so the honest next step is the same for both.
+	if _, known := providerKeyRefs[key]; known {
+		fmt.Fprintf(out, "%s is stored. A fresh `pix run` resolves it automatically (or verify it now: pix secret check)\n", key)
 	}
 	return nil
 }

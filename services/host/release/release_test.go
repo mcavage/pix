@@ -46,6 +46,61 @@ func TestManifest_Validate_RejectsMutableTag(t *testing.T) {
 	}
 }
 
+// TestManifest_Validate_RejectsUnsafeVersion is the defense-in-depth
+// finding: Version used to be checked ONLY for non-empty, yet it flows
+// unquoted into a filesystem path (RuntimeDir joins it under "runtime/",
+// extractRuntimeArchive names a tar-entry prefix from it). Every one of
+// these must be refused by the safe filename/release grammar.
+func TestManifest_Validate_RejectsUnsafeVersion(t *testing.T) {
+	cases := []string{
+		"../../../etc/passwd",
+		"..",
+		".",
+		"1.0.0/../../evil",
+		"1.0.0..",
+		"1.0..0",
+		"a/b",
+		"a\\b",
+		"/etc/passwd",
+		"1.0.0\x00",
+		"1.0.0\n",
+		"-1.0.0", // must not begin with a non-alnum
+		".1.0.0",
+		"",
+		" ",
+	}
+	for _, version := range cases {
+		t.Run(version, func(t *testing.T) {
+			m := validManifest()
+			m.Version = version
+			err := m.Validate()
+			if err == nil {
+				t.Fatalf("Validate() = nil for version %q, want an error", version)
+			}
+			if !strings.Contains(err.Error(), "version") {
+				t.Errorf("Validate() error = %q, want it to name version", err)
+			}
+		})
+	}
+}
+
+// TestManifest_Validate_AcceptsSemverCompatibleVersions proves the grammar
+// stays usable for every real release-version shape (plain semver, a
+// prerelease/build suffix using the RFC-compatible '-'/'+'... wait '+' is
+// not in the allowed set, so build metadata must use '-' or '.' instead)
+// while still refusing a path.
+func TestManifest_Validate_AcceptsSemverCompatibleVersions(t *testing.T) {
+	for _, version := range []string{"2.0.0", "2.0.0-beta.1", "2.0.0-rc1", "v2", "20240101"} {
+		t.Run(version, func(t *testing.T) {
+			m := validManifest()
+			m.Version = version
+			if err := m.Validate(); err != nil {
+				t.Errorf("Validate() = %v for version %q, want nil", err, version)
+			}
+		})
+	}
+}
+
 func TestManifest_Validate_RejectsUppercaseOrShortDigest(t *testing.T) {
 	cases := map[string]string{
 		"uppercase hex": "sha256:" + strings.Repeat("A", 64),

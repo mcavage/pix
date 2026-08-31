@@ -418,22 +418,29 @@ func runEnvTrust(d *cli.Deps, home pixhome.Paths, name string, yes, verbose bool
 }
 
 // renderTrustBill prints workflow/env's canonical BillOfMaterials: counts
-// plus every host command/service name, credential destination, and mount
-// expansion by default (D15); full argv and content digests behind
-// --verbose. Every value that can carry AUTHORED environment content
-// (attacker-controlled for a cloned or shared environment) passes through
-// sys.TerminalSafe before reaching the terminal a human is about to answer
-// "y" on: a raw ESC/CSI/OSC could repaint or retitle the consent screen,
-// and a raw newline could forge a renderer-owned line (a fake count, a
-// fake prompt, a fake "trusted" verdict). This is the same discipline the
-// deleted v1 environment-review renderer applied (docs/design/environments.md
-// §9.1's Wave C security M1); it is not optional polish.
+// plus every host command/service name, credential destination, mount
+// expansion, and inference backend by default (D15); full argv and content
+// digests behind --verbose. Inference facts render by default (never only
+// under --verbose) because a model-traffic endpoint is one of the four
+// things docs/design/environments.md §9.1 names the trust fingerprint
+// exists to gate, alongside host execution, credential disclosure, and
+// mount expansion: a human must see every backend name, driver, base URL,
+// and auth mode an accepted environment would route a session's model
+// traffic through before answering y/N, not just count it. Every value
+// that can carry AUTHORED environment content (attacker-controlled for a
+// cloned or shared environment) passes through sys.TerminalSafe before
+// reaching the terminal a human is about to answer "y" on: a raw ESC/CSI/OSC
+// could repaint or retitle the consent screen, and a raw newline could
+// forge a renderer-owned line (a fake count, a fake prompt, a fake
+// "trusted" verdict). This is the same discipline the deleted v1
+// environment-review renderer applied (docs/design/environments.md §9.1's
+// Wave C security M1); it is not optional polish.
 func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, verbose bool) {
 	safe := sys.TerminalSafe
 	fmt.Fprintf(out, "pix env trust %s\n", safe(name))
 	fmt.Fprintln(out, "  environment runs code on your host and hands it credentials:")
-	fmt.Fprintf(out, "  %d host command(s), %d host service(s), %d credential target(s), %d mount(s), %d MCP server(s), %d kit(s)\n\n",
-		len(b.HostCommands), len(b.HostServices), len(b.CredentialTargets), len(b.EffectiveMounts), len(b.MCPServers), len(b.Kits))
+	fmt.Fprintf(out, "  %d host command(s), %d host service(s), %d credential target(s), %d mount(s), %d MCP server(s), %d kit(s), %d inference backend(s)\n\n",
+		len(b.HostCommands), len(b.HostServices), len(b.CredentialTargets), len(b.EffectiveMounts), len(b.MCPServers), len(b.Kits), len(b.Inference))
 	for _, c := range b.HostCommands {
 		fmt.Fprintf(out, "  runs on this host: %s\n", safe(c.Name))
 	}
@@ -452,6 +459,10 @@ func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, ve
 	}
 	for _, r := range b.NoVerifyRegistries() {
 		fmt.Fprintf(out, "  no-verify registry: %s\n", safe(r.Host))
+	}
+	for _, inf := range b.Inference {
+		fmt.Fprintf(out, "  inference:         %s  driver %s  base_url %s  auth %s\n",
+			safe(inf.Name), safe(inf.Driver), safe(inf.BaseURL), safe(inf.Auth))
 	}
 	for _, it := range b.Interpolations {
 		src := fmt.Sprintf("${%s}", it.Var)

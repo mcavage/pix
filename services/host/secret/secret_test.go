@@ -645,3 +645,45 @@ func TestModelKeyMissingMessage_NamesNoRemovedVerb(t *testing.T) {
 		}
 	})
 }
+
+// TestRunSecretSet_NamesNoRemovedVerb is the final-findings companion to
+// TestModelKeyMissingMessage_NamesNoRemovedVerb: RunSecretSetLocked's own
+// "what's next" guidance (printed immediately after storing a KNOWN
+// provider/tool key ref, secret.go) used to name the SAME two removed v1
+// verbs — "pix models add <name>" for a model-provider key and "pix secret
+// sync" for a tool key — both of which exit 2 (unknown command) in v2. Every
+// branch (a model-provider key, a tool key) must name only real v2 verbs.
+func TestRunSecretSet_NamesNoRemovedVerb(t *testing.T) {
+	removed := []string{"pix models", "pix secret sync", "secret sync", "models add"}
+
+	t.Run("model provider key", func(t *testing.T) {
+		files := map[string]string{fakeRefsPath: ""}
+		env := memEnv(t, files)
+		var out bytes.Buffer
+		if err := RunSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/key", nil); err != nil {
+			t.Fatalf("RunSecretSet: %v (out=%q)", err, out.String())
+		}
+		for _, r := range removed {
+			if strings.Contains(out.String(), r) {
+				t.Errorf("output names removed verb %q:\n%s", r, out.String())
+			}
+		}
+		if !strings.Contains(out.String(), "pix run") {
+			t.Errorf("output must still guide to a real v2 next step, got:\n%s", out.String())
+		}
+	})
+
+	t.Run("tool key", func(t *testing.T) {
+		files := map[string]string{fakeRefsPath: ""}
+		env := memEnv(t, files)
+		var out bytes.Buffer
+		if err := RunSecretSet(env, &out, "PARALLEL_API_KEY", "op://v/parallel/key", nil); err != nil {
+			t.Fatalf("RunSecretSet: %v (out=%q)", err, out.String())
+		}
+		for _, r := range removed {
+			if strings.Contains(out.String(), r) {
+				t.Errorf("output names removed verb %q:\n%s", r, out.String())
+			}
+		}
+	})
+}

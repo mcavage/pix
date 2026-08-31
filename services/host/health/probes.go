@@ -504,8 +504,11 @@ func (p ProviderKeyProbe) Check(ctx context.Context) Result {
 				// unrouted key is a smaller roster, not a fault. But say it, because
 				// the alternative is a user watching roles resolve to models they did
 				// not pick with every line on this screen green.
-				detail += fmt.Sprintf(" (%s: key set, no model wired \u2014 `pix models add %s`)",
-					strings.Join(unrouted, ", "), unrouted[0])
+				// Final findings: `pix models add` is a removed v1 verb (exit 2 in
+				// v2). ModelKeyFix ("pix setup") is the ONE real place a provider
+				// binding is (re)configured now, so it is the one named here too.
+				detail += fmt.Sprintf(" (%s: key set, no model wired \u2014 `%s`)",
+					strings.Join(unrouted, ", "), ModelKeyFix)
 				evidence += "; no callable binding for " + strings.Join(unrouted, ", ")
 			}
 			return Result{Name: p.Name(), Status: StatusReady, Detail: detail, Evidence: evidence}

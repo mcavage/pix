@@ -19,8 +19,8 @@
       }
     },
     "pix/host/cmd/pix": {
-      "_prod_loc_note": "Round-7: setupSelectedEnvironment (--env NAME requirements check + trust review) and runEnvTrust's extraction/reuse, plus the config.toml -> DefaultEnvironment plumbing setup_cmd.go and doctor_cmd.go now read — real new logic, not accumulation.",
-      "prod_loc": 3795,
+      "_prod_loc_note": "Round-7: setupSelectedEnvironment (--env NAME requirements check + trust review) and runEnvTrust's extraction/reuse, plus the config.toml -> DefaultEnvironment plumbing setup_cmd.go and doctor_cmd.go now read — real new logic, not accumulation. Final security findings: renderTrustBill now renders every BillOfMaterials.Inference fact (name/driver/base_url/auth) in BOTH default and --verbose consent output, not just a count — a model-traffic endpoint is one of the four things the trust fingerprint gates, so a reviewer must see it before y/N.",
+      "prod_loc": 3806,
       "test_loc": 5024,
       "exports": 5,
       "exports_used_externally": 0,
@@ -83,8 +83,8 @@
       }
     },
     "pix/host/health": {
-      "_prod_loc_note": "Round-7: health.EnvironmentDefaultProbe + its environmentNames helper — the doctor remedy for \"an environment exists but no default is selected\" (pix env default NAME), never a guess.",
-      "prod_loc": 1452,
+      "_prod_loc_note": "Round-7: health.EnvironmentDefaultProbe + its environmentNames helper — the doctor remedy for \"an environment exists but no default is selected\" (pix env default NAME), never a guess. Final security findings: ProviderKeyProbe.Check's wired-but-unrouted detail named the removed v1 verb `pix models add`; it now names ModelKeyFix (`pix setup`), the one real v2 remedy.",
+      "prod_loc": 1455,
       "test_loc": 1116,
       "exports": 46,
       "exports_used_externally": 7,
@@ -218,13 +218,14 @@
       }
     },
     "pix/host/release": {
-      "prod_loc": 688,
+      "_prod_loc_note": "Final security findings (defense in depth): Manifest.Version was checked only for non-empty, yet flows unquoted into a filesystem path (RuntimeDir, extractRuntimeArchive's tar-entry prefix). Added versionRE + validateVersion — a conservative, semver-compatible [A-Za-z0-9][A-Za-z0-9._-]* grammar refusing slash, backslash, dot-segments, and control characters — wired into Manifest.Validate (the one gate ParseBundleManifest/Parse both already call), so a traversal-shaped version is refused before any archive is staged.",
+      "prod_loc": 721,
       "test_loc": 700,
       "exports": 19,
       "exports_used_externally": 3,
       "exits": 0,
       "streams": 0,
-      "globals": 8,
+      "globals": 9,
       "init": 0,
       "edges": 0,
       "parser_families": {
