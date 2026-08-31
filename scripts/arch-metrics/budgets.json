@@ -105,8 +105,8 @@
       "_prod_loc_note": "New L2 package: the environment [[setup]] hook runner (check, apply, check again) plus the executable-identity proof (HashSetupExecutable) both the trust bill and the pre-exec re-proof take. It owns the resolved-hook type so the fingerprinted value and the executed value cannot drift. TOCTOU close + `inputs`: a private, per-hook 0700 execution snapshot (takeSnapshot/copyVerified/mismatchError) re-verifies the executable AND every declared companion input's content in the SAME read that copies its bytes (hosttrust.ReadVerifiedFile), and check/apply/postcheck now execute ONLY the snapshot's copied bytes with the snapshot root as cwd. Adds ProveContained (EvalSymlinks-based containment proof for a relative command or input), the HookInput type, and a sys.TerminalSafe pass over captured check output before it is ever rendered. +1 edge (pix/host/sys), +2 exports (ProveContained, HookInput), +1 global (boundedBuffer's new sync.Mutex)."
     },
     "pix/host/health": {
-      "_prod_loc_note": "Round-7: health.EnvironmentDefaultProbe + its environmentNames helper \u2014 the doctor remedy for \"an environment exists but no default is selected\" (pix env default NAME), never a guess. Final security findings: ProviderKeyProbe.Check's wired-but-unrouted detail named the removed v1 verb `pix models add`; it now names ModelKeyFix (`pix setup`), the one real v2 remedy.",
-      "prod_loc": 1537,
+      "_prod_loc_note": "Round-7: health.EnvironmentDefaultProbe + its environmentNames helper \u2014 the doctor remedy for \"an environment exists but no default is selected\" (pix env default NAME), never a guess. Final security findings: ProviderKeyProbe.Check's wired-but-unrouted detail named the removed v1 verb `pix models add`; it now names ModelKeyFix (`pix setup`), the one real v2 remedy. sbx compatibility: tagged builds are accepted only when their numeric core is strictly newer than the 0.39.0 floor, allowing 0.41.0-rc1 development without accepting 0.39.0-rc1.",
+      "prod_loc": 1542,
       "test_loc": 1108,
       "exports": 47,
       "exports_used_externally": 6,

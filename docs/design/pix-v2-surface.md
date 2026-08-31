@@ -53,10 +53,12 @@ Pix v2 requires:
 Cloud-only sessions do not require llmman or Ollama. Environments that use only
 sbx-managed provider sessions do not require 1Password.
 
-Native sbx environments are experimental in sbx 0.39. Pix v2 pins a tested sbx
-version range and refuses unsupported versions. It has no legacy launch fallback.
-A new sbx release enters the supported range only after host acceptance tests
-pass.
+Native sbx environments are experimental in sbx 0.39. Pix v2 requires a
+numeric version core of 0.39.0 or later. A tagged build is accepted only when
+its numeric core is strictly newer than that floor, so development builds such
+as 0.41.0-rc1 can test newer sbx behavior while 0.39.0-rc1 remains refused. It
+has no legacy launch fallback. A new stable sbx release enters the supported
+range only after host acceptance tests pass.
 
 ## 3. Command surface
 

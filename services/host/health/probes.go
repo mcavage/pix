@@ -121,9 +121,9 @@ func newSbxVersionMatch(number, suffix string) sbxVersionMatch {
 //
 // A version whose text carries anything after the dotted number itself (a
 // "-rc1"/"beta2"/etc. build tag with no space before it) is reported with
-// prerelease=true: the fail-closed prerelease policy trusts as "explicitly
-// known stable" only a bare release number, never a tagged one, regardless
-// of what the tag itself says.
+// prerelease=true. The compatibility gate accepts it only when its numeric
+// core is strictly newer than SbxMinVersion; a prerelease at the minimum may
+// still predate the capability that minimum release established.
 func parseSbxVersion(out string) (sbxVersionMatch, bool) {
 	if trimmed := strings.TrimSpace(out); trimmed != "" {
 		if m := sbxVersionOnly.FindStringSubmatch(trimmed); m != nil {
@@ -302,23 +302,24 @@ func sbxProbeResult(name string, o execOutcome, usedFallback bool) Result {
 	if usedFallback {
 		evidence = "sbx version = " + match.raw + " (fell back from --version, which this sbx build rejected)"
 	}
-	// A prerelease/build-tagged answer is never "explicitly known stable":
-	// fail closed on it exactly like a too-old version, regardless of what its
-	// numeric part alone would say, and regardless of what the tag itself
-	// reads as.
-	if match.prerelease {
-		return Result{Name: name, Status: StatusAbsent, Detail: match.raw, Fix: SbxUpgradeFix,
-			Evidence: evidence + "; a prerelease/build-tagged version is not treated as a stable release"}
-	}
 	// Native environments require SbxMinVersion or later (PRD section 4/5.6,
 	// AC-20): a version that answered and parsed cleanly, but is too old, is a
 	// VERIFIED gap with its own exact fix — distinct from SbxInstallFix, which
 	// repairs a missing binary, not an old one.
 	if !sbxVersionAtLeast(match.number, SbxMinVersion) {
-		return Result{Name: name, Status: StatusAbsent, Detail: match.number, Fix: SbxUpgradeFix,
+		return Result{Name: name, Status: StatusAbsent, Detail: match.raw, Fix: SbxUpgradeFix,
 			Evidence: evidence + fmt.Sprintf("; native environments require %s or later", SbxMinVersion)}
 	}
-	return Result{Name: name, Status: StatusReady, Detail: match.number, Evidence: evidence}
+	if match.prerelease && !sbxVersionGreater(match.number, SbxMinVersion) {
+		return Result{Name: name, Status: StatusAbsent, Detail: match.raw, Fix: SbxUpgradeFix,
+			Evidence: evidence + "; a prerelease at the minimum version may predate required native-environment support"}
+	}
+	detail := match.number
+	if match.prerelease {
+		detail = match.raw
+		evidence += "; tagged build accepted because its numeric core is newer than the minimum"
+	}
+	return Result{Name: name, Status: StatusReady, Detail: detail, Evidence: evidence}
 }
 
 // sbxVersionAtLeast reports whether v (a dotted version SbxProbe already
@@ -345,6 +346,10 @@ func sbxVersionAtLeast(v, min string) bool {
 	return true
 }
 
+func sbxVersionGreater(v, min string) bool {
+	return sbxVersionAtLeast(v, min) && !sbxVersionAtLeast(min, v)
+}
+
 // ValidateSbxVersionOutput validates the banner returned by `sbx version` for
 // callers that already own process execution, such as `pix setup`'s
 // mutation-before-preflight gate. It shares the exact parser and minimum with
@@ -354,11 +359,11 @@ func ValidateSbxVersionOutput(out string) error {
 	if !ok {
 		return fmt.Errorf("unrecognized sbx version output")
 	}
-	if match.prerelease {
-		return fmt.Errorf("sbx %s is a prerelease/build-tagged version; stable %s or later is required", match.raw, SbxMinVersion)
-	}
 	if !sbxVersionAtLeast(match.number, SbxMinVersion) {
-		return fmt.Errorf("sbx %s is too old; %s or later is required", match.number, SbxMinVersion)
+		return fmt.Errorf("sbx %s is too old; %s or later is required", match.raw, SbxMinVersion)
+	}
+	if match.prerelease && !sbxVersionGreater(match.number, SbxMinVersion) {
+		return fmt.Errorf("sbx %s is a prerelease at the minimum supported version; stable %s or a newer tagged build is required", match.raw, SbxMinVersion)
 	}
 	return nil
 }
