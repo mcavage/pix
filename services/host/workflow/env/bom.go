@@ -505,7 +505,10 @@ func computeSetupHooks(root string, s *envinfo.Sidecar, b *BillOfMaterials) erro
 			if err != nil {
 				return fmt.Errorf("setup hook %q: input %q: %w (cannot fingerprint the host-exec surface; fail closed)", h.ID, in, err)
 			}
-			inSHA, err := hashPath(resolvedIn)
+			// Setup snapshots copy inputs as files. Refuse a directory here,
+			// before trust review, rather than rendering a directory hash the
+			// executor can never materialize as one declared input.
+			inSHA, err := hosttrust.HashFile(resolvedIn, resolvedIn)
 			if err != nil {
 				return fmt.Errorf("setup hook %q: input %q: %w (cannot fingerprint the host-exec surface; fail closed)", h.ID, in, err)
 			}

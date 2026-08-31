@@ -167,6 +167,17 @@ func TestComputeBoM_SetupHookInputIsResolvedHashedAndFingerprinted(t *testing.T)
 	}
 }
 
+func TestComputeBoM_DirectorySetupHookInputFailsBeforeTrust(t *testing.T) {
+	env := setupHookEnv(t, setupSidecarWithInput, "#!/bin/sh\nexit 0\n")
+	if err := os.MkdirAll(filepath.Join(env.Root, "lib", "helper.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ComputeBoM(env, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("a directory input must fail before trust review, got %v", err)
+	}
+}
+
 func TestComputeBoM_MissingSetupHookInputFailsClosed(t *testing.T) {
 	env := setupHookEnv(t, setupSidecarWithInput, "#!/bin/sh\nexit 0\n")
 	// lib/helper.sh is declared but never written.
