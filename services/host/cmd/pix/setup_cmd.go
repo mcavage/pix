@@ -16,7 +16,10 @@ import (
 	"pix/host/container"
 	"pix/host/pixhome"
 	"pix/host/release"
+	nativeenv "pix/host/workflow/env"
+	"pix/host/workflow/launch"
 	"pix/host/workflow/provision"
+	"pix/host/workspace"
 )
 
 // setupSeams is every external effect `pix setup` reaches for. Production
@@ -51,7 +54,8 @@ func (c *setupCmd) Help() string { return provision.Description }
 // setupCmd provisions PIX_HOME. It takes no workspace argument and performs
 // no agent handoff: `pix run` is the only thing that starts a sandbox.
 type setupCmd struct {
-	Verbose bool `help:"Show the pix-memory container and MCP registration detail, not just the summary."`
+	Verbose bool   `help:"Show the pix-memory container and MCP registration detail, not just the summary."`
+	Env     string `help:"Also set up one existing environment: validate its declared requirements (docs/design/pix-v2-surface.md §3.6 step 7) and, if untrusted, run the same trust review pix env trust NAME does. It does not select that environment as the default."`
 }
 
 func (c *setupCmd) Run(d *cli.Deps) error { return c.run(d, productionSetupSeams()) }
@@ -107,9 +111,55 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 		return err
 	}
 	renderSetupResult(d, home, res, c.Verbose)
+	if c.Env != "" {
+		if eerr := setupSelectedEnvironment(d, home, c.Env); eerr != nil {
+			return eerr
+		}
+	}
 	if !res.Ready() {
 		return cli.SilentError{Code: 1}
 	}
+	return nil
+}
+
+// setupSelectedEnvironment is `--env NAME`'s whole job (surface §3.6): sets
+// up ONE EXISTING environment in addition to the machine-level
+// prerequisites Run already handled above, and never selects it as the
+// default (that is `pix env default NAME`'s job alone). It performs the
+// same complete, default-No trust review `pix env trust NAME` does before
+// checking anything else — an untrusted environment on a non-interactive
+// terminal refuses here, naming that exact command, rather than silently
+// skipping the review — then validates what this environment itself
+// declares: its [inference.*] backends parse to a supported driver, and
+// every roster reference ([models].main, each [agents] entry) resolves to
+// a model machine config or this environment's own [[inference.models]]
+// actually defines. Nothing here mutates config.toml or installs anything;
+// a real reachability probe of a declared backend is `pix doctor`'s job
+// (its own read-only probe set), not setup's.
+func setupSelectedEnvironment(d *cli.Deps, home pixhome.Paths, name string) error {
+	sel, err := nativeenv.ResolveIn(home, name)
+	if err != nil {
+		return envRun(d, err)
+	}
+	if terr := runEnvTrust(d, home, name, false, false); terr != nil {
+		return terr
+	}
+	loaded, err := nativeenv.LoadHome(sel, nil, nil)
+	if err != nil {
+		return err
+	}
+	cfg, _, err := workspace.LoadResolvedConfig()
+	if err != nil {
+		return err
+	}
+	if _, ierr := launch.EffectiveInferenceConfig(cfg, loaded.Sidecar); ierr != nil {
+		return fmt.Errorf("pix setup --env %s: %w", name, ierr)
+	}
+	shipped, _, _ := listAgents()
+	if verr := validateRunRoster(cfg, launch.EnvSelection{Name: loaded.Name, Root: loaded.Root, Sidecar: loaded.Sidecar}, shipped); verr != nil {
+		return fmt.Errorf("pix setup --env %s: %v", name, verr)
+	}
+	fmt.Fprintf(d.Out, "pix setup: environment %q declared requirements check passed.\n", name)
 	return nil
 }
 

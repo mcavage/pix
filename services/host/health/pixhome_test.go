@@ -3,6 +3,8 @@ package health
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"pix/host/container"
@@ -38,6 +40,37 @@ func TestReleaseInstalledProbe_ReadyWhenInstalled(t *testing.T) {
 	res := ReleaseInstalledProbe{Home: home}.Check(context.Background())
 	if res.Status != StatusReady {
 		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestEnvironmentDefaultProbe_ReadyWhenSelected(t *testing.T) {
+	res := EnvironmentDefaultProbe{Home: t.TempDir(), DefaultEnvironment: "default"}.Check(context.Background())
+	if res.Status != StatusReady {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestEnvironmentDefaultProbe_OffWhenNoEnvironmentExistsYet(t *testing.T) {
+	res := EnvironmentDefaultProbe{Home: t.TempDir()}.Check(context.Background())
+	if res.Status != StatusOff {
+		t.Fatalf("res = %+v, want StatusOff (nothing to point a fix at yet)", res)
+	}
+	if res.Fix != "" {
+		t.Fatalf("res.Fix = %q, want empty: StatusOff never carries a fix", res.Fix)
+	}
+}
+
+func TestEnvironmentDefaultProbe_AbsentNamesEnvDefaultWhenEnvironmentsExistButNoneSelected(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "envs", "work"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res := EnvironmentDefaultProbe{Home: home}.Check(context.Background())
+	if res.Status != StatusAbsent {
+		t.Fatalf("res = %+v, want StatusAbsent", res)
+	}
+	if res.Fix != "pix env default NAME" {
+		t.Fatalf("res.Fix = %q, want the exact named remedy, never a guess", res.Fix)
 	}
 }
 

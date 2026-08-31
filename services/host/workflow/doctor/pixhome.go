@@ -30,6 +30,12 @@ type HomeDeps struct {
 	MCPLister      health.MCPLister
 	MCPServerName  string
 	MCPExpectedURL string
+
+	// DefaultEnvironment is config.toml's own field (config.Config.
+	// DefaultEnvironment), read by the caller and handed in here rather than
+	// reloaded — this probe set must never disagree with the same config
+	// value the rest of `pix doctor`/`pix run` already resolved.
+	DefaultEnvironment string
 }
 
 // CheckHome runs every v2 probe concurrently under budget (zero uses
@@ -43,6 +49,7 @@ func CheckHome(ctx context.Context, d HomeDeps, budget time.Duration) health.Sna
 		health.GitAvailableProbe{Exec: d.Exec},
 		health.MemoryContainerProbe{Runner: d.ContainerRunner, Spec: d.ContainerSpec, Prober: d.Prober},
 		health.MemoryMCPRegistrationProbe{Lister: d.MCPLister, ServerName: d.MCPServerName, ExpectedURL: d.MCPExpectedURL},
+		health.EnvironmentDefaultProbe{Home: d.Home, DefaultEnvironment: d.DefaultEnvironment},
 	}
 	return health.Run(ctx, budget, probes...)
 }

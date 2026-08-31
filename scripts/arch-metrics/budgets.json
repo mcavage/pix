@@ -19,8 +19,8 @@
       }
     },
     "pix/host/cmd/pix": {
-      "_prod_loc_note": "QA F4: homeContainerSpec now reads container.ReadMemoryPort(home) instead of the fixed container.DefaultMemoryPort literal, so doctor/run/env-preview all show this PIX_HOME's own allocated port \u2014 a few lines, not accumulation.",
-      "prod_loc": 3754,
+      "_prod_loc_note": "Round-7: setupSelectedEnvironment (--env NAME requirements check + trust review) and runEnvTrust's extraction/reuse, plus the config.toml -> DefaultEnvironment plumbing setup_cmd.go and doctor_cmd.go now read — real new logic, not accumulation.",
+      "prod_loc": 3795,
       "test_loc": 5024,
       "exports": 5,
       "exports_used_externally": 0,
@@ -83,9 +83,10 @@
       }
     },
     "pix/host/health": {
-      "prod_loc": 1384,
+      "_prod_loc_note": "Round-7: health.EnvironmentDefaultProbe + its environmentNames helper — the doctor remedy for \"an environment exists but no default is selected\" (pix env default NAME), never a guess.",
+      "prod_loc": 1452,
       "test_loc": 1116,
-      "exports": 45,
+      "exports": 46,
       "exports_used_externally": 7,
       "exits": 0,
       "streams": 1,
@@ -339,10 +340,10 @@
       }
     },
     "pix/host/workflow/launch": {
-      "_prod_loc_note": "Review round 1 blocker #2 fix: FindPositivelyIdentified (the running-or-stopped identity check DecideEnvAttach's reattach gate now uses) and DecideEnvAttach's relaxed running-or-stopped gate. Real new logic (a stopped sandbox used to be refused outright by this gate), not accumulation.",
-      "prod_loc": 4854,
+      "_prod_loc_note": "Review round 1 blocker #2 fix: FindPositivelyIdentified (the running-or-stopped identity check DecideEnvAttach's reattach gate now uses) and DecideEnvAttach's relaxed running-or-stopped gate. Real new logic (a stopped sandbox used to be refused outright by this gate), not accumulation. Round-7 adds EffectiveInferenceConfig: the production merge of a selected environment's pix.toml [inference.*] over machine config into an ephemeral, never-persisted snapshot for SynthesizeInferenceKit/CallableRuntimeModels/roster validation.",
+      "prod_loc": 4961,
       "test_loc": 6474,
-      "exports": 192,
+      "exports": 193,
       "exports_used_externally": 61,
       "exits": 0,
       "streams": 3,

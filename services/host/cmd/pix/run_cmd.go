@@ -364,6 +364,22 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	if err != nil {
 		return runFail(d, 1, "%v", err)
 	}
+	// The selected environment's OWN pix.toml [inference.*] declarations
+	// (Ollama, llmman/OpenAI-compatible, or a plain native backend) merge
+	// OVER machine config's inference into an EPHEMERAL snapshot for this
+	// run only — disk is never touched, and an environment-authored backend
+	// or model always wins over a machine one of the same name. Every
+	// inference decision from here on (the provider-key gate above already
+	// ran against the pre-merge machine cfg, which is correct: that gate is
+	// about THIS HOST's key material, not a per-environment concern) reads
+	// this SAME merged value — AllowsModel, roster validation, kit
+	// synthesis, and --models — so a model this environment declares can
+	// never pass one check and fail another. An unknown backend driver
+	// refuses here, before anything is created.
+	cfg, err = launch.EffectiveInferenceConfig(cfg, selection.Sidecar)
+	if err != nil {
+		return runFail(d, 2, "%v", err)
+	}
 	// D13/AC-59: the one quiet, negative-first nudge about an unregistered
 	// workspace `.sbxenv.yaml` — read-only, no prompt, no config mutation, at
 	// most once per canonical workspace ever (workflow/env.RunHint owns every

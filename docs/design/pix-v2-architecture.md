@@ -205,11 +205,16 @@ Files containing machine state are mode `0600`; their parent directories are
 `0700`. Durable writes use a same-directory temporary file, fsync where loss
 changes authority or ownership, then atomic rename or no-replace link.
 
-`config.toml` contains only the default environment, the allocated pix-memory
-loopback port (`memory_port`, written once by `pix setup` — see §9.1), selected
-local inference backend, and installed release manifest identity. `secrets.env`
-contains only `NAME=op://...` references. Neither is tracked by the initialized
-Git repository.
+`config.toml` contains only the default environment (written by `pix env
+default NAME`, and once, atomically, by `pix setup` itself the moment it
+scaffolds a fresh host's first environment), the allocated pix-memory
+loopback port (`memory_port`, written once by `pix setup` — see §9.1), and
+installed release manifest identity. `secrets.env` contains only
+`NAME=op://...` references. Neither is tracked by the initialized Git
+repository. Local inference is never a machine-wide `config.toml` field: it
+is authored per environment in that environment's own `pix.toml`
+`[inference.*]` tables, and merged over machine config into an ephemeral,
+never-persisted snapshot for the one `pix run` session that selected it.
 
 There is no XDG fallback in v2: `config.Path`/`StateDir`/`DataDir`/`ContextDir`
 resolve under `PIX_HOME` alone, with no `PIX_CONFIG`/`XDG_*` fallback of any
@@ -548,12 +553,15 @@ when the selected environment needs direct 1Password resolution.
 
 `pix setup` is idempotent and mutation is explicit. It:
 
-1. verifies Docker, sbx, Git, and conditional `op`/local inference prerequisites;
+1. verifies Docker, sbx, Git, and conditional `op` prerequisites;
 2. initializes `~/.pix` and `git init -b main` without staging or overwriting;
 3. installs the runtime archive and records the release manifest;
 4. verifies the agent image and strict kit;
-5. creates a default environment only when none exists;
-6. configures the selected inference backends;
+5. creates a default environment only when none exists, and selects it as
+   the machine default under the same config-lock write;
+6. validates `--env NAME`'s declared requirements, when given, including any
+   local inference backend its `pix.toml` authors — setup never interviews
+   for a machine-wide choice, and never writes one;
 7. creates or reconciles `pix-memory`;
 8. runs approved integration setup/authentication; and
 9. probes the complete result.

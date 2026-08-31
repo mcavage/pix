@@ -238,13 +238,25 @@ binary to a working first session. It:
    overwriting anything already there;
 3. installs the runtime archive and records the release manifest;
 4. verifies the `pix-agent` image and strict kit;
-5. creates a default environment only when none exists;
-6. configures the selected local inference backend (llmman or Ollama);
-7. seeds and validates `op://` references, never writing a secret value;
-8. creates or reconciles the `pix-memory` container;
+5. creates a default environment only when none exists, and selects it as
+   the machine default in the same atomic step;
+6. seeds and validates `op://` references, never writing a secret value;
+7. creates or reconciles the `pix-memory` container;
+8. checks requirements declared by the selected environment (`--env NAME`),
+   including validating any local inference backend (llmman or Ollama, over
+   its native or OpenAI-compatible transport) that environment's `pix.toml`
+   authors;
 9. runs approved integration setup/authentication for the selected
    environment; and
 10. probes the complete result before reporting it ready.
+
+There is no setup interview: setup never asks which cloud provider, llmman, or
+Ollama to use. A provider key is added with `pix secret set`; local inference
+is authored directly in an environment's own `pix.toml`, and `pix run` merges
+that declaration over machine config for the session it launches. Setup and
+doctor only validate what an environment already declares: neither chooses
+on the user's behalf, and neither silently prefers or migrates one backend
+over another.
 
 `--env NAME` sets up one existing environment in addition to machine-level
 prerequisites; it does not select that environment as the default. When
@@ -257,8 +269,9 @@ that command.
 
 `pix doctor` is read-only. It checks Docker and sbx availability and version,
 the pinned images/kit/runtime-data identity, environment schema and trust
-state, selected cloud and local model reachability, `op://` reference
-resolution where required, sbx Gateway MCP registration and authentication,
+state, reachability of the selected environment's declared cloud and local
+model backends, `op://` reference resolution where required, sbx Gateway MCP
+registration and authentication,
 each required local command or integration-owned endpoint, the memory MCP
 endpoint/storage/embeddings/capture mode/scope isolation, session state, and
 sandbox declaration drift that requires recreation. Every failing row names

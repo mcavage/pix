@@ -48,13 +48,21 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 	homeFailed := false
 	if home, herr := pixhome.Resolve(); herr == nil {
 		spec := homeContainerSpec(home)
+		// config.toml's own DefaultEnvironment, read independently of the
+		// (v1) workspace profile config below — EnvironmentDefaultProbe must
+		// never disagree with what `pix env`/`pix run` themselves resolve.
+		var defaultEnv string
+		if hc, cerr := config.LoadFrom(config.PathAt(home.Home)); cerr == nil {
+			defaultEnv = hc.DefaultEnvironment
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), health.DefaultBudget)
 		snap := doctor.CheckHome(ctx, doctor.HomeDeps{
-			Home:            home.Home,
-			Exec:            execChecker{},
-			ContainerRunner: container.DefaultRunner,
-			ContainerSpec:   spec,
-			Prober:          httpProber{},
+			Home:               home.Home,
+			Exec:               execChecker{},
+			ContainerRunner:    container.DefaultRunner,
+			ContainerSpec:      spec,
+			Prober:             httpProber{},
+			DefaultEnvironment: defaultEnv,
 			// MCPLister is deliberately unset: sbx has no machine-readable MCP
 			// listing (homeadapters.go's own doc comment), so this probe
 			// reports StatusUnknown rather than guessing a URL match.

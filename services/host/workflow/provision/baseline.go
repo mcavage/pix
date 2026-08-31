@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"pix/host/config"
 	"pix/host/container"
 	"pix/host/pixhome"
 	"pix/host/release"
@@ -109,6 +110,22 @@ const DefaultEnvironmentName = "default"
 // merges, and never touches an existing environment directory: an
 // environment is a plain directory the user owns (surface §4), and setup's
 // job is only to make sure a brand-new host is not left with zero.
+//
+// A fresh host that gets this environment ALSO gets it selected: the whole
+// point of "a runnable default environment when none exists" (surface §3.6
+// step 4) is a working first `pix run`, and a created-but-unselected
+// environment is not that — bare `pix run` would still resolve to D17's
+// `none` and never touch the very environment this call just wrote. The
+// write goes through config.SetDefaultEnvironmentAt: load-modify-save the
+// WHOLE schema under the config lock, so a concurrent writer's own field
+// (MemoryPort, Inference, VersionPin — every sibling this function has no
+// business knowing about) is never lost to a stale-load race. It is set
+// ONLY when this call is the one that actually created the directory, and
+// ONLY when config.toml does not already name a default: a host that
+// somehow already has one (a restored config.toml, a concurrent `pix env
+// default` racing this same call) is left exactly as authored, never
+// guessed over — that guess belongs to nobody, least of all a first-run
+// convenience.
 func EnsureDefaultEnvironment(home pixhome.Paths, m release.Manifest) (bool, error) {
 	entries, err := os.ReadDir(home.Envs)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -146,6 +163,18 @@ func EnsureDefaultEnvironment(home pixhome.Paths, m release.Manifest) (bool, err
 		if err := f.Close(); err != nil {
 			return false, fmt.Errorf("write %s: %w", path, err)
 		}
+	}
+
+	// Select it, atomically, preserving every sibling config.toml field —
+	// see this function's own doc comment for why and for the "only when
+	// still unset" guard.
+	if err := config.WithLockAt(home.Home, func(c *config.Config) error {
+		if strings.TrimSpace(c.DefaultEnvironment) == "" {
+			c.DefaultEnvironment = DefaultEnvironmentName
+		}
+		return nil
+	}); err != nil {
+		return false, fmt.Errorf("select the default environment: %w", err)
 	}
 	return true, nil
 }

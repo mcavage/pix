@@ -269,14 +269,23 @@ It performs only these jobs:
 1. checks Docker and the supported `sbx` version;
 2. installs or verifies the pinned Pix kit and required DHI-based images;
 3. creates global Pi settings from shipped defaults when they do not exist;
-4. creates a runnable default environment when none exists;
-5. selects cloud provider, llmman, Ollama, or a combination;
-6. seeds and validates `op://` references without writing secret values;
-7. installs and starts the local memory MCP container;
-8. checks requirements declared by the selected environment;
-9. runs previously trusted installer or interactive authentication commands
+4. creates a runnable default environment when none exists, and selects it as
+   the machine default in the same step (a fresh host must not scaffold an
+   environment nothing then points at);
+5. seeds and validates `op://` references without writing secret values;
+6. installs and starts the local memory MCP container;
+7. checks requirements declared by the selected environment (`--env NAME`),
+   including validating any local inference backend that environment's
+   `pix.toml` authors;
+8. runs previously trusted installer or interactive authentication commands
    needed by selected integrations; and
-10. probes the result before reporting it ready.
+9. probes the result before reporting it ready.
+
+There is no setup interview. Setup never asks which cloud provider, llmman, or
+Ollama to use: a provider key is added with `pix secret set`, and local
+inference is authored directly in an environment's `pix.toml` (§7). Setup only
+validates what an environment already declares; it never chooses on the
+user's behalf and never silently prefers or migrates between backends.
 
 `--env NAME` sets up one existing environment in addition to machine-level
 prerequisites. It does not select that environment as the default.
@@ -299,7 +308,9 @@ run. The initial specification does not require that convenience.
 - the pinned Pix images, kit, and runtime-data version;
 - global Pi configuration;
 - environment schema and trust state;
-- selected cloud and local model reachability;
+- reachability of the selected environment's declared cloud and local model
+  backends (Ollama and llmman, over their native or OpenAI-compatible
+  transport, as that environment's `pix.toml` authors them);
 - 1Password reference resolution where required;
 - sbx Gateway MCP registration and authentication;
 - each required local command or integration-owned endpoint;
@@ -374,12 +385,18 @@ behalf.
 `config.toml` contains only machine-wide Pix choices that native sbx
 environments cannot own:
 
-- the default environment name, written by `pix env default NAME`;
+- the default environment name, written by `pix env default NAME` (and once,
+  atomically, by `pix setup` itself the moment it scaffolds a fresh host's
+  first environment — see §3.6);
 - the allocated pix-memory loopback port (`memory_port`), written once by
   `pix setup` on first run — a per-`PIX_HOME` allocation, never a shared
   constant, so two independent `PIX_HOME` installs on one host never collide;
-- the selected local inference backend, written by `pix setup`;
 - the pinned Pix image set and kit version, written by install or upgrade.
+
+Local inference is never a machine-wide `config.toml` field: it is authored
+per environment in that environment's own `pix.toml` (§7), so two
+environments on the same host can name different backends, or none, without
+either one touching the other.
 
 Pix v2 has no generic config mutation command. Each field has one named writer.
 
@@ -605,13 +622,20 @@ Agent selection order is:
 3. selected main model;
 4. parent model inheritance.
 
-Local inference is an external host dependency. Pix supports llmman and Ollama.
-llmman serves Ollama-, OpenAI-, and Anthropic-compatible APIs and loads models on
-demand. Ollama remains a supported backend. The user chooses one in `pix setup`;
-Pix does not silently prefer or migrate between them.
+Local inference is an external host dependency. Pix supports llmman and Ollama,
+reached over their native (Ollama) or OpenAI-compatible (llmman, or any other
+OpenAI-compatible endpoint) transport. llmman serves Ollama-, OpenAI-, and
+Anthropic-compatible APIs and loads models on demand. Ollama remains a
+supported backend. There is no setup interview for either: the environment
+author declares a backend and its models directly in that environment's own
+`pix.toml` `[inference.*]` tables (docs/design/environments.md §5.2), and
+`pix run` merges that declaration over machine config for the session it
+launches. `pix setup --env NAME` and
+`pix doctor` validate what an environment declares; neither ever silently
+prefers or migrates one backend over another, and neither chooses on the
+user's behalf.
 
-Pix does not install model weights during an ordinary run. `pix setup` may offer
-an explicit model pull after showing the model and expected download.
+Pix does not install model weights during an ordinary run.
 
 If and when sbx exposes local-model transport to the custom Pix agent, Pix uses
 it and deletes the in-sandbox compatibility bridge. Until a host acceptance test

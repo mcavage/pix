@@ -12,15 +12,18 @@ pix setup
 ```
 
 `setup` initializes `PIX_HOME` (default `~/.pix`) as a Git repository,
-installs the pinned `pix-agent` image and strict kit, creates a default
-environment when none exists, wires a model backend, and reconciles the
-`pix-memory` container. It does NOT install `sbx`; a missing host tool is
-reported with the exact install command, and setup is resumable, so you
-install it and run setup again.
+installs the pinned `pix-agent` image and strict kit, creates and selects a
+default environment when none exists, and reconciles the `pix-memory`
+container. It does NOT install `sbx`; a missing host tool is reported with
+the exact install command, and setup is resumable, so you install it and run
+setup again.
 
-It also asks how models should run. A direct API key via 1Password is the
-default; an already-credentialed backend needs none. Your first sandbox
-launches once a callable model is confirmed.
+There is no setup interview: it never asks how models should run. Add a
+direct API key with `pix secret set` (1Password reference only, never a
+value on disk); an already-credentialed backend needs none. Local inference
+(llmman or Ollama, over native or OpenAI-compatible transport) is authored
+directly in an environment's own `pix.toml`, not chosen in setup. Your first
+sandbox launches once a callable model is confirmed.
 
 ## 2. Your first sandbox
 
@@ -113,11 +116,13 @@ the `gworkspace` skill for its tools and the untrusted-content rule.
 degraded: recall falls back to keyword search (no vector ranking).
 `/remember` is unaffected either way; it is an explicit store, not an
 extraction. Automatic capture is a separate, opt-in setting in an
-environment's `pix.toml` that pix does not turn on for you.
+environment's `pix.toml` that pix does not turn on for you. Either backend,
+when you do want one, is authored directly in that same `pix.toml`; there
+is no setup interview and no machine-wide preference.
 
 **Do I need a provider API key?** Only if your environment's inference is
-not already credentialed. `pix setup` is the one place a 1Password reference
-is solicited for a direct key.
+not already credentialed. `pix secret set` is the one place a 1Password
+reference is added for a direct key.
 
 ## Where to go next
 

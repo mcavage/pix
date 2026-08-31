@@ -365,7 +365,19 @@ func (c *envTrustCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return err
 	}
-	sel, err := nativeenv.ResolveIn(home, c.Name)
+	return runEnvTrust(d, home, c.Name, c.Yes, c.Verbose)
+}
+
+// runEnvTrust is `pix env trust NAME`'s whole body, factored out so `pix
+// setup --env NAME` can perform the EXACT SAME complete, default-No trust
+// operation before it checks anything else about that environment (docs/
+// design/pix-v2-surface.md §3.6: "When setup reaches an untrusted
+// environment, it performs the same complete, default-No trust operation
+// as `pix env trust NAME`"). A caller ALREADY trusted for the current
+// fingerprint returns nil having printed and mutated nothing — trust is
+// idempotent, never re-prompted for an unchanged environment.
+func runEnvTrust(d *cli.Deps, home pixhome.Paths, name string, yes, verbose bool) error {
+	sel, err := nativeenv.ResolveIn(home, name)
 	if err != nil {
 		return envRun(d, err)
 	}
@@ -373,11 +385,14 @@ func (c *envTrustCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return envRun(d, err)
 	}
-	renderTrustBill(d.Out, sel.Name, bom, c.Verbose)
+	if trustAcceptedForFingerprint(home, sel, fp) {
+		return nil
+	}
+	renderTrustBill(d.Out, sel.Name, bom, verbose)
 	fmt.Fprintf(d.Out, "  fingerprint: %s\n\n", fp)
 
-	accept := c.Yes
-	if !c.Yes {
+	accept := yes
+	if !yes {
 		if !d.Interactive {
 			return envRun(d, fmt.Errorf("env trust: refusing to accept on a non-interactive terminal without --yes"))
 		}

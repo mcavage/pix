@@ -626,6 +626,113 @@ func RosterInputFor(sc *envinfo.Sidecar, shippedAgents []string) inference.Roste
 	}
 }
 
+// validInferenceDriver is the closed vocabulary a pix.toml
+// [inference.backends.<name>].driver may declare (config.go's own comment on
+// config.InferenceBackend.Driver): "native" (an already-shipped Pi-native
+// provider), "openai-compatible" (llmman's OpenAI-compatible surface, or any
+// other OpenAI-compatible endpoint), and "ollama" (llmman's Ollama-compatible
+// surface, or a real Ollama daemon). Anything else refuses before this
+// environment's inference ever reaches SynthesizeInferenceKit. A plain
+// function, not a package-level map: this package declares no mutable
+// globals (TestLaunch_NoPackageLevelVars).
+func validInferenceDriver(driver string) bool {
+	switch driver {
+	case "native", "openai-compatible", "ollama":
+		return true
+	default:
+		return false
+	}
+}
+
+// EffectiveInferenceConfig merges the selected environment's authored
+// pix.toml [inference.*] declarations OVER machine config's own inference
+// into a NEW, in-memory snapshot for THIS run only — cfg on disk is never
+// mutated, and the caller's *cfg is never written through. An
+// environment-authored backend or model always wins WHOLESALE over a
+// machine one of the same name (never merged field-by-field: the
+// environment author gets exactly the entry it wrote, not machine leftovers
+// bleeding through one unauthored field at a time).
+//
+// Local inference is authored per environment, not interviewed for (docs/
+// design/pix-v2-surface.md §7): a [[inference.models]] entry this
+// environment declares is trusted DECLARATIVELY — Available and Verified
+// are asserted true here, bypassing the host-proof gate Callable applies to
+// a machine-wide binding (bindings.go's needsHostProof/HostProofRequired) —
+// because reachability is what `pix setup`/`pix doctor` probe for the
+// selected environment (safety invariant 12: a probe earns the word, and
+// that probe is doctor's, not this ephemeral run-time merge's). Without
+// this, an environment's own Ollama or llmman binding could pass roster
+// declaration checks (workflow/models.ValidateRoster) and then fail kit
+// synthesis anyway, because RuntimeManifest only ever emits a CALLABLE
+// binding.
+//
+// A nil sidecar (no pix.toml, or the built-in-defaults `none` environment)
+// returns an equivalent COPY of cfg with no environment overlay — SAME
+// Backends/Models keys and values, just independent map/slice storage, so a
+// caller can safely treat the result as "this run's config" either way.
+func EffectiveInferenceConfig(cfg *config.Config, sc *envinfo.Sidecar) (*config.Config, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("internal: EffectiveInferenceConfig given a nil config")
+	}
+	eff := *cfg
+	eff.Inference.Backends = make(map[string]config.InferenceBackend, len(cfg.Inference.Backends))
+	for name, b := range cfg.Inference.Backends {
+		eff.Inference.Backends[name] = b
+	}
+	eff.Inference.Models = append([]config.InferenceModelBinding(nil), cfg.Inference.Models...)
+	eff.Inference.AllowedModels = append([]string(nil), cfg.Inference.AllowedModels...)
+
+	if sc == nil {
+		return &eff, nil
+	}
+
+	backendNames := make([]string, 0, len(sc.Inference.Backends))
+	for name := range sc.Inference.Backends {
+		backendNames = append(backendNames, name)
+	}
+	sort.Strings(backendNames)
+	for _, name := range backendNames {
+		b := sc.Inference.Backends[name]
+		driver := strings.TrimSpace(b.Driver)
+		if !validInferenceDriver(driver) {
+			return nil, fmt.Errorf("pix.toml: [inference.backends.%s].driver %q is not one of native, openai-compatible, ollama", name, b.Driver)
+		}
+		eff.Inference.Backends[name] = config.InferenceBackend{
+			Driver:   driver,
+			Protocol: strings.TrimSpace(b.Protocol),
+			BaseURL:  strings.TrimSpace(b.BaseURL),
+			Auth:     strings.TrimSpace(b.Auth),
+			KeyEnv:   strings.TrimSpace(b.KeyEnv),
+		}
+	}
+
+	for _, m := range sc.Inference.Models {
+		id := strings.TrimSpace(m.ID)
+		if id == "" {
+			continue
+		}
+		if _, ok := eff.Inference.Backends[m.Backend]; !ok {
+			return nil, fmt.Errorf("pix.toml: [[inference.models]] %q names backend %q, which no [inference.backends] entry defines", id, m.Backend)
+		}
+		binding := config.InferenceModelBinding{
+			Model: id, Backend: m.Backend, Upstream: m.UpstreamID,
+			Available: true, Verified: true,
+		}
+		replaced := false
+		for i, existing := range eff.Inference.Models {
+			if existing.Model == id {
+				eff.Inference.Models[i] = binding
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			eff.Inference.Models = append(eff.Inference.Models, binding)
+		}
+	}
+	return &eff, nil
+}
+
 // sessionEnvironmentFileName records WHICH environment a live sandbox was
 // created from, beside its lease record. It is what makes a later
 // environment-scoped question ("is anything still holding `work`?")

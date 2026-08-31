@@ -3,6 +3,9 @@ package health
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"pix/host/container"
@@ -196,4 +199,69 @@ func (p MemoryMCPRegistrationProbe) Check(ctx context.Context) Result {
 			Evidence: fmt.Sprintf("registered at %q, expected %q — never overwritten automatically", url, p.ExpectedURL)}
 	}
 	return Result{Status: StatusReady, Detail: "registered", Evidence: url}
+}
+
+// EnvironmentDefaultProbe verifies this host has a MACHINE DEFAULT
+// environment selected once at least one environment directory exists.
+// Doctor is read-only (its own package doc: "never repairs, registers,
+// restarts, authenticates, or rewrites configuration"), so a host with
+// environments but no default is NEVER guessed at here — the exact remedy
+// is always `pix env default NAME`, naming the one command that owns this
+// field (config.SetDefaultEnvironmentAt).
+//
+// A host with ZERO environments is not a gap this probe reports: `pix run`
+// still works against the built-in-defaults document (D17's `none`), and
+// `pix setup` is what creates a first environment (EnsureDefaultEnvironment
+// already selects it the moment it creates one, so this state should not
+// even arise for a host that ran setup) — there is nothing for a user to
+// point this probe's fix at yet.
+type EnvironmentDefaultProbe struct {
+	// Home is the resolved PIX_HOME root.
+	Home string
+	// DefaultEnvironment is the loaded config's own field — passed in rather
+	// than re-loaded, so this probe can never disagree with the same config
+	// every other probe and the render already share.
+	DefaultEnvironment string
+}
+
+func (EnvironmentDefaultProbe) Name() string   { return "environment" }
+func (EnvironmentDefaultProbe) Required() bool { return false }
+
+func (p EnvironmentDefaultProbe) Check(ctx context.Context) Result {
+	if strings.TrimSpace(p.DefaultEnvironment) != "" {
+		return Result{Status: StatusReady, Detail: "default environment selected", Evidence: p.DefaultEnvironment}
+	}
+	names, err := environmentNames(p.Home)
+	if err != nil {
+		return Result{Status: StatusUnknown, Detail: "could not list environments", Evidence: err.Error()}
+	}
+	if len(names) == 0 {
+		return Result{Status: StatusOff, Detail: "no environment yet", Hint: "run `pix setup` to create a runnable default environment"}
+	}
+	return Result{Status: StatusAbsent, Detail: "no default environment selected", Fix: "pix env default NAME",
+		Evidence: fmt.Sprintf("found %d environment(s) (%s) and no machine default", len(names), strings.Join(names, ", "))}
+}
+
+// environmentNames lists the plain-directory environment names under
+// <home>/envs — the SAME "a directory, not a dotfile" rule
+// provision.EnsureDefaultEnvironment already applies, kept as an independent
+// tiny scan here rather than an import of workflow/env: this package stays
+// dependency-light (pixhome.go's own doc comment) and a name-only listing
+// needs no sidecar parse, no trust check, no BoM.
+func environmentNames(home string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(home, "envs"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }

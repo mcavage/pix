@@ -52,10 +52,13 @@ pix setup
 Use the `mcavage/tap/` prefix. Bare `brew install pix` matches no formula,
 and Homebrew will suggest `pixi`, which is a different tool.
 
-`pix setup` is guided and resumable: it checks Docker and `sbx`, initializes
-`PIX_HOME` (default `~/.pix`) as a Git repository, installs the pinned
-`pix-agent` image and strict kit, creates a default environment if none
-exists, wires your model backend, and reconciles the `pix-memory` container.
+`pix setup` is repeatable and idempotent, not interactive: it checks Docker
+and `sbx`, initializes `PIX_HOME` (default `~/.pix`) as a Git repository,
+installs the pinned `pix-agent` image and strict kit, creates and selects a
+default environment if none exists, and reconciles the `pix-memory`
+container. It never interviews you for a model provider or a local inference
+backend; a provider key is added with `pix secret set`, and local inference
+(if any) is authored directly in an environment's own `pix.toml` (section 5).
 A gap it cannot repair is printed with the exact command that fixes it.
 
 ## 3. How to tell it worked
@@ -81,8 +84,27 @@ for example), doctor reports no provider key needed and means it.
 
 ## 5. Is llmman or Ollama required?
 
-No. Pix supports either as a local inference backend, chosen once in
-`pix setup`. Without one:
+No. Pix supports both, reached over Ollama's native transport or an
+OpenAI-compatible one (llmman, or any other OpenAI-compatible endpoint). There
+is no setup interview for either: you author a backend and its models
+directly in the environment's own `pix.toml`:
+
+```toml
+[inference.backends.ollama]
+driver = "ollama"
+base_url = "http://host.docker.internal:11434/v1"
+auth = "none"
+
+[[inference.models]]
+id = "ollama/qwen3.5:9b"
+backend = "ollama"
+upstream_id = "qwen3.5:9b"
+```
+
+`pix run` merges that declaration over machine config for the session it
+launches; `pix setup --env NAME` and `pix doctor` validate what an
+environment declares. Neither ever silently prefers or migrates one backend
+over another. Without a declared backend:
 
 | Capability | With a local backend | Without one |
 | --- | --- | --- |
@@ -91,8 +113,7 @@ No. Pix supports either as a local inference backend, chosen once in
 | `/remember` and `/forget` | work | work (an explicit store, not an extraction) |
 | A local model in the session | available, loaded on demand | cloud models only |
 
-Pix does not install model weights during an ordinary run; `pix setup` may
-offer an explicit pull after showing the model and expected download.
+Pix does not install model weights during an ordinary run.
 
 ## 6. Daily use
 

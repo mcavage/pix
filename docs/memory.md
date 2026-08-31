@@ -72,8 +72,10 @@ watcher-captured row is tagged with an `auto` annotation on
 `/recall`/`memory_recall`, visibly distinct from an explicit one, and
 `/forget <id>` is the feedback/undo mechanism for it, same as any other row.
 
-Extraction and embedding run on the selected local backend (llmman or
-Ollama) and never leave the host, but recalled memory is not private from
+Extraction and embedding run on whichever local backend (llmman or Ollama,
+authored directly in that environment's own `pix.toml`; there is no setup
+interview that picks one for you) the environment declares, and never leave
+the host, but recalled memory is not private from
 your model provider: once a row is recalled, its content goes into the
 prompt sent to whichever model is active (Claude, OpenAI, Gemini, or a local
 model). Never store secrets, tokens, or credentials in memory.
