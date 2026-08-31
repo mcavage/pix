@@ -64,6 +64,50 @@ no generic `config get/set` verb in v2. `~/.pix` is initialized as an ordinary
 `git init -b main` repo at first run; Pix never stages or commits on the
 user's behalf. State-holding files are mode `0600`, their parent dirs `0700`.
 
+## Coexistence: one PIX_HOME = one stack
+
+Two Pix installations can share a host. A **stack id** (the first 16
+lowercase hex characters of sha256(canonical `PIX_HOME` path)) suffixes or
+prefixes every Pix-owned runtime resource, always, with no unscoped
+fallback:
+
+| resource | name |
+| --- | --- |
+| sandbox | `pix-<stack-id>-<basename>-<workspace-digest>` (an explicit `--name` is scoped too) |
+| memory container | `pix-memory-<stack-id>` |
+| memory MCP server | `pix-memory-<stack-id>` |
+| session MCP server | `pix-session-<stack-id>` |
+
+`services/host/stack` is the single producer of the id and of every name
+derived from it; a malformed id is an error there, never a bare
+`pix-memory`/`pix-session`/`pix-<basename>`. The **MCP registry stays
+host-global** (it is the sbx Gateway's, not Pix's): the built-ins simply
+register under namespaced names, so two homes coexist in one registry.
+
+Each home allocates its **own loopback memory port** (`memory_port` in that
+home's `config.toml`, written by `pix setup`); every reader takes it from
+there. Cleanup (`pix rm --all`, `pix rm --orphans`, `pix reset`) discovers
+only sandboxes carrying the current stack's id.
+
+**Credentials are sandbox-scoped.** `pix setup` creates
+`$PIX_HOME/secrets.env` (`op://` references only); every create AND every
+attach re-resolves those refs and writes them with
+`sbx secret set -f --sandbox <name> ...`, so a rotation lands on the next
+run. **Host-global sbx secrets are ignored and never removed
+automatically**. `pix doctor` grades the provider row off this home's refs
+and reports globals separately, as ignored.
+
+**Version identity.** Every launch carries two Pix-managed environment
+facts, `PIX_LAUNCHER_VERSION` and `PIX_STACK_ID`, and the session
+fingerprint carries `launcher_version`. Those two composed env keys are the
+only recreation-safe ones, so a version bump takes the existing proof-gated
+auto-recreate path while any other env drift still refuses. A **local build
+is `X.Y.(Z+1)-beta.<sha7>[.dirty.<12hex>]`** and the binary, runtime
+archive, manifest and both local image tags share it; **release CI publishes
+the clean semver**. `make load` scopes its unique tag and its prune to a
+hash of the canonical worktree path, and `make run` derives its sandbox name
+instead of pinning one.
+
 ## Command surface
 
 Nine groups, plus help/version: `run`, `ls`, `rm`, `task {new,ls,path,rm}`,

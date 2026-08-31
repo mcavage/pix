@@ -29,16 +29,34 @@ A sandbox has no GitHub credential of its own. Give one every environment
 uses, once:
 
 ```bash
-gh auth token | sbx secret set github
+pix secret set GITHUB_TOKEN op://vault/item/field
 ```
 
 Without it the agent can commit inside the sandbox but cannot push or open a
-pull request.
+pull request. Like every other credential this is a reference, not a value:
+each run resolves it into that run's own sandbox-scoped sbx secret. A
+host-global `sbx secret set github` is ignored by Pix (and never removed by
+it).
 
 Pix stores provider keys as 1Password references, never as values on disk.
 That is the only reason `op` is on the required list. If your environment
 already carries credentialed inference, you never add a key and `op` stays
 optional.
+
+### Coexisting installations
+
+One `PIX_HOME` = one **stack**, identified by a 16-hex id derived from the
+canonical `PIX_HOME` path and carried by every Pix-owned resource:
+sandboxes (`pix-<id>-…`), the memory container (`pix-memory-<id>`), and the
+two reserved MCP servers (`pix-memory-<id>`, `pix-session-<id>`). Two homes
+run side by side with their own containers, their own loopback memory ports,
+and their own namespaced entries in the host-global sbx MCP registry.
+Cleanup only ever reaches the current stack.
+
+Provider keys are `op://` references in `$PIX_HOME/secrets.env`. `pix setup`
+creates that file; every run resolves the refs into **sandbox-scoped** sbx
+secrets, so a rotated 1Password item takes effect on the next run.
+Host-global sbx secrets are ignored and never removed automatically.
 
 ## 2. Install
 

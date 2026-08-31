@@ -69,12 +69,17 @@ export default [
 	{
 		id: "lifecycle.rm.keep-polarity-except",
 		description:
-			"`pix rm --all --except <name>` removes a box only when it is ABSENT from the keep set (!keepSet[b.Name]) — the direction documented in RmDescription (\"remove all but one\"). Flipping this one-word condition would silently reverse which boxes survive. The --all discovery loop is also scoped: it only ever iterates workspace.ParsePixBoxes (already pix-* filtered), so an automatic/bulk removal can never reach a non-pix sandbox in the first place.",
+			"`pix rm --all --except <name>` removes a box only when it is ABSENT from the keep set (!keep[b.Name]) — the direction documented in RmDescription (\"remove all but one\"). Flipping this one-word condition would silently reverse which boxes survive. The --all discovery loop is scoped TWICE over: workspace.ParseScopedBoxes filters `sbx ls` to pix-* names AND to names carrying THIS PIX_HOME's stack id (stack.IsScopedSandboxName), so a bulk removal can reach neither a non-pix sandbox nor another coexisting stack's pix-* sandbox. The pre-Wave-B ParsePixBoxes form is deliberately NOT pinned any more: it was the unscoped discovery this rule now forbids.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/sandbox.go",
 				kind: "contains",
-				values: ["for _, b := range workspace.ParsePixBoxes(raw) {", "if !keep[b.Name] {"],
+				values: ["for _, b := range workspace.ParseScopedBoxes(raw, stackID) {", "if !keep[b.Name] {"],
+			},
+			{
+				file: "services/host/workspace/sandboxls.go",
+				kind: "contains",
+				values: ["if stack.IsScopedSandboxName(stackID, b.Name) {"],
 			},
 		],
 	},
@@ -198,17 +203,21 @@ export default [
 	{
 		id: "lifecycle.session.digest-name-keys-lease-state",
 		description:
-			"U04c2: a session's lease/keep/fingerprint state is keyed by sandbox.Name(workspace) (SessionName) — the deterministic, digest-suffixed identity U04b's sandbox package derives — and `pix run`'s DEFAULT sandbox name is that same digest form, not workspace.DeriveSandboxName's bare \"pix-<basename>\". Two workspaces sharing a basename can never alias the same lease directory or the same box. An explicit --name still travels verbatim.",
+			"U04c2 + Wave B/D: a session's lease/keep/fingerprint state is keyed by the deterministic, digest-suffixed sandbox identity the sandbox package derives, and `pix run`'s DEFAULT sandbox name is that same form — never workspace.DeriveSandboxName's bare \"pix-<basename>\". Two workspaces sharing a basename can never alias the same lease directory or the same box. Since Wave B that identity is also STACK-SCOPED: resolveSandboxName derives this PIX_HOME's stack id FIRST and routes BOTH branches through it — sandbox.NameForStack for the default, sandbox.ScopeExplicitName for an explicit --name, which is why an explicit name no longer travels verbatim. A stack id that cannot be derived is an error, never an unscoped fallback name.",
 		checks: [
-			{
-				file: "services/host/workflow/launch/session.go",
-				kind: "contains",
-				values: ["func SessionName(workspace string) string { return sandbox.Name(workspace) }"],
-			},
 			{
 				file: "services/host/cmd/pix/run_cmd.go",
 				kind: "contains",
-				values: ["return sandbox.Name(workspace)"],
+				values: [
+					"id, err := stack.Current()",
+					"return sandbox.NameForStack(id, workspace, \"\")",
+					"return sandbox.ScopeExplicitName(id, explicit)",
+				],
+			},
+			{
+				file: "services/host/workflow/launch/session.go",
+				kind: "notContains",
+				values: ["func SessionName(workspace string) string { return sandbox.Name(workspace) }"],
 			},
 		],
 	},

@@ -44,6 +44,10 @@ type Options struct {
 	// GlobalSecrets overrides the read-only enumeration of host-global sbx
 	// secrets Pix ignores. Nil means ask sbx.
 	GlobalSecrets func() ([]string, bool)
+	// ProviderRefs overrides the provider-key evidence. Nil means read THIS
+	// PIX_HOME's own secrets.env refs (secret.ConfiguredModelRefs) — never
+	// the host-global sbx secret store.
+	ProviderRefs func() ([]string, bool)
 	// Workspace is the directory whose sandbox the attachment answer is
 	// about. Empty means "no sandbox context", and attachment is unknown.
 	Workspace string
@@ -75,8 +79,15 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 		// first is how a host with three green providers routes every role to one.
 		// Keyless is the prior question to both: whether a key is this host's
 		// credential at all.
+		// The EVIDENCE is this PIX_HOME's own configured op:// refs, not the
+		// host-global `sbx secret ls` store. Pix writes provider credentials
+		// sandbox-scoped at launch and never reads a global as proof a key
+		// exists (secret/scoped.go), so grading doctor's provider row off the
+		// global store would report another stack's leftovers as this host's
+		// keys. Globals still get their own honest row below — as IGNORED.
 		health.ProviderKeyProbe{Bin: keyBin, Args: keyArgs, Want: secret.ModelProviders, AnyOf: true,
-			Label: "providers", Callable: inference.CallableProviders(cfg), Keyless: inference.KeylessBackends(cfg)},
+			Label: "providers", Callable: inference.CallableProviders(cfg), Keyless: inference.KeylessBackends(cfg),
+			Configured: providerRefScan(o)},
 		// A sandbox holds no GitHub credential of its own, so without a global
 		// secret the agent commits and then cannot push. Reported here rather
 		// than discovered at the end of a task.
@@ -99,6 +110,27 @@ func githubScope(o Options) func() (int, []string) {
 	return func() (int, []string) {
 		state, boxes := secret.ProbeGitHubCredential(o.Env)
 		return int(state), boxes
+	}
+}
+
+// providerRefScan answers the provider row from this PIX_HOME's refs file,
+// through the Options seam when a test supplies one. The tri-state is
+// preserved end to end: secret.RefsUnreadable becomes answered=false, which
+// the probe renders as UNKNOWN rather than as a missing key.
+func providerRefScan(o Options) func() ([]string, bool) {
+	if o.ProviderRefs != nil {
+		return o.ProviderRefs
+	}
+	return func() ([]string, bool) {
+		if o.Env.System == nil {
+			// No host environment to read secrets.env through (a zero-value
+			// Options): UNKNOWN, the same fail-open answer an unreadable refs
+			// file gets. Never "no key" — absence of a reader is not absence
+			// of a key.
+			return nil, false
+		}
+		present, state := secret.ConfiguredModelRefs(o.Env)
+		return present, state == secret.RefsAnswered
 	}
 }
 

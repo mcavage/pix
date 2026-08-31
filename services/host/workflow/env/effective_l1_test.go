@@ -47,7 +47,7 @@ func TestRenderEffectiveDocument_NeverPrintsTheRealMemoryToken(t *testing.T) {
 	home := pixhome.New(t.TempDir())
 	writeCanaryToken(t, home)
 
-	doc, err := RenderEffectiveDocument(home, "")
+	doc, err := RenderEffectiveDocument(home, "", "0.0.0-test")
 	if err != nil {
 		t.Fatalf("RenderEffectiveDocument: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestRenderEffectiveDocument_NeverPrintsTheRealMemoryToken_WithSelectedEnvir
 	}
 	writeEnvFile(t, root, ".sbxenv.yaml", minimalSbxenv)
 
-	doc, err := RenderEffectiveDocument(home, "work")
+	doc, err := RenderEffectiveDocument(home, "work", "0.0.0-test")
 	if err != nil {
 		t.Fatalf("RenderEffectiveDocument: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestComputeEffective_InternalFactsStillCarryTheRealToken(t *testing.T) {
 	home := pixhome.New(t.TempDir())
 	writeCanaryToken(t, home)
 
-	facts, err := ComputeEffective(home, "")
+	facts, err := ComputeEffective(home, "", "0.0.0-test")
 	if err != nil {
 		t.Fatalf("ComputeEffective: %v", err)
 	}

@@ -13,12 +13,18 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/container"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"pix/host/workflow/launch"
 )
 
-const testMemoryPortDefault = 11435
+// testMemoryPortDefault is container.DefaultMemoryPort: what BuildHostState
+// reports for a home whose config.toml has not allocated a memory port yet.
+// A home that HAS one reports THAT port (see
+// TestBuildHostState_MemoryPortIsPerHome) — there is no fixed 11435 literal
+// in the launcher any more.
+const testMemoryPortDefault = container.DefaultMemoryPort
 
 func TestBuildHostState(t *testing.T) {
 	cfg := &config.Config{
@@ -376,5 +382,33 @@ func TestInjectTrustedHostState_IgnoresStaleWorkspaceFile(t *testing.T) {
 	}
 	if string(b) != malicious {
 		t.Error("the stale workspace file must be left untouched (never read, never written)")
+	}
+}
+
+// TestBuildHostState_MemoryPortIsPerHome pins Wave D's per-home port fix: the
+// trusted host-state payload must report the port THIS PIX_HOME's pix-memory
+// container is actually published on (config.toml's memory_port, allocated by
+// `pix setup`), not a compiled-in literal that belonged to whichever stack
+// happened to get the default. Two coexisting PIX_HOMEs have two ports; a
+// payload naming the wrong one tells the in-VM agent memory is up when it is
+// another stack's memory that is up.
+func TestBuildHostState_MemoryPortIsPerHome(t *testing.T) {
+	const configured = 41234
+	cfg := &config.Config{MemoryPort: configured}
+	var dialed []int
+	hs := launch.BuildHostState(cfg, "", false, func(p int) bool {
+		dialed = append(dialed, p)
+		return true
+	}, "sbx", false)
+	if hs.Memory.Port != configured {
+		t.Errorf("memory port = %d, want this home's configured %d", hs.Memory.Port, configured)
+	}
+	if len(dialed) == 0 || dialed[0] != configured {
+		t.Errorf("liveness dialed %v, want this home's configured port %d", dialed, configured)
+	}
+	for _, p := range dialed {
+		if p == 11435 {
+			t.Errorf("liveness dialed the retired hardcoded port 11435")
+		}
 	}
 }

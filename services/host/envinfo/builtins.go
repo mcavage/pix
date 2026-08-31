@@ -275,3 +275,40 @@ func sortPairs(vars, keys []string) {
 	copy(vars, sv)
 	copy(keys, sk)
 }
+
+// PIX-managed sandbox environment variables (Wave D version identity).
+//
+// These are the ONLY two environment facts Pix itself injects into every
+// effective document. They exist so a sandbox can name the exact launcher
+// build and the exact PIX_HOME stack that created it, and so a version bump
+// is VISIBLE in the creation fingerprint instead of being an invisible
+// difference between two otherwise identical documents.
+//
+// Their composed fingerprint keys ("env.PIX_LAUNCHER_VERSION",
+// "env.PIX_STACK_ID") are the only env.* keys driftclass.go treats as
+// recreation-safe: they are Pix-owned construction pins, exactly like the
+// pinned template, so a version bump takes the existing proof-gated
+// auto-recreate path while ANY other env drift (an authored variable, a
+// secret destination) stays substantive and still refuses.
+const (
+	EnvVarLauncherVersion = "PIX_LAUNCHER_VERSION"
+	EnvVarStackID         = "PIX_STACK_ID"
+)
+
+// PixManagedEnvVars is the ONE producer of the Pix-managed env block both
+// the real launch (cmd/pix's runEffectiveInput) and the `pix env
+// --effective` preview (workflow/env's ComputeEffective) compose, so a
+// preview can never show an env block a real create would then add to.
+// An unresolvable half is OMITTED rather than rendered empty: an empty
+// value is a fact ("this build has no version"), and Pix does not have one
+// to state.
+func PixManagedEnvVars(launcherVersion, stackID string) map[string]string {
+	out := map[string]string{}
+	if v := strings.TrimSpace(launcherVersion); v != "" {
+		out[EnvVarLauncherVersion] = v
+	}
+	if id := strings.TrimSpace(stackID); id != "" {
+		out[EnvVarStackID] = id
+	}
+	return out
+}

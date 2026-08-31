@@ -466,6 +466,22 @@ type ProviderKeyProbe struct {
 	// pre-adoption answer.
 	Keyless        string
 	ResolveKeyless func() string
+	// Configured replaces the key-store exec entirely with THIS PIX_HOME's
+	// own evidence: the provider names secrets.env declares a filled op://
+	// ref for, plus whether the question could be answered at all.
+	//
+	// It exists because a host-global `sbx secret ls` is no longer this
+	// launcher's evidence for anything. Pix writes provider credentials as
+	// SANDBOX-SCOPED secrets at launch (secret.PrepareSandboxSecrets) and
+	// reads only its own refs file; a global secret belongs to whoever
+	// pushed it and may be another stack's. Grading a host green because
+	// some other PIX_HOME left an `anthropic` global behind is exactly the
+	// false ready this seam removes — and exactly the state
+	// IgnoredGlobalSecretsProbe reports separately, as ignored.
+	//
+	// nil keeps the key-store exec, for a caller checking a store that
+	// really is the evidence.
+	Configured func() (present []string, answered bool)
 }
 
 func (p ProviderKeyProbe) Name() string {
@@ -490,6 +506,9 @@ func (p ProviderKeyProbe) Check(ctx context.Context) Result {
 	if len(p.Want) == 0 {
 		return Result{Name: p.Name(), Status: StatusUnknown, Detail: "no provider keys declared",
 			Evidence: "nothing to check"}
+	}
+	if p.Configured != nil {
+		return p.configuredResult()
 	}
 	o := runBounded(ctx, p.Bin, p.Args...)
 	switch {
@@ -541,6 +560,59 @@ func (p ProviderKeyProbe) Check(ctx context.Context) Result {
 	}
 	return Result{Name: p.Name(), Status: StatusAbsent, Detail: "missing " + strings.Join(missing, ", "),
 		Fix: fmt.Sprintf(SecretSetFix, missing[0]), Evidence: "key store answered without " + strings.Join(missing, ", ")}
+}
+
+// configuredResult renders the refs-file verdict. Its vocabulary is
+// deliberately the same tri-state the store path uses — an UNREADABLE refs
+// file is StatusUnknown, never "no key" — and its evidence names the refs
+// file rather than a key store, so a reader is never told a global secret
+// they can see counts for something.
+func (p ProviderKeyProbe) configuredResult() Result {
+	present, answered := p.Configured()
+	if !answered {
+		return Result{Name: p.Name(), Status: StatusUnknown, Detail: "provider refs unreadable",
+			Evidence: "this PIX_HOME's secrets.env exists but could not be read"}
+	}
+	want := map[string]bool{}
+	for _, w := range p.Want {
+		want[w] = true
+	}
+	var have []string
+	for _, name := range present {
+		if want[name] {
+			have = append(have, name)
+		}
+	}
+	if len(have) == 0 {
+		return Result{Name: p.Name(), Status: StatusAbsent,
+			Detail: "none of " + strings.Join(p.Want, ", ") + " is configured", Fix: ModelKeyFix,
+			Evidence: "this PIX_HOME's secrets.env declares no filled op:// ref for " + strings.Join(p.Want, ", ")}
+	}
+	if !p.AnyOf {
+		if len(have) < len(p.Want) {
+			hasName := map[string]bool{}
+			for _, h := range have {
+				hasName[h] = true
+			}
+			var missing []string
+			for _, w := range p.Want {
+				if !hasName[w] {
+					missing = append(missing, w)
+				}
+			}
+			return Result{Name: p.Name(), Status: StatusAbsent, Detail: "missing " + strings.Join(missing, ", "),
+				Fix:      fmt.Sprintf(SecretSetFix, missing[0]),
+				Evidence: "this PIX_HOME's secrets.env declares no filled op:// ref for " + strings.Join(missing, ", ")}
+		}
+	}
+	detail := strings.Join(have, ", ")
+	evidence := "this PIX_HOME's secrets.env declares op:// refs for " + strings.Join(have, ", ") +
+		" (resolved into each run's own sandbox-scoped secrets)"
+	if unrouted := p.unrouted(have); len(unrouted) > 0 {
+		detail += fmt.Sprintf(" (%s: key set, no model wired \u2014 `%s`)", strings.Join(unrouted, ", "), ModelKeyFix)
+		evidence += "; no callable binding for " + strings.Join(unrouted, ", ")
+	}
+	return Result{Name: p.Name(), Status: StatusReady, Detail: detail, Evidence: evidence}
 }
 
 // ProbeBudget is the per-probe budget a command should use when it wants a

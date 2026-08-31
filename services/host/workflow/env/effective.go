@@ -61,7 +61,7 @@ import (
 // rather than importing across an equivalent boundary (arch_test.go's
 // packinfo placement comment).
 const (
-	effectiveTemplateRepo      = "docker.io/mcavage/pix"
+	effectiveTemplateRepo      = "docker.io/mcavage/pix-agent"
 	effectivePullPolicyMissing = "missing"
 )
 
@@ -94,7 +94,7 @@ func resolveEffectiveName(home pixhome.Paths, explicit string) (string, bool, er
 // built-in-defaults document), and every fact beyond that is derived from
 // this HOST's own, already-loaded filesystem/PATH state — never a live
 // sandbox call.
-func ComputeEffective(home pixhome.Paths, explicit string) (envinfo.RuntimeFacts, error) {
+func ComputeEffective(home pixhome.Paths, explicit, launcherVersion string) (envinfo.RuntimeFacts, error) {
 	name, ok, err := resolveEffectiveName(home, explicit)
 	if err != nil {
 		return envinfo.RuntimeFacts{}, err
@@ -153,8 +153,13 @@ func ComputeEffective(home pixhome.Paths, explicit string) (envinfo.RuntimeFacts
 		// and never materializes a kit directory (this file's own doc
 		// comment) — a real reference is a launch-time fact this unit does
 		// not invent.
-		MixinKit:   "",
-		PixEnvVars: map[string]string{},
+		MixinKit: "",
+		// The SAME Pix-managed env block a real launch composes (cmd/pix's
+		// runEffectiveInput): the stamped launcher build this preview is
+		// running as, and this PIX_HOME's stack id. Composed through the ONE
+		// producer, envinfo.PixManagedEnvVars, so `--effective` never shows an
+		// env block a real create would then silently add to.
+		PixEnvVars: envinfo.PixManagedEnvVars(launcherVersion, previewStackID(home)),
 		MCPServers: envinfo.WithBuiltinMCPServers(mcpWrapperFacts(doc, sidecar), builtinMCPFacts(home)),
 	}
 	return facts, nil
@@ -172,8 +177,8 @@ func ComputeEffective(home pixhome.Paths, explicit string) (envinfo.RuntimeFacts
 // (including the real token) exactly as a real launch would — the
 // redaction is presentation-only, applied to the copy this function
 // returns, never to what any other caller computes or persists.
-func RenderEffectiveDocument(home pixhome.Paths, explicit string) ([]byte, error) {
-	facts, err := ComputeEffective(home, explicit)
+func RenderEffectiveDocument(home pixhome.Paths, explicit, launcherVersion string) ([]byte, error) {
+	facts, err := ComputeEffective(home, explicit, launcherVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +217,17 @@ func redactBuiltinMemoryToken(facts *envinfo.RuntimeFacts) {
 // is read-only too — never allocated here, only `pix setup`'s
 // container.EnsureMemoryPort does that — so a preview before `pix setup`
 // shows container.DefaultMemoryPort, the same "not ready yet" display value.
+// previewStackID is this PIX_HOME's stack id for the preview's own
+// PIX_STACK_ID fact, degrading to "" (the fact is omitted) on the same
+// terms builtinMCPFacts already degrades on — never a guessed id.
+func previewStackID(home pixhome.Paths) string {
+	id, err := stack.ID(home.Home)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
 func builtinMCPFacts(home pixhome.Paths) envinfo.BuiltinMCPFacts {
 	var facts envinfo.BuiltinMCPFacts
 	// This PIX_HOME's own scoped built-in names (Wave B coexistence): a

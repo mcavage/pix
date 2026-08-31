@@ -218,21 +218,18 @@ func isModelProviderKey(envVar string) bool {
 	return false
 }
 
-// firstProviderKeyRefs scans content and returns, for each provider-key op-refs
-// ENV var, the FIRST valid entry it sees — matching CurrentOpRef, which treats
-// a provider key as having exactly one ref: the first non-placeholder op://
-// value for that env var, never whichever duplicate line happens to come last.
-// A later non-placeholder ref still supersedes an earlier PLACEHOLDER (a
-// placeholder never counts as configured), but once a real ref is recorded for
-// a key, any further duplicate is ignored. This is the one place
-// every resolver decides "which ref wins", so a scoped launch write and setup
-// can never disagree with CurrentOpRef.
-func firstProviderKeyRefs(content string) map[string]OpRef {
-	return firstRefsIn(content, providerKeyRefs)
-}
-
-// firstRefsIn is firstProviderKeyRefs over an arbitrary CLOSED key set (the
-// scoped set adds github), so "which ref wins" has exactly one implementation.
+// firstRefsIn scans content and returns, for each ENV var in a CLOSED key
+// set, the FIRST valid entry it sees — matching CurrentOpRef, which treats a
+// key as having exactly one ref: the first non-placeholder op:// value for
+// that env var, never whichever duplicate line happens to come last. A later
+// non-placeholder ref still supersedes an earlier PLACEHOLDER (a placeholder
+// never counts as configured), but once a real ref is recorded for a key, any
+// further duplicate is ignored.
+//
+// This is the ONE place every resolver decides "which ref wins" — the model
+// provider set (providerKeyRefs, doctor's and the launch gate's evidence) and
+// the scoped launch set (scopedKeyRefs, which adds github) both go through
+// it — so a scoped write, a status report and CurrentOpRef can never disagree.
 func firstRefsIn(content string, set map[string]string) map[string]OpRef {
 	best := map[string]OpRef{}
 	for _, r := range ParseOpRefs(content, nil) {

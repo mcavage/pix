@@ -32,6 +32,27 @@ AGENT_LATEST      ?= docker.io/$(DOCKER_USER)/pix-agent:latest
 MEMORY_DOCKERFILE ?= services/memory/Dockerfile
 MEMORY_IMAGE      ?= docker.io/$(DOCKER_USER)/pix-memory:$(VERSION)
 MEMORY_LATEST     ?= docker.io/$(DOCKER_USER)/pix-memory:latest
+
+# The LOCAL build identity, shared by the binary, the runtime archive, the
+# release manifest AND both images. A dev stack and a release stack coexist
+# on one host only if EVERY artifact they own carries the same, distinct
+# identity: a `make build` that tagged pix-agent :$(VERSION) would overwrite
+# the published tag the release stack pins, and `make release-manifest`
+# would then bind a $(LAUNCHER_VERSION) manifest to a digest sitting under
+# the release stack's tag. So local builds tag :$(LAUNCHER_VERSION) and only
+# the publish targets (and release CI, which passes LAUNCHER_VERSION=$(VERSION)
+# so the two collapse into one clean tag) ever touch :$(VERSION).
+LOCAL_AGENT_IMAGE  ?= docker.io/$(DOCKER_USER)/pix-agent:$(LAUNCHER_VERSION)
+LOCAL_MEMORY_IMAGE ?= docker.io/$(DOCKER_USER)/pix-memory:$(LAUNCHER_VERSION)
+
+# WORKTREE_HASH identifies THIS checkout, and nothing else, the same way the
+# launcher identifies a PIX_HOME: the first 12 hex characters of the sha256
+# of the canonical (symlink-resolved) directory path — services/host/stack's
+# CanonicalPath + HashPrefix, in shell. `make load` composes its unique tag
+# from it and prunes ONLY tags carrying it, so a five-worktree dev machine
+# never has one worktree's `make load` delete another worktree's freshly
+# loaded template out from under a running sandbox.
+WORKTREE_HASH ?= $(shell printf '%s' "$$(cd $(CURDIR) && pwd -P)" | { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | cut -c1-12)
 KIT         ?= ./pi-kit
 # Dev mode (Mode B): `make run` launches from the repo, so load skills LIVE from the
 # host tree instead of the copies baked into the image — edit a SKILL.md, /reload in
@@ -88,25 +109,29 @@ help: ## Show this help
 
 build: build-agent ## Alias for build-agent (the sandbox image consumers pull; pix-memory is built separately, see build-memory)
 
-build-agent: ## Build the pix-agent sandbox image from images/agent/Dockerfile (DHI Node/Debian base)
-	docker build -f $(AGENT_DOCKERFILE) -t $(AGENT_IMAGE) .
+build-agent: ## Build the pix-agent sandbox image from images/agent/Dockerfile (DHI Node/Debian base), tagged at the LOCAL build identity $(LAUNCHER_VERSION)
+	docker build -f $(AGENT_DOCKERFILE) -t $(LOCAL_AGENT_IMAGE) .
 
-build-memory: ## Build the pix-memory MCP service image from services/memory/Dockerfile (DHI Go builder + minimal DHI runtime)
-	docker build -f $(MEMORY_DOCKERFILE) --build-arg VERSION=$(VERSION) -t $(MEMORY_IMAGE) services/memory
+build-memory: ## Build the pix-memory MCP service image from services/memory/Dockerfile (DHI Go builder + minimal DHI runtime), tagged at $(LAUNCHER_VERSION) with a MATCHING VERSION build arg
+	docker build -f $(MEMORY_DOCKERFILE) --build-arg VERSION=$(LAUNCHER_VERSION) -t $(LOCAL_MEMORY_IMAGE) services/memory
 
 # CRITICAL: sbx caches a materialized image PER TAG. With a fixed tag (:0.0.1),
 # `sbx run` keeps booting the first-cached copy and silently ignores every
 # reload — verified by creating sandboxes and finding stale extensions. So we
 # tag each build uniquely, load that, and `make run` pins --template to it.
-# Old local-*/$(VERSION) templates are pruned so the store doesn't grow.
+# Old templates from THIS WORKTREE (local-$(WORKTREE_HASH)-*) are pruned so
+# the store doesn't grow. The prune is worktree-scoped on purpose: a bare
+# /^local-/ match (and a $(VERSION) match) deleted templates belonging to
+# OTHER checkouts on a multi-worktree machine, including ones a live sandbox
+# in another window was created from. A worktree only ever removes its own.
 # (These comments live ABOVE the recipe so make doesn't echo them to the terminal.)
 # load/run only ever concern pix-agent: pix-memory is a plain Docker container
 # (see docs/design/pix-v2-architecture.md §9), never an sbx sandbox template.
-load: build-agent ## Build + load the pix-agent image into sbx under a UNIQUE tag, so `make run` uses this exact build
-	@set -e; TS="local-$$(date +%s)"; T="docker.io/$(DOCKER_USER)/pix-agent:$$TS"; \
-	docker tag $(AGENT_IMAGE) "$$T"; \
+load: build-agent ## Build + load the pix-agent image into sbx under a UNIQUE, WORKTREE-SCOPED tag, so `make run` uses this exact build
+	@set -e; TS="local-$(WORKTREE_HASH)-$$(date +%s)"; T="docker.io/$(DOCKER_USER)/pix-agent:$$TS"; \
+	docker tag $(LOCAL_AGENT_IMAGE) "$$T"; \
 	docker save "$$T" -o out/pix.tar; \
-	for id in $$(sbx template ls 2>/dev/null | awk '$$1=="docker.io/$(DOCKER_USER)/pix-agent" && ($$2=="$(VERSION)" || $$2 ~ /^local-/){print $$3}'); do sbx template rm "$$id" >/dev/null 2>&1 || true; done; \
+	for id in $$(sbx template ls 2>/dev/null | awk '$$1=="docker.io/$(DOCKER_USER)/pix-agent" && $$2 ~ /^local-$(WORKTREE_HASH)-/{print $$3}'); do sbx template rm "$$id" >/dev/null 2>&1 || true; done; \
 	sbx template load out/pix.tar; \
 	rm -f out/pix.tar; docker rmi "$$T" >/dev/null 2>&1 || true; \
 	echo "$$TS" > out/.local-image-tag; \
@@ -114,12 +139,18 @@ load: build-agent ## Build + load the pix-agent image into sbx under a UNIQUE ta
 	echo "Loaded image:  $$REF"; \
 	echo ""; \
 	echo "Run this exact build (recreates the sandbox so the new image takes effect):"; \
-	echo "  pix rm $(NAME) && pix run --template $$REF     # from ANY directory (5-worktree friendly)"; \
+	echo "  pix rm <name> && pix run --template $$REF     # from ANY directory (5-worktree friendly)"; \
 	echo "  make run                                       # dev flow from this checkout (live skills + MCP)"
 
 publish: publish-agent publish-memory ## Push BOTH pix-agent and pix-memory to the registry
 
-publish-agent: build-agent ## Push the pix-agent image to the registry as :$(VERSION) and :latest (run `docker login` first)
+# Publish builds the CLEAN, published identity directly — it deliberately
+# does NOT depend on build-agent/build-memory, which tag the LOCAL
+# $(LAUNCHER_VERSION) identity. Release CI sets LAUNCHER_VERSION=$(VERSION)
+# so the two are the same string there; on a dev machine they are not, and a
+# publish must never push whatever a developer's dirty tree happened to build.
+publish-agent: ## Push the pix-agent image to the registry as :$(VERSION) and :latest (run `docker login` first)
+	docker build -f $(AGENT_DOCKERFILE) -t $(AGENT_IMAGE) .
 	docker push $(AGENT_IMAGE)
 	docker tag $(AGENT_IMAGE) $(AGENT_LATEST)
 	docker push $(AGENT_LATEST)
@@ -128,7 +159,8 @@ publish-agent: build-agent ## Push the pix-agent image to the registry as :$(VER
 	@echo "  Kit pins :$(VERSION), so consumers + local runs resolve the version (no re-pull)."
 	@echo "  Consumers: sbx run pix --kit \"git+https://github.com/$(DOCKER_USER)/pix.git#dir=pi-kit\""
 
-publish-memory: build-memory ## Push the pix-memory image to the registry as :$(VERSION) and :latest (run `docker login` first)
+publish-memory: ## Push the pix-memory image to the registry as :$(VERSION) and :latest (run `docker login` first)
+	docker build -f $(MEMORY_DOCKERFILE) --build-arg VERSION=$(VERSION) -t $(MEMORY_IMAGE) services/memory
 	docker push $(MEMORY_IMAGE)
 	docker tag $(MEMORY_IMAGE) $(MEMORY_LATEST)
 	docker push $(MEMORY_LATEST)
@@ -154,23 +186,34 @@ secrets: ## Store provider keys + GitHub token as global sbx service secrets
 	@echo '  echo "$$GEMINI_API_KEY"    | sbx secret set google'
 	@echo '  gh auth token             | sbx secret set github      # gh in-sandbox, no GH_TOKEN export needed'
 
-# NOTE: NAME must not contain spaces or shell metacharacters — the awk -v
-# assignment below is not quoted against them. The default naming convention
-# (pix-<dir>) is safe. Non-default names must follow the same rule.
-NAME ?= pix-pix
+# NAME is an OPTIONAL override. It is deliberately EMPTY by default: the
+# launcher derives the sandbox name itself (services/host/sandbox.Name —
+# pix-<stack-id>-<basename>-<workspace-digest>), which is what makes two
+# PIX_HOMEs coexist on one host. A hardcoded `NAME ?= pix-pix` here pinned
+# every dev run of every worktree, under every PIX_HOME, to ONE unscoped
+# name: the second stack's `make run` found the first stack's sandbox and
+# either refused or attached to it.
+#
+# NOTE: when you DO pass one, NAME must not contain spaces or shell
+# metacharacters — the awk -v assignment below is not quoted against them.
+NAME ?=
 run: require-launcher ## Launch a pix sandbox NAME. If NAME is stopped it's recreated (workspace + .pi-sessions are host-mounted, so nothing is lost); if it's already running this refuses rather than clobber a live session. `make run NAME=pix-2` opens a second parallel sandbox in another window. (Kit-defined agents can't be re-attached, hence recreate.)
-	@status=$$(sbx ls 2>/dev/null | awk -v n="$(NAME)" '$$1==n{print $$3}'); \
-	if [ "$$status" = "running" ]; then \
-		echo "ERROR: sandbox $(NAME) is already running (a live pi). Use a different name (make run NAME=pix-2) or 'pix rm $(NAME)' first."; exit 1; \
-	fi; \
-	if [ -n "$$status" ]; then \
-		echo "(sandbox $(NAME) exists [$$status] — recreating; workspace + .pi-sessions persist on the host)"; \
-		"$(PIX_BIN)" rm "$(NAME)" >/dev/null; \
+	@N="$(NAME)"; \
+	if [ -n "$$N" ]; then \
+		status=$$(sbx ls 2>/dev/null | awk -v n="$$N" '$$1==n{print $$3}'); \
+		if [ "$$status" = "running" ]; then \
+			echo "ERROR: sandbox $$N is already running (a live pi). Use a different name (make run NAME=pix-2) or 'pix rm $$N' first."; exit 1; \
+		fi; \
+		if [ -n "$$status" ]; then \
+			echo "(sandbox $$N exists [$$status] — recreating; workspace + .pi-sessions persist on the host)"; \
+			"$(PIX_BIN)" rm "$$N" >/dev/null; \
+		fi; \
 	fi; \
 	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
-	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
+	LABEL="$${N:-the launcher-derived stack-scoped name}"; \
+	[ -n "$$TAG" ] && echo "(sandbox $$LABEL, local build :$$TAG)" || echo "(sandbox $$LABEL, kit-pinned image)"; \
 	mkdir -p .pix && echo "$(OLLAMA_BRIDGE_MODEL)" > .pix/ollama-bridge.model; \
-	exec "$(PIX_BIN)" run --dev --name "$(NAME)" $${TAG:+--template docker.io/$(DOCKER_USER)/pix-agent:$$TAG} .
+	exec "$(PIX_BIN)" run --dev $${N:+--name "$$N"} $${TAG:+--template docker.io/$(DOCKER_USER)/pix-agent:$$TAG} .
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
 # consumer path, no local repo needed. Every push to main auto-publishes a NEW
@@ -198,11 +241,11 @@ runtime-archive: ## Build the runtime archive (skills/agents/settings/keybinding
 # §3). Digests are read from `docker inspect` on the just-built local images —
 # this is the LOCAL/dev shape; CI's publish workflow binds the PUBLISHED
 # (pushed, multi-arch) digests instead, which only exist after a real push.
-release-manifest: build-agent build-memory runtime-archive ## Emit out/release-manifest.json binding version + both image digests + runtime digest + kit revision. Manifest "version" is $(LAUNCHER_VERSION) (matches the launcher binary and the runtime archive above); the pix-agent/pix-memory images stay tagged at the clean, published $(VERSION) regardless — only the local build's OWN identity moves, never the published image tags.
-	@AGENT_DIGEST=$$(docker image inspect $(AGENT_IMAGE) --format '{{index .RepoDigests 0}}' 2>/dev/null | sed 's/^.*@//'); \
-	if [ -z "$$AGENT_DIGEST" ]; then AGENT_DIGEST="sha256:$$(docker image inspect $(AGENT_IMAGE) --format '{{.Id}}' | sed 's/^sha256://')"; fi; \
-	MEMORY_DIGEST=$$(docker image inspect $(MEMORY_IMAGE) --format '{{index .RepoDigests 0}}' 2>/dev/null | sed 's/^.*@//'); \
-	if [ -z "$$MEMORY_DIGEST" ]; then MEMORY_DIGEST="sha256:$$(docker image inspect $(MEMORY_IMAGE) --format '{{.Id}}' | sed 's/^sha256://')"; fi; \
+release-manifest: build-agent build-memory runtime-archive ## Emit out/release-manifest.json binding version + both image digests + runtime digest + kit revision. EVERY artifact shares ONE identity, $(LAUNCHER_VERSION): the launcher binary, the runtime archive, the manifest "version", and both locally built image tags. That is the whole point of the derived local version — a beta bundle is internally consistent and never binds itself to a digest sitting under the published :$(VERSION) tag. Release CI sets LAUNCHER_VERSION=$(VERSION) and publishes the clean semver instead.
+	@AGENT_DIGEST=$$(docker image inspect $(LOCAL_AGENT_IMAGE) --format '{{index .RepoDigests 0}}' 2>/dev/null | sed 's/^.*@//'); \
+	if [ -z "$$AGENT_DIGEST" ]; then AGENT_DIGEST="sha256:$$(docker image inspect $(LOCAL_AGENT_IMAGE) --format '{{.Id}}' | sed 's/^sha256://')"; fi; \
+	MEMORY_DIGEST=$$(docker image inspect $(LOCAL_MEMORY_IMAGE) --format '{{index .RepoDigests 0}}' 2>/dev/null | sed 's/^.*@//'); \
+	if [ -z "$$MEMORY_DIGEST" ]; then MEMORY_DIGEST="sha256:$$(docker image inspect $(LOCAL_MEMORY_IMAGE) --format '{{.Id}}' | sed 's/^sha256://')"; fi; \
 	node scripts/release/emit-manifest.mjs \
 		--version $(LAUNCHER_VERSION) \
 		--agent-digest "$$AGENT_DIGEST" \
@@ -224,6 +267,6 @@ install: bundle ## Build the release bundle and put the ONE pix binary on your P
 	@echo "Next:      pix setup   (installs the runtime under ~/.pix and reconciles pix-memory)"
 	@echo "Ensure ~/.local/bin is on your PATH, then: cd <any project> && pix"
 
-clean: ## Remove both built images
-	-docker rmi $(AGENT_IMAGE)
-	-docker rmi $(MEMORY_IMAGE)
+clean: ## Remove this checkout's locally built images (the $(LAUNCHER_VERSION) identity), never another stack's published :$(VERSION) tags
+	-docker rmi $(LOCAL_AGENT_IMAGE)
+	-docker rmi $(LOCAL_MEMORY_IMAGE)

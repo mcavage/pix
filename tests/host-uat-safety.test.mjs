@@ -35,7 +35,7 @@ test("host-uat.sh launches with --dev so it consumes out/.local-image-tag", () =
 	assert.match(script, /out\/\.local-image-tag/, "it must verify the local image tag exists before launching");
 });
 
-test("host-uat.sh refuses BEFORE any mutation when a pre-existing pix-memory container or MCP registration would be touched", () => {
+test("host-uat.sh refuses BEFORE any mutation when a pre-existing resource under its OWN scoped names would be touched", () => {
 	// Slice between the two STEP banners, not between raw substrings: the
 	// header comment also mentions `make bundle`, so an indexOf on that
 	// alone would produce an empty (vacuously passing) region.
@@ -43,8 +43,10 @@ test("host-uat.sh refuses BEFORE any mutation when a pre-existing pix-memory con
 	const buildStart = script.indexOf('step "build the real installable bundle');
 	assert.ok(preflightStart > 0 && buildStart > preflightStart, "the pre-flight step must precede the build step");
 	const preflight = script.slice(preflightStart, buildStart);
-	assert.match(preflight, /memory_container_exists/, "the pre-flight must probe for an existing pix-memory container");
-	assert.match(preflight, /mcp_registration_exists/, "the pre-flight must probe for an existing pix-memory MCP registration");
+	assert.match(preflight, /memory_container_exists/, "the pre-flight must probe for an existing memory container");
+	assert.match(preflight, /mcp_registration_exists/, "the pre-flight must probe for an existing memory MCP registration");
+	assert.match(preflight, /\$MEMORY_CONTAINER/, "the refusal must name THIS run's scoped container, not the bare legacy name");
+	assert.match(preflight, /\$MEMORY_MCP/, "the refusal must name THIS run's scoped MCP registration");
 	assert.equal((preflight.match(/fail "/g) || []).length, 2, "both probes must refuse, not warn");
 	// The refusal has to come before the first thing that changes the host.
 	assert.ok(preflightStart < script.indexOf('step "U1 setup'), "the pre-flight must run before pix setup");
@@ -59,7 +61,7 @@ test("host-uat.sh cleans up only resources it proved it created", () => {
 	// exact bug this pins: it deleted a global container the run may not
 	// have created.
 	const cleanup = script.slice(script.indexOf("cleanup() {"), script.indexOf("trap cleanup EXIT"));
-	const dockerRm = cleanup.indexOf("docker rm -f pix-memory");
+	const dockerRm = cleanup.indexOf('docker rm -f "$MEMORY_CONTAINER"');
 	assert.ok(dockerRm > 0, "cleanup should still remove a container this run created");
 	assert.ok(
 		cleanup.slice(0, dockerRm).includes('if [ "$CREATED_MEMORY_CONTAINER" = "1" ]'),
@@ -69,7 +71,7 @@ test("host-uat.sh cleans up only resources it proved it created", () => {
 
 test("host-uat.sh removes an MCP registration it created, best-effort and honestly", () => {
 	const cleanup = script.slice(script.indexOf("cleanup() {"), script.indexOf("trap cleanup EXIT"));
-	assert.match(cleanup, /sbx mcp rm pix-memory|sbx mcp remove pix-memory/, "it must try the native removal verb");
+	assert.match(cleanup, /sbx mcp rm "\$MEMORY_MCP"|sbx mcp remove "\$MEMORY_MCP"/, "it must try the native removal verb against its OWN scoped name");
 	assert.match(
 		cleanup,
 		/no MCP removal verb/,
@@ -100,4 +102,44 @@ test("host-uat.sh exercises the [[setup]] hook path, the v2 replacement for pack
 		script.indexOf("pix env trust hooked") < script.indexOf("pix setup --env hooked"),
 		"the hook environment must be trusted before its hooks are allowed to run",
 	);
+});
+
+test("host-uat.sh derives every Pix-owned name from a stack id it computes INDEPENDENTLY of the launcher", () => {
+	assert.match(script, /stack_id_for\(\)/, "the script must derive the stack id itself, not ask pix for it");
+	assert.match(script, /cut -c1-16/, "the stack id is the first 16 hex characters of the sha256 of the canonical PIX_HOME path");
+	assert.match(script, /MEMORY_CONTAINER="pix-memory-\$STACK_ID"/, "the container name must be scoped");
+	assert.match(script, /MEMORY_MCP="pix-memory-\$STACK_ID"/, "the memory MCP name must be scoped");
+	assert.match(script, /SESSION_MCP="pix-session-\$STACK_ID"/, "the session MCP name must be scoped");
+	// Bare, unscoped names must never be what a probe or a removal targets.
+	assert.doesNotMatch(script, /docker rm -f pix-memory\b(?!-)/, "cleanup must never remove the bare legacy container name");
+	assert.doesNotMatch(script, /name=\^pix-memory\$/, "no probe may match the bare legacy container name");
+});
+
+test("host-uat.sh proves TWO concurrent PIX_HOMEs coexist: distinct ids, containers, ports, MCP names and sandbox names", () => {
+	const u8 = script.slice(script.indexOf('step "U8 coexistence'), script.indexOf('step "U9 reset'));
+	assert.ok(u8.length > 0, "the coexistence section must exist");
+	assert.match(u8, /HOME_B="\$\(mktemp -d/, "the second PIX_HOME must be its own throwaway temp dir");
+	assert.match(u8, /\[ "\$STACK_ID_B" != "\$STACK_ID" \]/, "the two homes must derive different stack ids");
+	assert.match(u8, /\[ "\$PORT_A" != "\$PORT_B" \]/, "the two homes must allocate different loopback memory ports");
+	assert.match(u8, /MEMORY_CONTAINER_B/, "the second home must get its own memory container");
+	assert.match(u8, /sbx mcp ls \| grep -q "\$MEMORY_MCP"/, "the first stack's MCP registration must survive the second stack's setup");
+	assert.match(u8, /pix-\$STACK_ID_B-/, "the second stack's sandbox names must carry its own stack id");
+});
+
+test("host-uat.sh proves resetting stack B leaves stack A intact, and never adopts B's resources", () => {
+	const u9 = script.slice(script.indexOf('step "U9 reset'));
+	assert.match(u9, /PIX_HOME="\$HOME_B" pix reset --yes/, "reset must run against the SECOND home");
+	assert.match(u9, /grep -qx "\$MEMORY_CONTAINER"/, "stack A's container must still exist afterwards");
+	assert.match(u9, /grep -q "\$MEMORY_MCP"/, "stack A's MCP registration must still exist afterwards");
+	assert.match(u9, /memory_port = \$PORT_A/, "stack A's memory port must be unchanged");
+	// The second home's container is cleaned up only if this run created it.
+	assert.match(script, /CREATED_MEMORY_CONTAINER_B=0/, "the second home's container flag must default to \"not mine\"");
+	assert.match(script, /if \[ "\$CREATED_MEMORY_CONTAINER_B" = "1" \]/, "cleanup must gate on it");
+});
+
+test("host-uat.sh reports the global-secret row honestly instead of claiming a negative it cannot prove", () => {
+	const u7 = script.slice(script.indexOf('step "U7 no HOST-GLOBAL'), script.indexOf('step "U8 coexistence'));
+	assert.match(u7, /sbx secret ls --global/, "it must actually look at the global scope");
+	assert.match(u7, /cannot prove the negative/, "a host that already had global secrets must get a NOTE, not a pass");
+	assert.doesNotMatch(u7, /sbx secret rm/, "the UAT must never remove a global secret it did not create");
 });
