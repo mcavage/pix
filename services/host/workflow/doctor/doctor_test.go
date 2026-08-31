@@ -84,6 +84,10 @@ func healthyHost(t *testing.T) (*config.Config, Options) {
 		// launches is given a github credential. Left unset this would read
 		// the developer's own refs file.
 		GitHubScope: func() (int, []string) { return health.GitHubGlobal, nil },
+		// The provider verdict is THIS PIX_HOME's refs evidence now, not the
+		// global sbx store: a healthy host declares filled op:// refs for all
+		// three model providers.
+		ProviderRefs: func() ([]string, bool) { return []string{"anthropic", "openai", "google"}, true },
 		// ...and holds no host-global sbx secret for pix to ignore. Left unset
 		// this would ask the real sbx.
 		GlobalSecrets: func() ([]string, bool) { return nil, true },
@@ -145,6 +149,9 @@ func TestDoctor_UnknownAloneIsNotAFailure(t *testing.T) {
 		SbxBin:      bin,
 		SbxArgs:     []string{"broken"},
 		KeyStoreBin: bin, KeyStoreArgs: []string{"crash"},
+		// The refs file exists and could not be read: UNKNOWN, never a
+		// no-key verdict.
+		ProviderRefs: func() ([]string, bool) { return nil, false },
 	}
 	s := run(t, cfg, o)
 	for _, name := range []string{"sbx", "providers"} {
@@ -177,9 +184,11 @@ func TestDoctor_VerifiedGapsFailWithTheExactFix(t *testing.T) {
 	o := Options{
 		Budget: 5 * time.Second,
 		SbxBin: missing,
-		// The key store ANSWERED and listed no model key. That, and only
-		// that, is a no-key verdict.
+		// The refs file ANSWERED and declares no model provider ref. That,
+		// and only that, is a no-key verdict — a host-global sbx secret
+		// never earns one either way.
 		KeyStoreBin: bin, KeyStoreArgs: []string{"nokeys"},
+		ProviderRefs: func() ([]string, bool) { return nil, true },
 	}
 	s := run(t, cfg, o)
 	want := map[string]string{
@@ -235,7 +244,8 @@ func TestDoctor_KeylessInferenceIsNotAMissingKey(t *testing.T) {
 	// The key store ANSWERS, and lists no model key: the strongest possible
 	// no-key evidence. It still must not decide this axis.
 	o := Options{Budget: 5 * time.Second, SbxBin: bin, SbxArgs: []string{"healthy"},
-		KeyStoreBin: bin, KeyStoreArgs: []string{"nokeys"}}
+		KeyStoreBin: bin, KeyStoreArgs: []string{"nokeys"},
+		ProviderRefs: func() ([]string, bool) { return nil, true }}
 
 	s := run(t, cfg, o)
 	r := result(t, s, "providers")

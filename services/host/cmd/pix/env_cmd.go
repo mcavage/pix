@@ -149,7 +149,7 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 	// the machine default, else D17's `none`), so it is handled before
 	// this command's own name resolution below.
 	if c.Effective {
-		doc, err := nativeenv.RenderEffectiveDocument(home, c.Name)
+		doc, err := nativeenv.RenderEffectiveDocument(home, c.Name, version)
 		if err != nil {
 			return envRun(d, err)
 		}

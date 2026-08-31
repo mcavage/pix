@@ -62,12 +62,25 @@ func (c DriftClass) String() string {
 //
 //   - sandboxOptions.template  — the pinned Pix agent image
 //   - sandboxOptions.pullPolicy — the pinned pull policy for that image
+//   - env.PIX_LAUNCHER_VERSION — the stamped launcher build that created it
+//   - env.PIX_STACK_ID         — this PIX_HOME's stack identity
+//
+// The two env.* entries are EXACT keys, never an "env.PIX_*" prefix rule:
+// they are the only two variables Pix itself composes
+// (PixManagedEnvVars), they carry no authored configuration and no host
+// exposure, and a launcher version bump is precisely the construction pin
+// automatic recreation exists for. Every OTHER env.* key — including one
+// an author happened to name PIX_SOMETHING — stays substantive and still
+// refuses, because classifyKey's default is substantive and this map is an
+// allowlist of literals.
 //
 // Kit entries are handled separately (see classifyKey): they are index
 // addressed and can also collapse to the "kits[]" group key.
 var recreationSafeComposedKeys = map[string]bool{
-	"sandboxOptions.template":   true,
-	"sandboxOptions.pullPolicy": true,
+	"sandboxOptions.template":      true,
+	"sandboxOptions.pullPolicy":    true,
+	"env." + EnvVarLauncherVersion: true,
+	"env." + EnvVarStackID:         true,
 }
 
 // classifyKey classifies ONE composed fingerprint key.

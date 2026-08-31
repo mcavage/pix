@@ -130,6 +130,15 @@ func TestResetCmd_SweepIsScopedToCurrentStack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stack.ID: %v", err)
 	}
+	// The SAME derived name reset_cmd.go computes for this PIX_HOME. It is
+	// passed explicitly because ResetHome REFUSES an empty ContainerName
+	// rather than defaulting to the bare legacy "pix-memory" (which could
+	// remove a different PIX_HOME's container) — the seam under test here is
+	// the sweep, so the container name is supplied, never made optional.
+	containerName, err := stack.MemoryContainerName(id)
+	if err != nil {
+		t.Fatalf("stack.MemoryContainerName: %v", err)
+	}
 	mine := "pix-" + id + "-mine"
 	foreign := "pix-fedcba9876543210-theirs"
 	fixture := installFakeSbxOnPath(t, mixedStackListFixture(mine, foreign))
@@ -143,6 +152,7 @@ func TestResetCmd_SweepIsScopedToCurrentStack(t *testing.T) {
 	// `pix reset` production wiring (reset_cmd.go), unchanged here.
 	res, err := reset.ResetHome(reset.HomeDeps{
 		Home:            home,
+		ContainerName:   containerName,
 		Sweep:           rmAllSandboxes(d),
 		ContainerRunner: fakeAbsentContainerRunner{},
 		Out:             d.Out,

@@ -23,11 +23,17 @@
 #
 # SAFETY — this script runs against a developer's REAL host, so:
 #   * PIX_HOME is a throwaway temp directory. ~/.pix is never touched.
-#   * pix-memory is a single GLOBAL Docker container and pix-memory is a
-#     single GLOBAL sbx MCP registration. Neither is namespaced per
-#     PIX_HOME, so if one already exists it belongs to the USER, not to
-#     this run. The script refuses BEFORE any mutation in that case rather
-#     than adopting, replacing, or deleting it.
+#   * Every Pix-owned resource is now STACK-SCOPED: one PIX_HOME = one
+#     stack, identified by a 16-hex id derived from the canonical PIX_HOME
+#     path, and the memory container ("pix-memory-<id>"), the two MCP
+#     registrations ("pix-memory-<id>", "pix-session-<id>") and every
+#     sandbox ("pix-<id>-...") all carry it. The pre-flight still refuses
+#     BEFORE any mutation if a resource under THIS run's own scoped names
+#     already exists (it would then belong to the USER, not to this run) —
+#     the check simply matches the scoped names now instead of the bare
+#     legacy ones. A user's own pix-memory / pix-memory-<other id> is
+#     deliberately NOT probed, adopted, replaced or removed: it belongs to
+#     a different stack and coexists.
 #   * Cleanup removes only what this run PROVED it created: each resource
 #     has its own CREATED_* flag, set only after this script observed the
 #     resource absent beforehand and present afterwards.
@@ -48,18 +54,35 @@ PIX_HOME="$(mktemp -d "${TMPDIR:-/tmp}/pix-uat-home.XXXXXX")"
 export PIX_HOME
 SANDBOX="pix-uat"
 
+# stack_id_for HOME derives the same 16-hex stack id the launcher derives
+# (services/host/stack: sha256 of the canonical, symlink-resolved PIX_HOME
+# path, first 16 hex characters). It is computed in shell rather than read
+# back from pix so the checks below are INDEPENDENT evidence, not the
+# launcher agreeing with itself.
+stack_id_for() {
+  printf '%s' "$(cd "$1" && pwd -P)" \
+    | { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } \
+    | cut -c1-16
+}
+
+STACK_ID="$(stack_id_for "$PIX_HOME")"
+MEMORY_CONTAINER="pix-memory-$STACK_ID"
+MEMORY_MCP="pix-memory-$STACK_ID"
+SESSION_MCP="pix-session-$STACK_ID"
+
 # Ownership flags. Each stays 0 until this run has POSITIVE evidence it
 # created the resource; cleanup touches nothing whose flag is still 0.
 CREATED_MEMORY_CONTAINER=0
 CREATED_MCP_REGISTRATION=0
 CREATED_SANDBOX=0
+CREATED_MEMORY_CONTAINER_B=0
 
 memory_container_exists() {
-  [ -n "$(docker ps -a --filter 'name=^pix-memory$' --format '{{.Names}}' 2>/dev/null)" ]
+  [ -n "$(docker ps -a --filter "name=^$MEMORY_CONTAINER\$" --format '{{.Names}}' 2>/dev/null)" ]
 }
 
 mcp_registration_exists() {
-  sbx mcp ls 2>/dev/null | grep -q 'pix-memory'
+  sbx mcp ls 2>/dev/null | grep -q "$MEMORY_MCP"
 }
 
 cleanup() {
@@ -72,27 +95,35 @@ cleanup() {
   if [ "$CREATED_MCP_REGISTRATION" = "1" ]; then
     # Best effort: not every sbx build exposes a removal verb. If it does
     # not, say so plainly rather than pretending the host is clean.
-    if sbx mcp rm pix-memory >/dev/null 2>&1 || sbx mcp remove pix-memory >/dev/null 2>&1; then
-      printf 'host-uat: removed the pix-memory MCP registration (created by this run)\n'
+    if sbx mcp rm "$MEMORY_MCP" >/dev/null 2>&1 || sbx mcp remove "$MEMORY_MCP" >/dev/null 2>&1; then
+      printf 'host-uat: removed the %s MCP registration (created by this run)\n' "$MEMORY_MCP"
     else
-      printf 'host-uat: NOTE: this sbx has no MCP removal verb; the pix-memory registration this run created is still present. Remove it yourself if you do not want it.\n' >&2
+      printf 'host-uat: NOTE: this sbx has no MCP removal verb; the %s registration this run created is still present. Remove it yourself if you do not want it.\n' "$MEMORY_MCP" >&2
     fi
   fi
   if [ "$CREATED_MEMORY_CONTAINER" = "1" ]; then
-    docker rm -f pix-memory >/dev/null 2>&1
-    printf 'host-uat: removed the pix-memory container (created by this run)\n'
+    docker rm -f "$MEMORY_CONTAINER" >/dev/null 2>&1
+    printf 'host-uat: removed the %s container (created by this run)\n' "$MEMORY_CONTAINER"
+  fi
+  if [ -n "${HOME_B:-}" ]; then
+    if [ "$CREATED_MEMORY_CONTAINER_B" = "1" ]; then
+      docker rm -f "$MEMORY_CONTAINER_B" >/dev/null 2>&1
+      printf 'host-uat: removed the %s container (created by this run)\n' "$MEMORY_CONTAINER_B"
+    fi
+    rm -rf "$HOME_B"
+    printf 'host-uat: removed %s\n' "$HOME_B"
   fi
   rm -rf "$PIX_HOME"
   printf 'host-uat: removed %s\n' "$PIX_HOME"
 }
 trap cleanup EXIT
 
-step "pre-flight: refuse to touch a pre-existing pix-memory the user owns"
+step "pre-flight: refuse to touch a pre-existing resource under THIS run's own scoped names"
 if memory_container_exists; then
-  fail "a pix-memory container already exists on this host. It is GLOBAL (not per-PIX_HOME), so this run would replace and then delete a resource it did not create. Remove it yourself first if it is disposable: docker rm -f pix-memory"
+  fail "a $MEMORY_CONTAINER container already exists on this host. That is THIS run's own scoped name, so the container belongs to a previous run or to the user, not to this one, and this run would replace and then delete a resource it did not create. Remove it yourself first if it is disposable: docker rm -f $MEMORY_CONTAINER"
 fi
 if mcp_registration_exists; then
-  fail "the pix-memory MCP name is already registered with sbx. It is GLOBAL, so this run would mutate a registration it did not create. Remove it yourself first if it is disposable, then rerun."
+  fail "the $MEMORY_MCP name is already registered with sbx. That is THIS run's own scoped name, so this run would mutate a registration it did not create. Remove it yourself first if it is disposable, then rerun."
 fi
 
 step "build the real installable bundle (out/pix + release-manifest.json + runtime archive)"
@@ -119,6 +150,7 @@ pix setup
 if memory_container_exists; then CREATED_MEMORY_CONTAINER=1; fi
 if mcp_registration_exists; then CREATED_MCP_REGISTRATION=1; fi
 test -s "$PIX_HOME/state/memory/auth.token" || fail "U1: no pix-memory auth token was generated"
+docker ps -a --format '{{.Names}}' | grep -qx "$MEMORY_CONTAINER" || fail "U1: no $MEMORY_CONTAINER container exists; setup did not reconcile THIS stack's memory container"
 grep -q 'memory_port' "$PIX_HOME/config.toml" || fail "U1: no memory_port persisted in config.toml"
 
 step "U2 setup is idempotent: a second run changes nothing"
@@ -137,7 +169,10 @@ schemaVersion: "1"
 agent: pix
 YAML
 pix env show uat --effective >"$PIX_HOME/effective.yaml" || fail "U4: --effective preview failed"
-grep -q 'pix-memory' "$PIX_HOME/effective.yaml" || fail "U4: the effective document omits the reserved pix-memory built-in"
+grep -q "$MEMORY_MCP" "$PIX_HOME/effective.yaml" || fail "U4: the effective document omits this stack's $MEMORY_MCP built-in"
+grep -q "$SESSION_MCP" "$PIX_HOME/effective.yaml" || fail "U4: the effective document omits this stack's $SESSION_MCP built-in"
+grep -q "PIX_STACK_ID: $STACK_ID" "$PIX_HOME/effective.yaml" || fail "U4: the effective document omits the Pix-managed PIX_STACK_ID env fact"
+grep -q 'PIX_LAUNCHER_VERSION' "$PIX_HOME/effective.yaml" || fail "U4: the effective document omits the Pix-managed PIX_LAUNCHER_VERSION env fact"
 pix env trust uat --yes || fail "U4: pix env trust refused a fresh environment"
 pix env default uat || fail "U4: pix env default failed"
 grep -q 'default_environment = "uat"' "$PIX_HOME/config.toml" || fail "U4: default_environment not persisted"
@@ -190,6 +225,49 @@ pix rm "$SANDBOX" || fail "U5: pix rm refused the sandbox it created"
 CREATED_SANDBOX=0
 
 step "U6 memory over the Gateway"
-sbx mcp ls | grep -q 'pix-memory' || fail "U6: the reserved pix-memory name is not registered"
+sbx mcp ls | grep -q "$MEMORY_MCP" || fail "U6: this stack's $MEMORY_MCP name is not registered"
+
+step "U7 no HOST-GLOBAL pix-owned sbx secret is ever written"
+# Pix resolves every provider credential into SANDBOX-SCOPED sbx secrets at
+# launch (secret/scoped.go's setScopedSbxSecret) and reads only this
+# PIX_HOME's own op:// refs as evidence. So after a full setup + launch
+# cycle the GLOBAL scope must hold nothing Pix put there.
+if sbx secret ls --global 2>/dev/null | grep -Eq '(^|[[:space:]])(anthropic|openai|google|github)([[:space:]]|$)'; then
+  printf 'host-uat: NOTE: this host holds GLOBAL sbx secrets. Pix neither wrote nor removes them (it reads only $PIX_HOME/secrets.env), but this row cannot prove the negative on a host that already had them. Re-run on a host with no global provider secrets to earn it.\n' >&2
+else
+  printf 'host-uat: no pix-owned global sbx secret exists (the scoped write path left the global scope untouched)\n'
+fi
+
+step "U8 coexistence: a SECOND PIX_HOME gets its own container, port, MCP names and sandbox names"
+HOME_B="$(mktemp -d "${TMPDIR:-/tmp}/pix-uat-home-b.XXXXXX")"
+STACK_ID_B="$(stack_id_for "$HOME_B")"
+[ "$STACK_ID_B" != "$STACK_ID" ] || fail "U8: two distinct PIX_HOMEs derived the SAME stack id"
+MEMORY_CONTAINER_B="pix-memory-$STACK_ID_B"
+MEMORY_MCP_B="pix-memory-$STACK_ID_B"
+if [ -n "$(docker ps -a --filter "name=^$MEMORY_CONTAINER_B\$" --format '{{.Names}}' 2>/dev/null)" ]; then
+  fail "U8: a $MEMORY_CONTAINER_B container already exists; refusing to adopt a resource this run did not create"
+fi
+( PIX_HOME="$HOME_B" pix setup ) || fail "U8: pix setup failed for the second PIX_HOME"
+if [ -n "$(docker ps -a --filter "name=^$MEMORY_CONTAINER_B\$" --format '{{.Names}}' 2>/dev/null)" ]; then CREATED_MEMORY_CONTAINER_B=1; fi
+[ "$CREATED_MEMORY_CONTAINER_B" = "1" ] || fail "U8: the second PIX_HOME did not get its own $MEMORY_CONTAINER_B container"
+docker ps -a --format '{{.Names}}' | grep -qx "$MEMORY_CONTAINER" || fail "U8: setting up the second PIX_HOME removed or renamed the first stack's container"
+PORT_A="$(grep -E '^memory_port' "$PIX_HOME/config.toml" | tr -dc '0-9')"
+PORT_B="$(grep -E '^memory_port' "$HOME_B/config.toml" | tr -dc '0-9')"
+[ -n "$PORT_A" ] && [ -n "$PORT_B" ] || fail "U8: one of the two homes persisted no memory_port"
+[ "$PORT_A" != "$PORT_B" ] || fail "U8: both PIX_HOMEs allocated the SAME loopback memory port ($PORT_A)"
+sbx mcp ls | grep -q "$MEMORY_MCP_B" || fail "U8: the second stack's $MEMORY_MCP_B registration is missing (the MCP registry is host-global but namespaced)"
+sbx mcp ls | grep -q "$MEMORY_MCP" || fail "U8: registering the second stack dropped the first stack's $MEMORY_MCP registration"
+( cd "$REPO" && PIX_HOME="$HOME_B" pix run --dev --name "b-uat" -- --version ) || fail "U8: pix run failed under the second PIX_HOME"
+sbx ls | grep -q "pix-$STACK_ID_B-" || fail "U8: the second stack's sandbox does not carry its own stack id"
+( PIX_HOME="$HOME_B" pix rm --all --yes ) || fail "U8: pix rm --all failed under the second PIX_HOME"
+sbx ls | grep -q "pix-$STACK_ID_B-" && fail "U8: the second stack's own sandbox survived its own pix rm --all"
+
+step "U9 reset of stack B leaves stack A completely intact"
+( PIX_HOME="$HOME_B" pix reset --yes ) || fail "U9: pix reset failed for the second PIX_HOME"
+CREATED_MEMORY_CONTAINER_B=0
+docker ps -a --format '{{.Names}}' | grep -qx "$MEMORY_CONTAINER" || fail "U9: resetting stack B removed stack A's memory container"
+sbx mcp ls | grep -q "$MEMORY_MCP" || fail "U9: resetting stack B removed stack A's MCP registration"
+test -f "$PIX_HOME/config.toml" || fail "U9: resetting stack B renamed stack A's PIX_HOME aside"
+grep -q "memory_port = $PORT_A" "$PIX_HOME/config.toml" || fail "U9: resetting stack B changed stack A's memory port"
 
 printf '\nhost-uat: every row above PASSED on this host. Paste these lines into the delivery matrix as earned evidence.\n'

@@ -14,7 +14,7 @@ const kitRepo = "git+https://github.com/mcavage/pix.git"
 
 // DockerImageRepo is the published image repo. A local build pins a locally
 // loaded tag from <repo>/out/.local-image-tag via --template.
-const DockerImageRepo = "docker.io/mcavage/pix"
+const DockerImageRepo = "docker.io/mcavage/pix-agent"
 
 type RunOpts struct {
 	Workspace     string   // positional DIR (default ".")
@@ -50,6 +50,15 @@ type RunOpts struct {
 	// recreate can happen per `pix run`: a second recreation-safe drift on
 	// the retry is a refusal with the manual sequence, never a loop.
 	Recreated bool
+	// LauncherVersion is the version string THIS pix binary was stamped
+	// with (`main.version`, set by the Makefile's LAUNCHER_VERSION
+	// -ldflags). It is carried on RunOpts rather than threaded as yet
+	// another `version string` parameter so there is ONE field every launch
+	// decision that depends on the build identity reads: the session
+	// fingerprint's `launcher_version` component and the Pix-managed
+	// `PIX_LAUNCHER_VERSION` environment fact both come from here, so they
+	// can never disagree about which build created a sandbox.
+	LauncherVersion string
 }
 
 func gitKitURLRef(ref, version string) string {

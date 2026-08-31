@@ -13,6 +13,71 @@ scored model router, `pix-host`, the pack system, and the custom memory RPC
 are deleted outright, not deprecated. There is no migration path and no
 compatibility shim — `~/.pix` from a v1 install is not read by this build.
 
+### Added — coexistence: one PIX_HOME = one stack
+
+Two Pix installations (a release stack and a dev checkout, or two projects'
+homes) can now run on the SAME host at the same time without either one
+adopting, replacing, or deleting the other's resources.
+
+- **One PIX_HOME = one stack, always suffixed.** A stack id is the first 16
+  lowercase hex characters of the sha256 of the canonical (absolute,
+  symlink-resolved) `PIX_HOME` path. Every Pix-owned runtime resource
+  carries it, with no unscoped fallback anywhere: sandboxes are
+  `pix-<stack-id>-<basename>-<workspace-digest>` (an explicit `--name` is
+  scoped too), the memory container is `pix-memory-<stack-id>`, and the two
+  reserved MCP servers are `pix-memory-<stack-id>` and
+  `pix-session-<stack-id>`. A stack id that cannot be derived is an error,
+  never a bare legacy name.
+- **The MCP registry is host-global but namespaced.** `mcp.servers`
+  registration still happens once per host, in the sbx Gateway; the two
+  built-ins simply register under stack-scoped names, so two homes' entries
+  sit side by side instead of overwriting one another.
+- **Each home gets its own loopback memory port**, allocated by `pix setup`
+  and persisted as `memory_port` in that home's `config.toml`. Every reader
+  — the launch's trusted host-state payload, the readiness probe, the
+  effective-document preview — reads THAT value; there is no compiled-in
+  `11435` left in the launcher.
+- **Cleanup only ever touches the current stack.** `pix rm --all`,
+  `pix rm --orphans` and `pix reset` discover sandboxes through a listing
+  filtered to this stack's id, and `pix reset` refuses outright rather than
+  guessing a container name.
+
+### Changed — credentials are sandbox-scoped, never host-global
+
+- **`pix setup` creates the refs file; each run refreshes the sandbox's own
+  secrets.** Provider credentials live in `$PIX_HOME/secrets.env` as
+  `op://` references only. Every create AND every attach re-resolves them
+  and writes them as `sbx secret set -f --sandbox <name> ...`. There is no
+  "already set, skip it" branch, so a rotated 1Password item takes effect on
+  the next run.
+- **Host-global sbx secrets are ignored and never removed automatically.** A
+  global belongs to whoever pushed it, and may be another stack's. Pix reads
+  only its own refs as evidence — `pix doctor`'s provider row is now graded
+  off `secrets.env`, not off `sbx secret ls` — and reports any globals it
+  finds in a separate, read-only "ignored" row. Removing one is your call,
+  never Pix's.
+
+### Added — version identity in every launch
+
+- The stamped launcher version travels on `RunOpts.LauncherVersion`, enters
+  the session fingerprint as `launcher_version`, and is composed into every
+  effective document as the Pix-managed `PIX_LAUNCHER_VERSION` environment
+  fact (beside `PIX_STACK_ID`). `pix env --effective` shows the same two
+  facts a real create writes.
+- Exactly those two composed keys (`env.PIX_LAUNCHER_VERSION`,
+  `env.PIX_STACK_ID`) are recreation-safe, so a version bump takes the
+  existing proof-gated automatic recreate path (fresh listing, zero holders,
+  no keep marker, direct host-mounted workspace). Every other environment
+  variable's drift is substantive and still refuses.
+- **Local builds carry a distinct, derived identity.** A local
+  `make`-produced version is `X.Y.(Z+1)-beta.<sha7>[.dirty.<12hex>]`, and
+  the launcher binary, the runtime archive, the release manifest, and both
+  locally built image tags (`pix-agent`, `pix-memory`) all share it. Release
+  CI publishes the clean semver instead. `make load` tags and prunes sbx
+  templates under a hash of the canonical worktree path, so one checkout
+  never deletes another's loaded templates, and `make run` no longer pins a
+  fixed `NAME=pix-pix` — the launcher derives its own stack-scoped name.
+
 ### Changed (breaking)
 
 - **One binary, not two.** `pix` is now the only host executable: it

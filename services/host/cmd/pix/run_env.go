@@ -116,7 +116,11 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 		PullPolicy:       launch.EffectivePullPolicy,
 		PrimaryWorkspace: primary,
 		PersonalContext:  envinfo.WorkspaceFact{Path: config.ContextDir()},
-		PixEnvVars:       map[string]string{},
+		// The two Pix-managed environment facts (Wave D version identity):
+		// the stamped launcher build and this PIX_HOME's stack id, composed
+		// by the SAME producer `pix env --effective` uses so a preview and a
+		// real create can never show different env blocks.
+		PixEnvVars: envinfo.PixManagedEnvVars(o.LauncherVersion, currentStackID()),
 	}
 	// `sbx env create` reads ONLY this document, so every mount and kit the
 	// pre-cutover `sbx run` argv carried has to travel inside it. Both lists
@@ -164,6 +168,23 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 // yet implemented — see this repo's host-UAT tracking for that gap; this
 // function only emits the reserved declaration a future implementation
 // fills in.
+// currentStackID resolves THIS PIX_HOME's stack id for the Pix-managed
+// `PIX_STACK_ID` environment fact, degrading to "" (the fact is omitted,
+// never rendered empty) exactly as builtinMCPFacts degrades to omitting a
+// built-in it cannot name. It never falls back to a placeholder id: a
+// wrong stack id in a sandbox's environment is worse than an absent one.
+func currentStackID() string {
+	home, err := pixhome.Resolve()
+	if err != nil {
+		return ""
+	}
+	id, err := stack.ID(home.Home)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
 func builtinMCPFacts() envinfo.BuiltinMCPFacts {
 	var facts envinfo.BuiltinMCPFacts
 	if home, err := pixhome.Resolve(); err == nil {

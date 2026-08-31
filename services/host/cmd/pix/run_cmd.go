@@ -130,6 +130,11 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 		Resume:      c.Resume,
 		Passthrough: c.PiArg,
 		Keep:        c.Keep,
+		// The ONE place this binary's stamped identity enters a launch. From
+		// here it reaches the session fingerprint (`launcher_version`) and
+		// the Pix-managed `PIX_LAUNCHER_VERSION` env fact; nothing else reads
+		// the package-level var for a launch decision.
+		LauncherVersion: version,
 	}
 	// `--task NAME` resolves an existing task checkout by name: task.Resolve does the work
 	// and this fills the ordinary DIR + --name shape, so no sandbox-lifecycle code is

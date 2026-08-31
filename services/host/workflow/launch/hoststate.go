@@ -12,16 +12,27 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/container"
 	"pix/host/hostenv"
 	"pix/host/inference"
 	"pix/host/secret"
 )
 
-// memoryPortDefault is the pix-memory container's default published port
-// (container.Spec's own default; duplicated here as a literal rather than an
-// import because this is a LIVENESS DIAL, not a call through the custom
-// memory JSON-RPC protocol the Pix v2 cutover deleted — see AC-16).
-const memoryPortDefault = 11435
+// memoryPort is the port THIS PIX_HOME's pix-memory container is published
+// on. It is a per-home fact, not a constant: two PIX_HOMEs coexisting on one
+// host each allocate their own loopback port (container.EnsureMemoryPort,
+// persisted as config.toml's memory_port), so a hardcoded literal here dialed
+// the OTHER stack's container — or nothing at all — and reported the answer
+// as this stack's. cfg is the same machine config every other fact in this
+// payload comes from; a home that has not run `pix setup` yet reads
+// container.DefaultMemoryPort, the same "not allocated yet" value
+// container.ReadMemoryPort returns.
+func memoryPort(cfg *config.Config) int {
+	if cfg != nil && cfg.MemoryPort != 0 {
+		return cfg.MemoryPort
+	}
+	return container.DefaultMemoryPort
+}
 
 type hostStateKeys struct {
 	Anthropic bool   `json:"anthropic"`
@@ -126,7 +137,7 @@ func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		// are declared by the ENVIRONMENT's .sbxenv.yaml plus the reserved
 		// built-ins — config.toml carries no second server list any more, so
 		// this host-state summary reports none of its own.
-		Memory: hostStateSvc{Enabled: true, Up: dialer(memoryPortDefault), Port: memoryPortDefault},
+		Memory: hostStateSvc{Enabled: true, Up: dialer(memoryPort(cfg)), Port: memoryPort(cfg)},
 		MCP:    hostStateMCP{Enabled: false},
 		Models: hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
 	}
