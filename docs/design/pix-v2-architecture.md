@@ -566,7 +566,9 @@ declared references (`op run --env-file`), never the complete `secrets.env`
 file. Every other configured ref (model provider keys, tool keys,
 `GITHUB_TOKEN`) resolves on each create and each attach into a credential
 scoped to the ONE sandbox that launch is entering (`sbx secret set -f
---sandbox <name> <service> -t <value>`); there is no "already set, skip it"
+--sandbox <name> <service>`, with the resolved value written to that
+command's stdin so it never appears in the host's process table); there is
+no "already set, skip it"
 branch, so a rotated 1Password item takes effect on the next run. Pix never
 writes a host-global sbx secret and never reads one as evidence that a
 credential exists; a global secret already on the host is reported by doctor
@@ -849,10 +851,10 @@ The PR is ready to merge only after one supported host proves:
     `pix-session-<id>` Gateway registrations coexisting with the first
     stack's; `pix rm --all`/`pix reset` run against ONE stack leaves the
     other stack's sandboxes, container, and MCP registrations untouched;
-17. the real `sbx` CLI accepts `sbx secret set -f --sandbox <name> <service>
-    -t <value>` for a model provider key, a tool key, and `GITHUB_TOKEN`, and
-    the resulting sandbox can use each one (a live model call, a tool call, a
-    push), not merely that the command exits zero; and
+17. the real `sbx` CLI accepts `sbx secret set -f --sandbox <name> <service>`
+    with the value on stdin for a model provider key, a tool key, and
+    `GITHUB_TOKEN`, and the resulting sandbox can use each one (a live model
+    call, a tool call, a push), not merely that the command exits zero; and
 18. `make load`'s worktree-scoped template tag and prune leave a second
     concurrent worktree's own loaded template untouched.
 

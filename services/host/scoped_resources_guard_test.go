@@ -102,9 +102,14 @@ func TestExactlyOneScopedSecretWriteSite(t *testing.T) {
 	}
 	// The scope flag and its value are part of the SAME argv as the write:
 	// an `sbx secret set` whose --sandbox came from somewhere else could be
-	// composed with an empty scope, which sbx treats as global.
-	if !strings.Contains(string(data), `"secret", "set", "-f", "--sandbox", sandbox, name, "-t", val`) {
-		t.Errorf("secret/scoped.go no longer composes the exact scoped argv `sbx secret set -f --sandbox <name> <key> -t <value>`")
+	// composed with an empty scope, which sbx treats as global. The VALUE is
+	// deliberately absent from that argv: it is the RunInput stdin argument,
+	// so the host's process table never carries a resolved credential.
+	if !strings.Contains(string(data), `env.RunInput(val, "sbx", "secret", "set", "-f", "--sandbox", sandbox, name)`) {
+		t.Errorf("secret/scoped.go no longer composes the exact scoped argv `sbx secret set -f --sandbox <name> <key>` with the value on stdin")
+	}
+	if strings.Contains(string(data), `"-t", val`) {
+		t.Errorf("secret/scoped.go puts the resolved value back in the argv (`-t <value>`), where any `ps` can read it")
 	}
 	if !strings.Contains(string(data), "refusing to write sbx secrets with no sandbox scope") {
 		t.Errorf("secret/scoped.go no longer refuses an EMPTY sandbox scope, which sbx would treat as a global write")

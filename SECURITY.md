@@ -94,14 +94,17 @@ keys (Anthropic/OpenAI/Google), not MCP credentials.
 
 ## Provider-key process exposure
 
-Docker Sandboxes currently accepts provider secret values through `sbx secret
-set -t`. During `pix setup`, a resolved value therefore exists briefly in the
-`sbx` child process argument vector and may be visible to same-user process
-inspection or endpoint audit tooling. Pix never logs or persists that value and
-scrubs it from subprocess errors, but it cannot remove the argv exposure until
-`sbx` provides a stdin or file-descriptor input mode. Treat hosts with untrusted
-same-user processes as outside the supported credential boundary. This is an
-accepted upstream limitation, not a claim that the value never enters argv.
+A resolved provider value never enters an argument vector. Pix writes each
+sandbox-scoped credential with `sbx secret set -f --sandbox <name> <service>`
+and feeds the value to that command's stdin, so the host's process table
+carries the flags and the service name only. Pix also never logs or persists
+the value and scrubs it from subprocess errors, which stays in place as
+defence in depth: `sbx` is free to echo back whatever it read.
+
+What remains: the pipe is readable by the two processes holding it, and
+anything that can already read this user's memory or ptrace its processes can
+read the value there. A host where another user's code runs as your user is
+outside the supported credential boundary either way.
 
 ## Reporting a vulnerability
 

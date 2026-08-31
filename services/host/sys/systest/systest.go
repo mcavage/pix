@@ -16,6 +16,7 @@ import (
 type Fake struct {
 	LookPathFn            func(name string) (string, error)
 	RunFn                 func(name string, args ...string) (string, error)
+	RunInputFn            func(input, name string, args ...string) (string, error)
 	RunTimedFn            func(name string, args ...string) (string, bool, error)
 	RunWithinFn           func(d time.Duration, name string, args ...string) (string, bool, error)
 	RunInteractiveFn      func(name string, args ...string) error
@@ -39,9 +40,13 @@ type Fake struct {
 	// refusing — for a test that wants "the real OS, except these two seams".
 	Base sys.System
 
-	// Calls records every command Run/RunTimed/RunInteractive* was asked to
-	// execute, in order, as "name arg arg". Recording is built in because
-	// roughly half the fixtures in this tree hand-roll the same slice.
+	// Calls records every command Run/RunInput/RunTimed/RunInteractive* was
+	// asked to execute, in order, as "name arg arg". Recording is built in
+	// because roughly half the fixtures in this tree hand-roll the same
+	// slice. RunInput's INPUT is deliberately never recorded here: the whole
+	// point of that seam is that a resolved credential stays out of the argv
+	// (and out of every diagnostic that prints one). A fixture that needs to
+	// assert the input asserts it inside its own RunInputFn.
 	mu    sync.Mutex
 	Calls []string
 }
@@ -93,6 +98,22 @@ func (f *Fake) Run(name string, args ...string) (string, error) {
 		return "", unwired("Run")
 	}
 	return f.RunFn(name, args...)
+}
+
+// RunInput records the ARGV and nothing else, then falls back to Run when
+// only Run is wired — the same wired-for-unwired substitution RunTimed makes.
+// The input is DROPPED on that fallback rather than folded into the argv: a
+// fixture must never see a value in a place production keeps it out of.
+func (f *Fake) RunInput(input, name string, args ...string) (string, error) {
+	if f.RunInputFn == nil {
+		if f.RunFn != nil || f.Base != nil {
+			return f.Run(name, args...)
+		}
+		f.record(name, args)
+		return "", unwired("RunInput")
+	}
+	f.record(name, args)
+	return f.RunInputFn(input, name, args...)
 }
 
 // RunTimed falls back to Run when only Run is wired. The ONE convenience fallback,

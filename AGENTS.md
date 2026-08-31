@@ -92,8 +92,8 @@ only sandboxes carrying the current stack's id.
 **Credentials are sandbox-scoped.** `pix setup` creates
 `$PIX_HOME/secrets.env` (`op://` references only); every create AND every
 attach re-resolves those refs and writes them with
-`sbx secret set -f --sandbox <name> ...`, so a rotation lands on the next
-run. **Host-global sbx secrets are ignored and never removed
+`sbx secret set -f --sandbox <name> <service>`, the value on stdin and never
+in argv, so a rotation lands on the next run. **Host-global sbx secrets are ignored and never removed
 automatically**. `pix doctor` grades the provider row off this home's refs
 and reports globals separately, as ignored.
 
