@@ -17,6 +17,7 @@ import (
 	"pix/host/lease"
 	"pix/host/mcp"
 	"pix/host/sandbox"
+	"pix/host/stack"
 	"pix/host/workspace"
 )
 
@@ -184,7 +185,17 @@ type RmOptions struct {
 	Teardown TeardownOptions
 }
 
-// Rm removes pix sandboxes, in one of four explicitly-chosen shapes:
+// Rm removes pix sandboxes, in one of four explicitly-chosen shapes. Every
+// shape is scoped to THIS process's current stack (stack.Current, i.e. this
+// PIX_HOME): `sbx ls` is a HOST-GLOBAL listing, not scoped to any one
+// PIX_HOME, so --all/--orphans discovery is narrowed to this stack's own
+// names (workspace.ParseScopedBoxes / the orphan sweep's own lease-scoped
+// candidates) before anything is ever considered for removal, and even an
+// EXPLICITLY named target is refused when it names a DIFFERENT stack's
+// sandbox — a foreign-stack name is skipped/refused, never reported
+// removed. sandbox.PlanRemove/PlanForceRemove remain the lower-level,
+// general pix-* safety net underneath this; this function is the stack-scope
+// narrowing a caller of THIS package gets on top of it.
 func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 	if err := validateRmShape(opts); err != nil {
 		return err
@@ -192,8 +203,12 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 	if _, err := env.LookPath("sbx"); err != nil {
 		return SbxUnavailableErr("remove sandboxes")
 	}
+	stackID, err := stack.Current()
+	if err != nil {
+		return fmt.Errorf("launch: resolve this stack's identity: %w", err)
+	}
 	if opts.Orphans {
-		results, err := sweepOrphans(env, out, opts.Teardown)
+		results, err := sweepOrphans(env, out, stackID, opts.Teardown)
 		if err != nil {
 			return err
 		}
@@ -217,7 +232,11 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 		for _, k := range opts.Except {
 			keep[k] = true
 		}
-		for _, b := range workspace.ParsePixBoxes(raw) {
+		// ParseScopedBoxes, not ParsePixBoxes: --all discovers only sandboxes
+		// SCOPED TO THIS STACK. A foreign stack's own pix-* sandbox never
+		// enters names at all, so it can never be reported removed by a
+		// bulk sweep run from a different PIX_HOME sharing this host.
+		for _, b := range workspace.ParseScopedBoxes(raw, stackID) {
 			if !keep[b.Name] {
 				names = append(names, b.Name)
 			}
@@ -230,8 +249,12 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 
 	failed := false
 	for _, n := range names {
-		if !strings.HasPrefix(n, "pix-") {
-			fmt.Fprintf(errOut, "refusing %q: not a pix sandbox (use `sbx rm -f %s` for that)\n", n, n)
+		if !stack.IsScopedSandboxName(stackID, n) {
+			if strings.HasPrefix(n, "pix-") {
+				fmt.Fprintf(errOut, "refusing %q: not this pix stack's sandbox (a different PIX_HOME, or a pre-scoping name)\n", n)
+			} else {
+				fmt.Fprintf(errOut, "refusing %q: not a pix sandbox (use `sbx rm -f %s` for that)\n", n, n)
+			}
 			failed = true
 			continue
 		}

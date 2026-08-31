@@ -74,7 +74,20 @@ func leaseRoot() (string, error) {
 	return filepath.Join(state, "sandboxes"), nil
 }
 
-func SessionName(workspace string) string { return sandbox.Name(workspace) }
+// SessionName is a test/legacy-shim convenience only — no production caller
+// resolves a sandbox name through here (see cmd/pix's resolveSandboxName for
+// the real launch path, which threads stack-scoped errors properly). It
+// panics on a resolution failure rather than degrading to an unscoped name:
+// a test environment that cannot resolve its own stack identity (see
+// sandbox.Name/stack.Current) is broken in a way no caller here should
+// paper over.
+func SessionName(workspace string) string {
+	name, err := sandbox.Name(workspace)
+	if err != nil {
+		panic(fmt.Sprintf("launch: SessionName(%q): %v", workspace, err))
+	}
+	return name
+}
 
 func leaseDirFor(sessionKey string) (string, error) {
 	root, err := leaseRoot()

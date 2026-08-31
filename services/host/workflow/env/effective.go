@@ -131,11 +131,15 @@ func ComputeEffective(home pixhome.Paths, explicit string) (envinfo.RuntimeFacts
 	if err != nil {
 		return envinfo.RuntimeFacts{}, err
 	}
+	sandboxName, err := sandbox.Name(cwd)
+	if err != nil {
+		return envinfo.RuntimeFacts{}, err
+	}
 
 	facts := envinfo.RuntimeFacts{
 		Document:    doc,
 		Sidecar:     sidecar,
-		SandboxName: sandbox.Name(cwd),
+		SandboxName: sandboxName,
 		Template:    effectiveTemplateRepo,
 		PullPolicy:  effectivePullPolicyMissing,
 		PrimaryWorkspace: envinfo.WorkspaceFact{

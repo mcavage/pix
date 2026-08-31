@@ -1,6 +1,10 @@
 package workspace
 
-import "strings"
+import (
+	"strings"
+
+	"pix/host/stack"
+)
 
 // sandboxls.go — parsing `sbx ls` output. It lives here, below its callers
 // (launch's ls/rm), as the one canonical parser every reader of `sbx ls` shares.
@@ -51,4 +55,26 @@ func ParsePixBoxes(sbxLsOut string) []SbxBox {
 var KnownSbxStates = map[string]bool{
 	"running": true, "stopped": true, "exited": true,
 	"created": true, "paused": true, "restarting": true, "dead": true,
+}
+
+// ParseScopedBoxes is ParsePixBoxes narrowed to rows SCOPED TO stackID
+// (stack.IsScopedSandboxName) — the discovery a BULK operation (`pix rm
+// --all`/`--orphans`, `pix reset`'s sandbox sweep) must use instead of the
+// bare pix-* filter ParsePixBoxes applies: `sbx ls` is a HOST-GLOBAL
+// listing, not scoped to any one PIX_HOME, so an unscoped bulk discovery
+// would find (and a bulk removal would then act on) every pix-owned
+// sandbox on the host, including one a completely different PIX_HOME
+// stack created. A foreign-stack row (a different stack's own scoped name,
+// or the pre-scoping legacy grammar with no stack-id segment at all) is
+// silently excluded here, never reported as a candidate — see
+// stack.IsScopedSandboxName's own doc comment for why the legacy grammar
+// counts as "not this stack" rather than "this stack, degraded".
+func ParseScopedBoxes(sbxLsOut, stackID string) []SbxBox {
+	var out []SbxBox
+	for _, b := range ParsePixBoxes(sbxLsOut) {
+		if stack.IsScopedSandboxName(stackID, b.Name) {
+			out = append(out, b)
+		}
+	}
+	return out
 }

@@ -202,12 +202,24 @@ func TestSbxModelKeyState_HangingProbeUnknownProceeds(t *testing.T) {
 // with it the stale "pix-<basename>" fallback that named a sandbox nothing
 // creates. One derivation shared by both commands is what makes them agree.
 func TestMcpLoadSandbox_IsRunsOwnDefaultName(t *testing.T) {
+	t.Setenv("PIX_HOME", t.TempDir())
 	ws := t.TempDir()
-	got := resolveSandboxName("", ws)
-	if got != resolveSandboxName("", ws) {
+	got, err := resolveSandboxName("", ws)
+	if err != nil {
+		t.Fatalf("resolveSandboxName: %v", err)
+	}
+	again, err := resolveSandboxName("", ws)
+	if err != nil {
+		t.Fatalf("resolveSandboxName: %v", err)
+	}
+	if got != again {
 		t.Error("the derivation must be stable for one workspace")
 	}
-	if other := resolveSandboxName("", t.TempDir()); other == got {
+	other, err := resolveSandboxName("", t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveSandboxName: %v", err)
+	}
+	if other == got {
 		t.Error("two different workspaces must not derive one sandbox name")
 	}
 	if !strings.HasPrefix(got, "pix-") {

@@ -52,9 +52,19 @@ func TestEntrypointArgsOmitsUnsetOptions(t *testing.T) {
 // one workspace are two sandboxes, and that naming is stable across
 // spellings.
 func TestNameForIsDeterministicPerWorkspaceAndEnv(t *testing.T) {
-	a := sandbox.NameFor("/home/u/proj", "work")
-	b := sandbox.NameFor("/home/u/./proj", "work")
-	c := sandbox.NameFor("/home/u/proj", "home")
+	t.Setenv("PIX_HOME", t.TempDir())
+	a, err := sandbox.NameFor("/home/u/proj", "work")
+	if err != nil {
+		t.Fatalf("NameFor: %v", err)
+	}
+	b, err := sandbox.NameFor("/home/u/./proj", "work")
+	if err != nil {
+		t.Fatalf("NameFor: %v", err)
+	}
+	c, err := sandbox.NameFor("/home/u/proj", "home")
+	if err != nil {
+		t.Fatalf("NameFor: %v", err)
+	}
 	if a != b {
 		t.Fatalf("the same workspace+env must derive one name: %s vs %s", a, b)
 	}
