@@ -116,8 +116,10 @@ func TestQuietCreate_NoPromptPlanOrTokenReachesUserOutput(t *testing.T) {
 		EnvCreateArgs: []string{"env", "create", "/state/effective.sbxenv.yaml"},
 		Invocation:    []string{"--model", "m"},
 	}, launch.SessionDeps{
-		Env:  hostenv.Env{System: sys.Real{}},
-		Poll: launch.CreatePoll{Probe: func(name string) launch.SbxState { return launch.ProbeTaskSandbox(hostenv.Env{System: sys.Real{}}, name) }, Interval: 20 * time.Millisecond, Timeout: 3 * time.Second},
+		Env: hostenv.Env{System: sys.Real{}},
+		Poll: launch.CreatePoll{Probe: func(name string) launch.SbxState {
+			return launch.ProbeTaskSandbox(hostenv.Env{System: sys.Real{}}, name)
+		}, Interval: 20 * time.Millisecond, Timeout: 3 * time.Second},
 		Warn: &userOut,
 		Spawn: func(argv []string) *exec.Cmd {
 			cmd := exec.Command(bin, argv...)

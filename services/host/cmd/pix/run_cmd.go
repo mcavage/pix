@@ -775,7 +775,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		// the stable effective file this launch created is what removal names
 		// — inside the SAME proof chain, never beside it.
 		Teardown: launch.TeardownOptions{Planner: launch.EnvTeardownPlanner(o.Name)},
-		Spawn: interactiveSessionSpawn("sbx"),
+		Spawn:    interactiveSessionSpawn("sbx"),
 		// The create child is the ONE non-interactive one, and it gets the
 		// opposite stdio: this launcher answers sbx's own duplicate "Approve
 		// this plan?" internally (its plan is a second approval of a document
