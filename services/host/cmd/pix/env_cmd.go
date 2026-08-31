@@ -325,11 +325,15 @@ func bomForLoaded(loaded *nativeenv.Environment) (nativeenv.BillOfMaterials, str
 // checked rather than silently printing "untrusted" for a load failure
 // same as for "never reviewed".
 func trustAccepted(home pixhome.Paths, sel nativeenv.Selected) (bool, string, error) {
-	_, fp, err := environmentBoM(sel)
+	bom, fp, err := environmentBoM(sel)
 	if err != nil {
 		return false, "", err
 	}
-	return trustAcceptedForFingerprint(home, sel, fp), fp, nil
+	// A zero-footprint environment reports trusted with no record on disk:
+	// list/show must not label "nothing to review" as "untrusted", or the
+	// generated default reads as a pending approval that no command can
+	// ever satisfy (trustSatisfied owns the rule).
+	return trustSatisfied(home, sel, bom, fp), fp, nil
 }
 
 // trustAcceptedForFingerprint reports whether fp — the caller's OWN,
@@ -342,6 +346,23 @@ func trustAccepted(home pixhome.Paths, sel nativeenv.Selected) (bool, string, er
 // (run_trust.go's envTrustSnapshot) against the accepted record — never a
 // second, independent disk read standing in as "the" fingerprint (M1,
 // security re-review: trust TOCTOU).
+// trustSatisfied is the ONE answer to "does this environment still need a
+// review?", and every caller (`pix run`'s two gates, the safe-recreate
+// Reviewed fact, `pix env trust`, env list/show, `pix setup --env`'s
+// post-review assertion) asks it rather than reading an acceptance record
+// directly. An environment whose canonical bill of materials is NOT Tier1
+// executes nothing on this host, hands out no credential, and expands no
+// mount, so there is nothing for a human to accept: it needs no acceptance
+// record, is never prompted for, and never causes a trust-state write (the
+// generated `default` environment is exactly this shape). Anything Tier1
+// still requires fp to match a recorded acceptance, unchanged.
+func trustSatisfied(home pixhome.Paths, sel nativeenv.Selected, bom nativeenv.BillOfMaterials, fp string) bool {
+	if !bom.Tier1() {
+		return true
+	}
+	return trustAcceptedForFingerprint(home, sel, fp)
+}
+
 func trustAcceptedForFingerprint(home pixhome.Paths, sel nativeenv.Selected, fp string) bool {
 	data, err := os.ReadFile(trustRecordPath(home, sel.Name))
 	if err != nil {
@@ -385,7 +406,10 @@ func runEnvTrust(d *cli.Deps, home pixhome.Paths, name string, yes, verbose bool
 	if err != nil {
 		return envRun(d, err)
 	}
-	if trustAcceptedForFingerprint(home, sel, fp) {
+	if trustSatisfied(home, sel, bom, fp) {
+		if !bom.Tier1() {
+			fmt.Fprintf(d.Out, "pix: environment %q runs nothing on this host, hands out no credential, and mounts nothing extra; there is nothing to accept.\n", sel.Name)
+		}
 		return nil
 	}
 	renderTrustBill(d.Out, sel.Name, bom, verbose)

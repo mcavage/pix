@@ -395,6 +395,17 @@ type SessionDeps struct {
 	// Spawn builds the child process for argv. The command layer owns stdio and
 	// environment wiring; this package owns only WHEN it starts and its argv.
 	Spawn func(argv []string) *exec.Cmd
+	// SpawnCreate is Spawn's counterpart for the ONE non-interactive child
+	// this lifecycle runs: `sbx env create <effective>`. It exists as its own
+	// seam because that child needs the opposite stdio from a session — sbx
+	// 0.41 prints its own plan and asks its own "Approve this plan?" on a
+	// create, which is a SECOND approval for a document Pix already rendered
+	// and trust-gated, and whose text includes the token-bearing pix-memory
+	// URL. The command layer answers it internally and captures its output;
+	// this package still owns WHEN it starts, its argv, and the receipt/poll
+	// ordering around it. nil falls back to Spawn, so a caller (or a test)
+	// that wants one stdio wiring for both children keeps it.
+	SpawnCreate func(argv []string) *exec.Cmd
 	// PrepareSecrets gives THIS sandbox the credentials this PIX_HOME
 	// configures, scoped to it (secret.PrepareSandboxSecrets). It is called
 	// on BOTH transitions, once each, and never before the sandbox is known
@@ -590,8 +601,20 @@ func reportTeardown(warn io.Writer, res TeardownResult, _ string) {
 // fails, or that leaves nothing positively identifiable behind, refuses
 // here: it never falls through to an exec against a sandbox this host
 // cannot prove it made.
+// spawnCreate picks the create child builder: the dedicated one when the
+// command layer wired it, else the ordinary Spawn. Nothing here inspects
+// argv to decide — an argv sniff would silently re-route the day a create
+// argv changes shape, and the caller already knows which child it is
+// building.
+func spawnCreate(deps SessionDeps) func(argv []string) *exec.Cmd {
+	if deps.SpawnCreate != nil {
+		return deps.SpawnCreate
+	}
+	return deps.Spawn
+}
+
 func startEnvCreateTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, error) {
-	creator, err := StartSbxSession(deps.Spawn(spec.EnvCreateArgs), deps.Poll, true, spec.Name)
+	creator, err := StartSbxSession(spawnCreate(deps)(spec.EnvCreateArgs), deps.Poll, true, spec.Name)
 	if err != nil {
 		return nil, err
 	}

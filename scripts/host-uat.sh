@@ -239,6 +239,63 @@ pix ls | grep -q "$SANDBOX" || fail "U5: pix ls does not list the sandbox it jus
 pix rm "$SANDBOX" || fail "U5: pix rm refused the sandbox it created"
 CREATED_SANDBOX=0
 
+step "U5b the generated default environment needs no trust prompt, and no second sbx approval or token reaches the terminal"
+# The generated `default` environment runs nothing on this host, so a launch
+# under it must NOT stop for a review. Driven with stdin closed: a gate that
+# still prompted would read EOF and refuse, which is exactly the failure this
+# row exists to catch.
+DEFAULT_LOG="$PIX_HOME/uat-default-run.log"
+if ( cd "$REPO" && pix run --dev --env default --name "$SANDBOX" --keep -- --version ) </dev/null >"$DEFAULT_LOG" 2>&1; then
+  CREATED_SANDBOX=1
+else
+  cat "$DEFAULT_LOG" >&2
+  fail "U5b: pix run under the generated default environment failed"
+fi
+grep -qi "Accept this host-execution footprint" "$DEFAULT_LOG" && fail "U5b: a zero-footprint environment still prompted for trust"
+grep -qi "has not been reviewed" "$DEFAULT_LOG" && fail "U5b: a zero-footprint environment was reported unreviewed"
+test -f "$PIX_HOME/state/trust/environments/default.json" && fail "U5b: a zero-footprint environment wrote a trust record"
+# sbx 0.41 renders its own plan and asks its own approval on `env create`.
+# This row is ALSO the only proof that the approval Pix writes on the create
+# child's stdin actually reaches sbx: a build that read /dev/tty instead
+# would fail the create here rather than pass quietly.
+# Pix answers it internally after its OWN gate; neither the prompt, the plan,
+# nor the token-bearing memory URL may appear on the user's terminal.
+grep -qi "Approve this plan" "$DEFAULT_LOG" && fail "U5b: sbx's duplicate plan approval reached the terminal"
+grep -q "token=" "$DEFAULT_LOG" && fail "U5b: a token-bearing memory URL reached the terminal"
+MEMORY_TOKEN_FILE="$PIX_HOME/state/memory/auth.token"
+if [ -s "$MEMORY_TOKEN_FILE" ] && grep -qF "$(cat "$MEMORY_TOKEN_FILE")" "$DEFAULT_LOG"; then
+  fail "U5b: the pix-memory bearer token itself reached the terminal"
+fi
+pix rm "$SANDBOX" || fail "U5b: pix rm refused the sandbox it created"
+CREATED_SANDBOX=0
+printf 'host-uat: the generated default launched with no trust prompt and no second sbx approval or token in the output\n'
+
+step "U5c an upgraded binary reconciles this home without pix setup"
+# Simulate the post-`brew upgrade` state: the home still claims an OLDER
+# release than the bundle beside the binary. The next ORDINARY run must
+# reconcile the machine-owned artifacts by itself, print one upgrade line,
+# and leave credentials, trust and setup hooks alone.
+INSTALLED_JSON="$PIX_HOME/state/release.json"
+if [ -f "$INSTALLED_JSON" ]; then
+  cp "$INSTALLED_JSON" "$INSTALLED_JSON.uat-backup"
+  sed 's/"version": "[^"]*"/"version": "0.0.1"/' "$INSTALLED_JSON.uat-backup" > "$INSTALLED_JSON"
+  UPGRADE_LOG="$PIX_HOME/uat-upgrade-run.log"
+  if ( cd "$REPO" && pix run --dev --env default --name "$SANDBOX" --keep -- --version ) </dev/null >"$UPGRADE_LOG" 2>&1; then
+    CREATED_SANDBOX=1
+  else
+    cat "$UPGRADE_LOG" >&2
+    fail "U5c: the post-upgrade run failed"
+  fi
+  grep -qi "upgrad" "$UPGRADE_LOG" || fail "U5c: the automatic reconcile printed no upgrade line"
+  grep -q "\"version\": \"0.0.1\"" "$INSTALLED_JSON" && fail "U5c: the release record was not updated by the automatic reconcile"
+  docker ps -a --format '{{.Names}}' | grep -qx "$MEMORY_CONTAINER" || fail "U5c: the automatic reconcile lost the memory container of this stack"
+  pix rm "$SANDBOX" || fail "U5c: pix rm refused the sandbox it created"
+  CREATED_SANDBOX=0
+  printf 'host-uat: an upgraded binary reconciled this home on an ordinary run, with no pix setup\n'
+else
+  printf 'host-uat: NOTE: no release record at %s; U5c could not be earned on this host\n' "$INSTALLED_JSON" >&2
+fi
+
 step "U6 memory over the Gateway"
 sbx mcp ls | grep -q "$MEMORY_MCP" || fail "U6: this stack's $MEMORY_MCP name is not registered"
 

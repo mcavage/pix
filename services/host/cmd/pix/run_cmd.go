@@ -291,6 +291,17 @@ func unloadedLocalImage(d *cli.Deps, what string) error {
 // finds no sandbox at all, so it creates, and a drift refusal there would be
 // a real refusal rather than a loop.
 func runLaunch(d *cli.Deps, o launch.RunOpts) error {
+	// Before the environment is resolved and before ANY sandbox side
+	// effect: if this binary's release bundle no longer matches what this
+	// PIX_HOME has installed (the ordinary state after `brew upgrade`), the
+	// machine-owned stack artifacts are reconciled here, once per
+	// invocation. A matching manifest costs one file read; an absent one is
+	// first run and still requires an explicit `pix setup`
+	// (upgrade_auto.go).
+	if uerr := autoReconcileRelease(d, autoUpgradeSeamsFor()); uerr != nil {
+		fmt.Fprintln(d.Err, strings.TrimRight(uerr.Error(), "\n"))
+		return cli.SilentError{Code: 1}
+	}
 	return runLaunchAttempt(d, cloneRunOpts(o), cloneRunOpts(o))
 }
 
@@ -745,6 +756,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		Invocation:        invocation,
 		DefaultInvocation: invocation,
 	}
+	createOut := &createCapture{}
 	deps := launch.SessionDeps{
 		Env:  defaultShellEnv(),
 		Poll: launch.SbxCreatePoll(defaultShellEnv()),
@@ -763,14 +775,15 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		// the stable effective file this launch created is what removal names
 		// — inside the SAME proof chain, never beside it.
 		Teardown: launch.TeardownOptions{Planner: launch.EnvTeardownPlanner(o.Name)},
-		Spawn: func(argv []string) *exec.Cmd {
-			cmd := exec.Command("sbx", argv...)
-			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-			// No credential bearer: host MCP servers authenticate on the host, so the
-			// sandbox never sees a token.
-			cmd.Env = os.Environ()
-			return cmd
-		},
+		Spawn: interactiveSessionSpawn("sbx"),
+		// The create child is the ONE non-interactive one, and it gets the
+		// opposite stdio: this launcher answers sbx's own duplicate "Approve
+		// this plan?" internally (its plan is a second approval of a document
+		// Pix already rendered, fingerprinted and trust-gated above, and its
+		// text carries the token-bearing pix-memory URL), and its output is
+		// captured rather than printed. On success nothing of it is shown; on
+		// failure it is printed redacted and bounded (run_create_quiet.go).
+		SpawnCreate: quietCreateSpawn("sbx", createOut),
 	}
 	// CRITICAL (security re-review), SECOND check: bound to the SAME
 	// trustSnap the first gate checked, immediately before the one call
@@ -789,6 +802,15 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		return terr
 	}
 	xerr := launch.RunSession(spec, deps)
+	if xerr != nil {
+		// The captured create output is the best diagnostic there is for a
+		// failed create, and the only place it is ever shown. Redacted
+		// (memory token, bearer values, configured secret assignments),
+		// terminal-safe, and bounded; the raw plan is never displayed.
+		if diag := createFailureDiagnostic(createOut, createSecretValues()); diag != "" {
+			fmt.Fprint(d.Err, diag)
+		}
+	}
 	// The create-path Hold, awaited only now: RunSession has returned (created
 	// and run to completion, or refused before anything started), so the
 	// sandbox's fate is already decided and the poll above has nothing left to

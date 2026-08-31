@@ -227,7 +227,26 @@ you touch the surface it names.
     whole surface; `/recall`, `/remember`, `/forget`, and the automatic
     recall/capture hooks all call the same Gateway-registered endpoint a
     model's own tool calls use.
-12. **Success words are earned by a probe.** `ready`/`verified` appear only
+12. **A launch approves exactly one thing on the user's behalf.** `sbx env
+    create` prints its own plan and asks its own approval for a document
+    Pix already composed, fingerprinted, and put through its own trust
+    gate, and that text carries the token-bearing `pix-memory` URL. Pix
+    answers that duplicate prompt internally, after its own gate, captures
+    the create child's output, and shows it only on failure, bounded and
+    with every credential redacted. The interactive `sbx exec` session
+    keeps ordinary stdio; the two children are told apart by their
+    `SessionDeps` seam, never by sniffing argv.
+13. **An environment with no host footprint is not gated.**
+    `BillOfMaterials.Tier1()` is the canonical answer and every trust
+    caller asks it: a zero-footprint environment (the generated `default`)
+    is never prompted for and never causes a trust-state write.
+14. **`pix run` reconciles machine-owned stack artifacts after an upgrade,
+    and nothing else.** A bundle/manifest mismatch runs only the shared
+    `machineSetup` composition; credentials, environment trust and
+    `[[setup]]` hooks stay in `pix setup`, a foreign-owned container still
+    refuses, and a failure restores the previous release record so the next
+    run retries.
+15. **Success words are earned by a probe.** `ready`/`verified` appear only
     after a post-mutation check; `pix doctor` never repairs, registers,
     restarts, or authenticates, and never prints `configured`/`enabled` as a
     verdict.

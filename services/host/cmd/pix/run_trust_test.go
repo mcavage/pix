@@ -63,7 +63,7 @@ func trustRecordFile(home, envName string) string {
 // before anything is created — no bill of materials on stdout (a script
 // capturing it should see nothing), and no trust record written.
 func TestRunTrustGate_NonInteractive_RefusesUnreviewedEnvironment(t *testing.T) {
-	home := trustTestHome(t, "work")
+	home := tier1TestHome(t, "work") // a REAL host-affecting fact: a zero-footprint environment is not gated at all (run_trust_zerofootprint_test.go)
 	d, out, errb := trustGateDeps(t, home)
 	d.Interactive = false
 
@@ -94,7 +94,7 @@ func TestRunTrustGate_NonInteractive_RefusesUnreviewedEnvironment(t *testing.T) 
 // other than "y" (including a bare newline, the default) refuses exactly
 // like the non-interactive case, and writes no trust record.
 func TestRunTrustGate_Interactive_DefaultNoRefusesAndRecordsNothing(t *testing.T) {
-	home := trustTestHome(t, "work")
+	home := tier1TestHome(t, "work") // a REAL host-affecting fact: a zero-footprint environment is not gated at all (run_trust_zerofootprint_test.go)
 	d, out, errb := trustGateDeps(t, home)
 	d.Interactive = true
 	d.In = strings.NewReader("\n") // bare Enter: default is No
@@ -120,7 +120,7 @@ func TestRunTrustGate_Interactive_DefaultNoRefusesAndRecordsNothing(t *testing.T
 // reading the accept/decline answer — a user must see what they are
 // approving, not merely a bare y/N prompt.
 func TestRunTrustGate_Interactive_PrintsExactBOMBeforePrompting(t *testing.T) {
-	home := trustTestHome(t, "work")
+	home := tier1TestHome(t, "work") // a REAL host-affecting fact: a zero-footprint environment is not gated at all (run_trust_zerofootprint_test.go)
 	d, _, errb := trustGateDeps(t, home)
 	d.Interactive = true
 	d.In = strings.NewReader("n\n")
@@ -144,7 +144,7 @@ func TestRunTrustGate_Interactive_PrintsExactBOMBeforePrompting(t *testing.T) {
 // afterward must NOT prompt again — the failure this time comes from
 // further down run's own pipeline (sbx absent), never from the trust gate.
 func TestRunTrustGate_Interactive_AcceptRecordsTrustAndTheSecondRunSkipsThePrompt(t *testing.T) {
-	home := trustTestHome(t, "work")
+	home := tier1TestHome(t, "work") // a REAL host-affecting fact: a zero-footprint environment is not gated at all (run_trust_zerofootprint_test.go)
 	dir := t.TempDir()
 
 	d, _, errb := trustGateDeps(t, home)

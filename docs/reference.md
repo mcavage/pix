@@ -203,7 +203,14 @@ pix env trust NAME [--yes]                    # read and accept what NAME runs o
 
 **There is no `add`/`edit`/`use`/`forget`.** Create, clone, edit, move, and
 remove an environment with ordinary filesystem and Git tools under
-`~/.pix/envs`. `pix setup` may scaffold a default one as a first-run
+`~/.pix/envs`. An environment whose bill of materials is empty (it runs
+nothing on this host, hands out no credential, and expands no mount) needs
+no acceptance at all: it is never prompted for, `pix env trust NAME` says
+there is nothing to accept and writes no record, and `pix env list`/`show`
+report it as trusted. Only a host-affecting fact (a host command or
+service, a setup hook, a credential destination, an unverified registry, a
+mount expansion) creates something to review. `pix setup` may scaffold a
+default one as a first-run
 convenience.
 
 An environment contains only two files pix interprets:
@@ -244,7 +251,18 @@ fingerprint check.
 ## 6. Setup
 
 `pix setup` is the supported, repeatable, idempotent path from an installed
-binary to a working first session. It:
+binary to a working first session, and the repair command when something
+this host owns has drifted. It is NOT an upgrade step: `pix run` compares
+the release bundle beside the binary against this home's installed manifest
+before it resolves an environment or touches a sandbox, and on a mismatch
+runs the machine-owned steps below (1, 3, 4, 5, and the container/MCP
+steps) by itself. That automatic path never solicits or writes a
+credential, never accepts environment trust, and never executes a
+`[[setup]]` hook; the `pix-memory` replace confirmation is auto-answered
+only for a container already proven to carry this stack's ownership label,
+and a failure after the release record is written restores the previous
+record so the next run retries. A home with no installed manifest is a
+first run and still requires `pix setup` explicitly. It:
 
 1. checks Docker and the supported `sbx` version;
 2. initializes `PIX_HOME` and `git init -b main`, without staging or
