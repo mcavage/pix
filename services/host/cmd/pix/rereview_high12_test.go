@@ -82,29 +82,6 @@ func TestProbeTaskSandbox_UsesBoundedSeam(t *testing.T) {
 	}
 }
 
-// TestSetupHandoff_HangingSbxFailsClosed: setup's agent phase probes the
-// sandbox state before any handoff; a hanging sbx is launch.SbxUnknown, which must
-// FAIL CLOSED (never launch) and must not hang.
-func TestSetupHandoff_HangingSbxFailsClosed(t *testing.T) {
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
-	start := time.Now()
-	state := launch.ProbeTaskSandbox(env, "pix-ws")
-	if state != launch.SbxUnknown {
-		t.Fatalf("hanging probe must be launch.SbxUnknown, got %v", state)
-	}
-	var out bytes.Buffer
-	err := runSetupHandoff(".", "pix-ws", state, &out, func([]string) error {
-		t.Fatal("setup must never launch on an indeterminate sandbox state")
-		return nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "cannot determine the state") {
-		t.Errorf("setup with an unknown sandbox state must fail closed, got: %v", err)
-	}
-	if el := time.Since(start); el > 10*time.Second {
-		t.Fatalf("setup state path took %s — unbounded", el)
-	}
-}
-
 // TestLocalImageLoaded_HangingSbxBounded: `pix run --dev`'s image-loaded
 // preflight (`sbx template ls`) is read-only; a hang is bounded and degrades
 // to the documented fail-open "no signal" answer — never a wedge, and never

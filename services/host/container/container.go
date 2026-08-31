@@ -401,6 +401,61 @@ func (e *PortInUseError) Error() string {
 	return fmt.Sprintf("port 127.0.0.1:%d is already in use by another process on this host; pix-memory needs it free before it can start (stop whatever is using it, then rerun `pix setup`)", e.Port)
 }
 
+// dockerPortConflictMarkers are the substrings Docker's OWN daemon prints on
+// stderr (folded into CombinedOutput, same as notFoundMarkers above) when a
+// `docker create`/`docker start` publish loses a bind race: "Bind for
+// 0.0.0.0:<port> failed: port is already allocated" (create) and "...driver
+// failed programming external connectivity... address already in use"
+// (start). Matched case-insensitively, same as notFoundMarkers.
+var dockerPortConflictMarkers = []string{
+	"port is already allocated",
+	"address already in use",
+}
+
+// isDockerPortConflict reports whether out — a docker create/start
+// invocation's own combined output — names a bind conflict ON hostPort
+// SPECIFICALLY, never a bare marker-substring match against arbitrary
+// stderr. Docker's own message always embeds the exact host:port pair it
+// failed to bind ("Bind for 0.0.0.0:18080 failed: port is already
+// allocated", "...0.0.0.0:18080: bind: address already in use"), so this
+// requires the literal port NUMBER to appear alongside a marker — scoping
+// the classification to THIS create/start call's own port, never a
+// different resource or a different container docker happened to also
+// complain about in the same run. Do not weaken this to a bare marker
+// match: an operation/container-scoped false positive here would retry a
+// genuinely fatal error (an unrelated permission or driver failure) as if
+// it were a recoverable port collision.
+func isDockerPortConflict(out string, hostPort int) bool {
+	low := strings.ToLower(out)
+	if !strings.Contains(low, strconv.Itoa(hostPort)) {
+		return false
+	}
+	for _, marker := range dockerPortConflictMarkers {
+		if strings.Contains(low, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// removeFailedCreate safely removes a container THIS Reconcile call just
+// created but could not start: id is the exact ID docker create just
+// returned, never the spec's NAME, so a concurrent process's differently-ID'd
+// container under the same name can never be reached by this cleanup even if
+// one somehow existed. Best-effort: a removal failure is swallowed (logged
+// nowhere — Reconcile already has the real error, a port conflict, to
+// report) rather than masking the port-conflict error the caller needs to
+// see and act on.
+func removeFailedCreate(runner Runner, id string) {
+	if runner == nil {
+		runner = DefaultRunner
+	}
+	if id == "" {
+		return
+	}
+	_, _ = runner.Run("rm", "-f", id)
+}
+
 // PortAvailable probes whether hostPort is free for a NEW bind on
 // 127.0.0.1: exactly the address:port pair Docker's own userland proxy
 // binds when the container actually starts. It is a best-effort, racy
@@ -440,9 +495,19 @@ func Reconcile(runner Runner, spec Spec, prober Prober, opts ReconcileOptions) (
 		}
 		id, err := Create(runner, spec)
 		if err != nil {
+			if isDockerPortConflict(err.Error(), spec.HostPort) {
+				return Result{}, &PortInUseError{Port: spec.HostPort}
+			}
 			return Result{}, err
 		}
 		if err := Start(runner, name); err != nil {
+			if isDockerPortConflict(err.Error(), spec.HostPort) {
+				// Created but never started: remove THIS run's own container
+				// (by ID, never by name) so a caller's reallocate-and-retry
+				// never collides with, or later adopts, this leftover.
+				removeFailedCreate(runner, id)
+				return Result{}, &PortInUseError{Port: spec.HostPort}
+			}
 			return Result{}, err
 		}
 		res := Result{Action: ActionCreated, ID: id}
@@ -479,9 +544,16 @@ func Reconcile(runner Runner, spec Spec, prober Prober, opts ReconcileOptions) (
 		}
 		id, err := Create(runner, spec)
 		if err != nil {
+			if isDockerPortConflict(err.Error(), spec.HostPort) {
+				return Result{}, &PortInUseError{Port: spec.HostPort}
+			}
 			return Result{}, err
 		}
 		if err := Start(runner, name); err != nil {
+			if isDockerPortConflict(err.Error(), spec.HostPort) {
+				removeFailedCreate(runner, id)
+				return Result{}, &PortInUseError{Port: spec.HostPort}
+			}
 			return Result{}, err
 		}
 		res := Result{

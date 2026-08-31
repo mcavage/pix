@@ -1,6 +1,6 @@
 // provider_refs_lock_test.go — the provider-refs transaction lock
 // (providerrefslock.go): the ONE advisory cross-process lock serializing every
-// both-file (op-refs.env + hostmode.env) credential transaction.
+// both-file (secrets.env + hostmode.env) credential transaction.
 //
 // Coverage here:
 //   - deterministic lock-window tests (a recording fake flock proves every
@@ -78,7 +78,7 @@ func TestSecretSetHoldsLockAcrossFileTransaction(t *testing.T) {
 		}
 	}
 	if !strings.Contains(files[fakeRefsPath], "ANTHROPIC_API_KEY=op://v/anthropic/key") {
-		t.Errorf("op-refs.env missing the key: %q", files[fakeRefsPath])
+		t.Errorf("secrets.env missing the key: %q", files[fakeRefsPath])
 	}
 }
 
@@ -113,14 +113,14 @@ func TestSecretRmHoldsLockAcrossFileTransaction(t *testing.T) {
 		}
 	}
 	if strings.Contains(files[fakeRefsPath], "ANTHROPIC_API_KEY") {
-		t.Errorf("key not removed from op-refs.env: %q", files[fakeRefsPath])
+		t.Errorf("key not removed from secrets.env: %q", files[fakeRefsPath])
 	}
 }
 
 // syncTestHome is the VIRTUAL PIX_HOME these lock tests point at: every read
 // below is served by the fake ReadFileFn keyed on the resolved path, so no
 // real directory is ever touched. Each test sets $PIX_HOME to it, because
-// op-refs.env resolves under PIX_HOME alone now (QA F5) — the old
+// secrets.env resolves under PIX_HOME alone now (QA F5) — the old
 // XDG_CONFIG_HOME fake this file used is not consulted by anything any more.
 const syncTestHome = "/cfg-synctest"
 
@@ -129,12 +129,12 @@ const syncTestHome = "/cfg-synctest"
 // syncEnv builds a hostenv.Env over a hermetic temp config dir for
 // syncProviderKeys / EnsureProviderKeysFromRefs lock tests: op
 // installed+signed-in, sbx on PATH, and a recording run/readFile so the test
-// can assert every op-refs.env read and op/sbx call landed inside the lock
+// can assert every secrets.env read and op/sbx call landed inside the lock
 // window. opReadVal is returned for every `op read`; sbxLsOut is returned for
 // `sbx secret ls`.
 func syncEnv(refsContent, opReadVal, sbxLsOut string, events *[]string) (hostenv.Env, string) {
 	dir := syncTestHome
-	refsPath := filepath.Join(dir, "op-refs.env")
+	refsPath := filepath.Join(dir, "secrets.env")
 	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
 		if k == "XDG_CONFIG_HOME" {
 			return dir
@@ -164,7 +164,7 @@ func syncEnv(refsContent, opReadVal, sbxLsOut string, events *[]string) (hostenv
 // syncProviderKeys must hold the provider-refs lock across its WHOLE
 // read-op-refs / op-read / sbx-set transaction — one acquisition, everything
 // inside the window — so a concurrent `secret set`/`secret rm` can never
-// change op-refs.env between the snapshot it reads and the sbx values it
+// change secrets.env between the snapshot it reads and the sbx values it
 // pushes.
 func TestSyncProviderKeysHoldsLockAcrossReadResolveSbxSync(t *testing.T) {
 	var events []string
@@ -195,7 +195,7 @@ func TestSyncProviderKeysHoldsLockAcrossReadResolveSbxSync(t *testing.T) {
 		}
 	}
 	if !sawRefsRead {
-		t.Fatalf("expected op-refs.env read, events: %v", events)
+		t.Fatalf("expected secrets.env read, events: %v", events)
 	}
 }
 
@@ -230,11 +230,11 @@ func TestEnsureProviderKeysFromRefsHoldsLockAcrossReadResolveSbxSync(t *testing.
 		}
 	}
 	if !sawRefsRead {
-		t.Fatalf("expected op-refs.env read, events: %v", events)
+		t.Fatalf("expected secrets.env read, events: %v", events)
 	}
 }
 
-// OfferOnePasswordKeys must write each provider's op-refs.env + hostmode.env
+// OfferOnePasswordKeys must write each provider's secrets.env + hostmode.env
 // pair under ONE lock acquisition (never two separate windows for the same
 // pair, never nested), and its final syncProviderKeys call must acquire its
 // OWN lock only AFTER every per-provider write lock has already been
@@ -242,8 +242,8 @@ func TestEnsureProviderKeysFromRefsHoldsLockAcrossReadResolveSbxSync(t *testing.
 // real flock.
 func TestOfferOnePasswordKeysWritesRefUnderOneLockThenSyncsAfterRelease(t *testing.T) {
 	dir := "/cfg-offertest"
-	t.Setenv("PIX_HOME", dir) // op-refs.env resolves under PIX_HOME alone (QA F5)
-	refsPath := filepath.Join(dir, "op-refs.env")
+	t.Setenv("PIX_HOME", dir) // secrets.env resolves under PIX_HOME alone (QA F5)
+	refsPath := filepath.Join(dir, "secrets.env")
 	files := map[string]string{}
 	var events []string
 	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
@@ -308,12 +308,12 @@ func TestOfferOnePasswordKeysWritesRefUnderOneLockThenSyncsAfterRelease(t *testi
 		if e == "write "+refsPath {
 			sawRefsWrite = true
 			if i < firstAcquire || i > firstRelease {
-				t.Errorf("op-refs.env write outside the first (ref-write) lock window: index %d, window %d..%d", i, firstAcquire, firstRelease)
+				t.Errorf("secrets.env write outside the first (ref-write) lock window: index %d, window %d..%d", i, firstAcquire, firstRelease)
 			}
 		}
 	}
 	if !sawRefsWrite {
-		t.Fatalf("expected an op-refs.env write, events: %v", events)
+		t.Fatalf("expected an secrets.env write, events: %v", events)
 	}
 	// The sync call's lock acquisition must start strictly after the
 	// ref-write's lock released — sequential, never overlapping.
@@ -339,7 +339,7 @@ func TestLockAcquisitionErrorFailsSyncProviderKeys(t *testing.T) {
 		t.Errorf("output = %q, want a lock failure message", out.String())
 	}
 	if len(events) != 0 {
-		t.Errorf("must not read/act on op-refs.env when the lock cannot be acquired, events: %v", events)
+		t.Errorf("must not read/act on secrets.env when the lock cannot be acquired, events: %v", events)
 	}
 }
 
@@ -355,7 +355,7 @@ func TestLockAcquisitionErrorMakesEnsureProviderKeysFromRefsANoOp(t *testing.T) 
 		t.Errorf("output = %q, want a lock failure message", out.String())
 	}
 	if len(events) != 0 {
-		t.Errorf("must not read/act on op-refs.env when the lock cannot be acquired, events: %v", events)
+		t.Errorf("must not read/act on secrets.env when the lock cannot be acquired, events: %v", events)
 	}
 }
 
@@ -386,7 +386,7 @@ func realFileEnv(t *testing.T) (hostenv.Env, string) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.toml")
 	t.Setenv("PIX_CONFIG", cfg)             // keeps any config.* fallback in the temp dir too
-	t.Setenv("PIX_HOME", filepath.Dir(cfg)) // op-refs.env resolves under PIX_HOME alone (QA F5)
+	t.Setenv("PIX_HOME", filepath.Dir(cfg)) // secrets.env resolves under PIX_HOME alone (QA F5)
 	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
 		if k == "PIX_CONFIG" {
 			return cfg
@@ -431,20 +431,20 @@ func TestConcurrentSecretSetSerializedByRealFlock(t *testing.T) {
 	for i := 0; i < n; i++ {
 		want := fmt.Sprintf("TEST_REF_%d=op://v/item%d/field", i, i)
 		if !strings.Contains(string(content), want) {
-			t.Errorf("lost update: %s missing from op-refs.env:\n%s", want, content)
+			t.Errorf("lost update: %s missing from secrets.env:\n%s", want, content)
 		}
 	}
 	// The lock file exists adjacent to the refs files, mode 0600.
 	fi, err := os.Stat(filepath.Join(dir, providerRefsLockName))
 	if err != nil {
-		t.Fatalf("lock file not created adjacent to op-refs.env: %v", err)
+		t.Fatalf("lock file not created adjacent to secrets.env: %v", err)
 	}
 	if perm := fi.Mode().Perm(); perm != 0o600 {
 		t.Errorf("lock file mode = %o, want 0600", perm)
 	}
 }
 
-// A provider key exercises the two-file path (op-refs.env write + hostmode.env
+// A provider key exercises the two-file path (secrets.env write + hostmode.env
 // mirror) INSIDE the held lock; if the mirror went through the public locking
 // wrapper this would deadlock forever against the real flock.
 func TestProviderKeySetAndRmNoDeadlockUnderRealFlock(t *testing.T) {

@@ -1,10 +1,14 @@
 // memoryport.go — per-PIX_HOME pix-memory port allocation (QA F4: a single
 // fixed 18080 forced two independent PIX_HOME instances on the same host
 // into an unavoidable collision the moment both ran `pix setup`). The port
-// is machine state now (pixhome.Machine.MemoryPort), allocated once by
-// `pix setup` and read thereafter by everyone else — container, run's
-// effective builtin, env preview, doctor, reset all read the SAME persisted
-// value, never a re-derived one.
+// is machine state now (config.Config.MemoryPort, the sole config.toml
+// schema — round 5 deleted the short-lived pixhome-package struct duplicate
+// that used to compete with it for the same file), allocated once by `pix setup`
+// and read thereafter by everyone else — container, run's effective
+// builtin, env preview, doctor, reset all read the SAME persisted value,
+// never a re-derived one. Every persist below goes through config.WithLockAt,
+// the ONE config.toml lock, so a concurrent `pix env default` writer can
+// never lose an update racing this one (or vice versa).
 package container
 
 import (
@@ -13,6 +17,7 @@ import (
 	"net"
 	"path/filepath"
 
+	"pix/host/config"
 	"pix/host/pixhome"
 	"pix/host/sys"
 )
@@ -77,23 +82,25 @@ func EnsureMemoryPort(home pixhome.Paths) (int, error) {
 // two independent PIX_HOME instances started at the same moment can never
 // be steered onto the same port by a shared constant.
 func AllocateMemoryPortLocked(home pixhome.Paths) (int, error) {
-	m, err := pixhome.LoadMachine(home)
-	if err != nil {
-		return 0, err
-	}
-	if m.MemoryPort != 0 {
-		return m.MemoryPort, nil
-	}
-	port := DefaultMemoryPort
-	if PortAvailable(port) != nil {
-		p, err := freeLoopbackPort()
-		if err != nil {
-			return 0, err
+	var port int
+	err := config.WithLockAt(home.Home, func(c *config.Config) error {
+		if c.MemoryPort != 0 {
+			port = c.MemoryPort
+			return nil
 		}
+		p := DefaultMemoryPort
+		if PortAvailable(p) != nil {
+			free, ferr := freeLoopbackPort()
+			if ferr != nil {
+				return ferr
+			}
+			p = free
+		}
+		c.MemoryPort = p
 		port = p
-	}
-	m.MemoryPort = port
-	if err := pixhome.SaveMachine(home, m); err != nil {
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
 	return port, nil
@@ -126,12 +133,12 @@ func freeLoopbackPort() (int, error) {
 // pix-memory (see ReadMemoryAuthToken's own doc: a missing token degrades
 // the same way).
 func ReadMemoryPort(home pixhome.Paths) (int, error) {
-	m, err := pixhome.LoadMachine(home)
+	c, err := config.LoadFrom(config.PathAt(home.Home))
 	if err != nil {
 		return 0, err
 	}
-	if m.MemoryPort != 0 {
-		return m.MemoryPort, nil
+	if c.MemoryPort != 0 {
+		return c.MemoryPort, nil
 	}
 	return DefaultMemoryPort, nil
 }
@@ -154,12 +161,11 @@ func ReallocateMemoryPortLocked(home pixhome.Paths) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	m, err := pixhome.LoadMachine(home)
+	err = config.WithLockAt(home.Home, func(c *config.Config) error {
+		c.MemoryPort = port
+		return nil
+	})
 	if err != nil {
-		return 0, err
-	}
-	m.MemoryPort = port
-	if err := pixhome.SaveMachine(home, m); err != nil {
 		return 0, err
 	}
 	return port, nil

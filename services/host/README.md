@@ -70,5 +70,5 @@ with `$PIX_HOME`). There is no XDG split and no `$PIX_CONFIG`:
 
 - `~/.pix/config.toml` — machine-only fields, one named writer each
   (`default_environment` from `pix env default`, `memory_port` from `pix setup`)
-- `~/.pix/secrets.env` and `~/.pix/op-refs.env` — `op://` references only, 0600
+- `~/.pix/secrets.env` — the ONE secrets file, `op://` references only, 0600
 - `~/.pix/state/` — sandboxes, sessions, trust, memory data, effective documents

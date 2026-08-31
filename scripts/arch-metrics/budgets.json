@@ -52,19 +52,19 @@
       }
     },
     "pix/host/container": {
-      "_prod_loc_note": "L1 (security re-review): authtoken.go adds RedactMemoryURLToken/RedactedTokenPlaceholder \u2014 the presentation-only redaction `pix env show --effective` uses so the pix-memory bearer token never reaches that display, while the canonical effective document a real launch composes still carries the real value. QA F4 (this round): memoryport.go adds EnsureMemoryPort/AllocateMemoryPortLocked/ReadMemoryPort/SetupLockPath \u2014 per-PIX_HOME port allocation under an advisory lock, replacing the single shared DefaultMemoryPort constant every install used to fight over (globals +1 for setupLockName, edges +1 for the new sys.Lock dependency). Real capability change, not accumulation.",
-      "prod_loc": 1106,
-      "test_loc": 618,
+      "_prod_loc_note": "L1 (security re-review): authtoken.go adds RedactMemoryURLToken/RedactedTokenPlaceholder \u2014 the presentation-only redaction `pix env show --effective` uses so the pix-memory bearer token never reaches that display, while the canonical effective document a real launch composes still carries the real value. QA F4 (this round): memoryport.go adds EnsureMemoryPort/AllocateMemoryPortLocked/ReadMemoryPort/SetupLockPath \u2014 per-PIX_HOME port allocation under an advisory lock, replacing the single shared DefaultMemoryPort constant every install used to fight over (globals +1 for setupLockName, edges +1 for the new sys.Lock dependency). Round 5: memoryport.go's MemoryPort storage moved off the deleted pixhome.Machine schema onto config.Config (+1 edge for pix/host/config); container.go adds isDockerPortConflict/removeFailedCreate/dockerPortConflictMarkers so a real `docker create`/`docker start` bind-conflict error is classified into *PortInUseError and the orphaned just-created container is safely removed by ID before Setup's bounded reallocate-and-retry (+1 global for the marker slice, +78 prod_loc). Real capability change (round-5 blocker: port retry previously only worked via the pre-check, never the real docker error), not accumulation.",
+      "prod_loc": 1184,
+      "test_loc": 893,
       "exports": 43,
-      "exports_used_externally": 9,
+      "exports_used_externally": 14,
       "exits": 0,
       "streams": 0,
-      "globals": 18,
+      "globals": 19,
       "init": 0,
-      "edges": 2,
+      "edges": 3,
       "parser_families": {
-        "core": 3,
-        "test": 3
+        "core": 4,
+        "test": 4
       }
     },
     "pix/host/envinfo": {

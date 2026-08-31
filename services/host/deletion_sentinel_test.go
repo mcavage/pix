@@ -208,19 +208,23 @@ func TestDeletionSweep_RemovedVerbsRouteNowhere(t *testing.T) {
 	})
 }
 
-// TestDeletionSweep_NoSecondConfigSchemaOrMCPChannel pins round 4's config
-// collapse: pixhome.Machine is the SOLE config.toml owner (there is no
-// config.MachineConfig duplicate any more), config.Config carries no
-// services/mcp/pack list, and nothing writes config.toml through a legacy
+// TestDeletionSweep_NoSecondConfigSchemaOrMCPChannel pins round 5's config
+// collapse: config.Config is the SOLE config.toml owner (the round-4
+// pixhome.Machine duplicate that competed with it for the same file's bytes
+// is deleted, not merely unused), config.Config carries no services/mcp/pack
+// list, and nothing writes config.toml through a second schema or a legacy
 // Save path. A second schema over one file is how two writers disagree
-// about the same bytes.
+// about the same bytes — exactly the bug pixhome.Machine.SaveMachine had:
+// it silently dropped VersionPin/Inference every time `pix env default` ran.
 func TestDeletionSweep_NoSecondConfigSchemaOrMCPChannel(t *testing.T) {
 	banned := map[string]string{
-		"MachineConfig":         "the duplicate config.toml schema (pixhome.Machine is the sole owner)",
-		"func (c *Config) Save": "the legacy config.Config write path",
-		"cfg.MCP":               "config.toml's retired MCP server list (the environment document is the ONE declaration channel)",
-		"RegisterServers(":      "the pack-manifest MCP registration admin surface",
-		"ReconcileOnboarding":   "the in-sandbox onboarding proposal's host-config write path",
+		"MachineConfig":       "the duplicate config.toml schema (config.Config is the sole owner)",
+		"pixhome.Machine":     "the duplicate config.toml schema deleted in round 5 (config.Config is the sole owner)",
+		"LoadMachine(":        "the deleted pixhome-based config.toml reader (config.Load/config.LoadFrom is the sole reader)",
+		"SaveMachine(":        "the deleted pixhome-based config.toml writer (config.Save is the sole writer)",
+		"cfg.MCP":             "config.toml's retired MCP server list (the environment document is the ONE declaration channel)",
+		"RegisterServers(":    "the pack-manifest MCP registration admin surface",
+		"ReconcileOnboarding": "the in-sandbox onboarding proposal's host-config write path",
 	}
 	self, err := filepath.Abs("deletion_sentinel_test.go")
 	if err != nil {

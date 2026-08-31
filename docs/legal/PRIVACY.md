@@ -65,7 +65,7 @@ depends on it.
   everything Pix writes today lives under `${PIX_HOME:-$HOME/.pix}`).
 - **Session transcripts / todos / provenance records**: files under your home
   and `out/`, never uploaded by pix.
-- **Config and state**: everything Pix owns lives under `PIX_HOME` (default `~/.pix`, overridable with `$PIX_HOME`): `~/.pix/config.toml`, `~/.pix/secrets.env`, `~/.pix/op-refs.env`, `~/.pix/state/`. There is no XDG split and no second config location.
+- **Config and state**: everything Pix owns lives under `PIX_HOME` (default `~/.pix`, overridable with `$PIX_HOME`): `~/.pix/config.toml`, `~/.pix/secrets.env`, `~/.pix/state/`. There is no XDG split and no second config or secrets location.
 
 ## Credentials
 

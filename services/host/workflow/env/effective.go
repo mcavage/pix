@@ -72,18 +72,18 @@ const effectiveSessionSubcommandArg = "mcp-session"
 
 // resolveEffectiveName is ComputeEffective's/`env [NAME]`'s shared name
 // resolution: an explicit positional wins; otherwise the machine default
-// (pixhome.LoadMachine); an empty result is D17's `none` state, not an
-// error.
+// (config.Config.DefaultEnvironment, the sole config.toml schema); an empty
+// result is D17's `none` state, not an error.
 func resolveEffectiveName(home pixhome.Paths, explicit string) (string, bool, error) {
 	name := strings.TrimSpace(explicit)
 	if name != "" {
 		return name, true, nil
 	}
-	m, err := pixhome.LoadMachine(home)
+	c, err := config.LoadFrom(config.PathAt(home.Home))
 	if err != nil {
 		return "", false, err
 	}
-	name = strings.TrimSpace(m.DefaultEnvironment)
+	name = strings.TrimSpace(c.DefaultEnvironment)
 	return name, name != "", nil
 }
 

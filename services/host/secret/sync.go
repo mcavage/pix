@@ -5,7 +5,7 @@
 // VM: `op read` resolves in-process, we hand the value straight to `sbx secret
 // set`, and drop it.
 //
-// op-refs.env is the SINGLE refs file: the sbx gateway resolves it with `op
+// secrets.env is the SINGLE refs file: the sbx gateway resolves it with `op
 // run --env-file` for a wrapped MCP server, and the sync below resolves it
 // with `op read` for the sandbox's proxy secret store. There is no second,
 // mirrored copy to drift.
@@ -26,7 +26,7 @@ import (
 )
 
 // ProviderKeyRefOrder is the deterministic MODEL-provider list for prompting
-// (env var used in op-refs.env -> sbx secret name).
+// (env var used in secrets.env -> sbx secret name).
 //
 // Membership here means "a provider you can route a model to": it is what
 // `pix models add` offers and what setup prompts for. A key that buys a TOOL
@@ -55,7 +55,7 @@ var ToolKeyRefOrder = []ProviderKeyRef{
 	{"PARALLEL_API_KEY", "parallel"},
 }
 
-// ProviderKeyRef pairs a key's op-refs.env variable with its short name.
+// ProviderKeyRef pairs a key's secrets.env variable with its short name.
 type ProviderKeyRef struct{ EnvVar, Name string }
 
 // OpReadNonEmpty resolves ref via `op read` and reports whether it succeeded
@@ -111,7 +111,7 @@ func OfferOnePasswordKeys(env hostenv.Env, in io.Reader, out io.Writer, tty bool
 			fmt.Fprintf(out, "    skipped %s: not an op:// ref\n", p.Name)
 			continue
 		}
-		// Write the ref to op-refs.env under ONE WithProviderRefsLock
+		// Write the ref to secrets.env under ONE WithProviderRefsLock
 		// acquisition (via the *Locked helper) — never nested (a nested
 		// acquisition of the same lock file would deadlock against the real
 		// flock). A lock-acquisition failure is reported and this provider is
@@ -142,10 +142,10 @@ func OfferOnePasswordKeys(env hostenv.Env, in io.Reader, out io.Writer, tty bool
 	syncProviderKeys(env, out) // force-overwrite sbx from the new refs
 }
 
-// WriteOpRefQuiet upserts KEY=op://ref into op-refs.env without the CLI
+// WriteOpRefQuiet upserts KEY=op://ref into secrets.env without the CLI
 // wrapper's rejection contract, so the interactive offer can loop. It VALIDATES
 // the key as a shell env var name (so a malicious pack.toml integration name
-// can't inject extra op-refs.env lines) and the value as a single-line op://
+// can't inject extra secrets.env lines) and the value as a single-line op://
 // ref (never a literal secret) — defense in depth beside the caller's own
 // op:// check.
 //
@@ -159,7 +159,7 @@ func WriteOpRefQuiet(env hostenv.Env, key, value string) error {
 }
 
 // WriteOpRefQuietLocked is WriteOpRefQuiet's transaction body (the validation
-// + upsert of op-refs.env, the single refs file). Caller MUST hold the
+// + upsert of secrets.env, the single refs file). Caller MUST hold the
 // provider-refs lock.
 func WriteOpRefQuietLocked(env hostenv.Env, key, value string) error {
 	path := DefaultOpRefsPath()
@@ -192,7 +192,7 @@ func WriteOpRefQuietLocked(env hostenv.Env, key, value string) error {
 	return env.WriteFile(path, []byte(upsertOpRef(content, key, value)), 0o600)
 }
 
-// providerKeyRefs maps every op-refs.env ENV var pix mirrors into the sbx secret
+// providerKeyRefs maps every secrets.env ENV var pix mirrors into the sbx secret
 // store to its secret name: model providers AND capability/tool keys. This is
 // the SYNC set, deliberately wider than ProviderKeyRefOrder (the routing set),
 // because a tool key needs the same seeding, checking and mirroring that a model
@@ -209,7 +209,7 @@ var providerKeyRefs = func() map[string]string {
 	return m
 }()
 
-// isModelProviderKey reports whether an op-refs.env key buys a MODEL (and so has
+// isModelProviderKey reports whether an secrets.env key buys a MODEL (and so has
 // a `pix models add` follow-up) rather than a tool capability.
 func isModelProviderKey(envVar string) bool {
 	for _, p := range ProviderKeyRefOrder {
@@ -246,7 +246,7 @@ func firstProviderKeyRefs(content string) map[string]OpRef {
 	return best
 }
 
-// ProviderKeyRefsPresent reports whether op-refs.env declares at least one FILLED
+// ProviderKeyRefsPresent reports whether secrets.env declares at least one FILLED
 // provider-key ref, so the keys gate can point at `pix secret sync` and the
 // trusted host-state payload can report source="1password".
 func ProviderKeyRefsPresent(env hostenv.Env) bool {
@@ -272,7 +272,7 @@ func ProviderKeyRefsPresent(env hostenv.Env) bool {
 // PUBLIC entry: it acquires the provider-refs transaction lock for its whole
 // read-op-refs / resolve-from-1Password / sbx-sync pass, so a concurrent
 // `pix secret set`/`secret rm` in another process can never change
-// op-refs.env between the snapshot this reads and the sbx values it pushes.
+// secrets.env between the snapshot this reads and the sbx values it pushes.
 // "Best-effort" describes how failures degrade, never proceeding without the
 // lock: a lock-acquisition failure is reported and this call is a no-op.
 func EnsureProviderKeysFromRefs(env hostenv.Env, out io.Writer) {
@@ -357,7 +357,7 @@ func setSbxSecret(env hostenv.Env, name, val string) (detail string, err error) 
 //
 // It acquires the provider-refs transaction lock for its whole pass
 // (delegating to the Locked core), so a concurrent `pix secret set`/`secret
-// rm` can never change op-refs.env between the snapshot this reads and the sbx
+// rm` can never change secrets.env between the snapshot this reads and the sbx
 // values it pushes. A lock-acquisition failure is fatal — never unlocked.
 func syncProviderKeys(env hostenv.Env, out io.Writer) (synced, failed int, fatal error) {
 	lerr := WithProviderRefsLock(env, func() error {
@@ -377,7 +377,7 @@ func syncProviderKeys(env hostenv.Env, out io.Writer) (synced, failed int, fatal
 func syncProviderKeysLocked(env hostenv.Env, out io.Writer) (synced, failed int, fatal error) {
 	_, content, exists := OpRefsContent(env)
 	if !exists {
-		return 0, 0, fmt.Errorf("op-refs.env not found (%s)", DefaultOpRefsPath())
+		return 0, 0, fmt.Errorf("secrets.env not found (%s)", DefaultOpRefsPath())
 	}
 	if !OpInstalled(env) {
 		return 0, 0, fmt.Errorf("op (1Password CLI) not installed")

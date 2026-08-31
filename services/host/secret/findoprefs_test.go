@@ -32,8 +32,8 @@ func writeRefs(t *testing.T, path string) {
 }
 
 // TestFindOpRefs_PixHomeIsTheOnlyCandidate pins QA F5's close-out: the
-// resolver looks at <PIX_HOME>/op-refs.env and nowhere else. $PIX_CONFIG, a
-// repo checkout's config/op-refs.env, and ~/.config/pix are deleted, not
+// resolver looks at <PIX_HOME>/secrets.env and nowhere else. $PIX_CONFIG, a
+// repo checkout's config/secrets.env, and ~/.config/pix are deleted, not
 // deprioritized, so a stray file at any of them is invisible here.
 func TestFindOpRefs_PixHomeIsTheOnlyCandidate(t *testing.T) {
 	home := t.TempDir()
@@ -46,14 +46,14 @@ func TestFindOpRefs_PixHomeIsTheOnlyCandidate(t *testing.T) {
 
 	// A file at every DELETED candidate must still resolve to nothing.
 	other := t.TempDir()
-	writeRefs(t, filepath.Join(other, "op-refs.env"))
+	writeRefs(t, filepath.Join(other, "secrets.env"))
 	t.Setenv("PIX_CONFIG", filepath.Join(other, "config.toml"))
 	t.Setenv("XDG_CONFIG_HOME", other)
 	if got := FindOpRefs(env); got != "" {
 		t.Errorf("FindOpRefs honored a retired candidate: %q", got)
 	}
 
-	want := filepath.Join(home, "op-refs.env")
+	want := filepath.Join(home, "secrets.env")
 	writeRefs(t, want)
 	got := FindOpRefs(env)
 	if got != want {

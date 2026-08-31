@@ -11,68 +11,12 @@ package main
 
 import (
 	"fmt"
-	"io"
 
 	"pix/host/cli"
 	"pix/host/container"
 	"pix/host/pixhome"
-	"pix/host/sandbox"
-	"pix/host/sys"
-	"pix/host/workflow/launch"
 	"pix/host/workflow/provision"
 )
-
-// setupOnboardingKickoff is the first message a first-launch handoff would
-// hand the agent: deliberately short and human, because the `onboarding`
-// skill owns the actual flow.
-const setupOnboardingKickoff = "I just ran pix setup. Give me the upfront guide and help me get started."
-
-// runSetupHandoff is the pure, fail-closed decision for whether a caller may
-// launch a sandbox after a host-side step: an unprobeable sbx (launch.SbxUnknown)
-// NEVER launches, since doing so could re-attach a live session and replay a
-// kickoff message into it. It is not wired into `pix setup` (setup performs no
-// handoff — see setupCmd.Run), but the safety property it proves
-// (TestSetupHandoff_HangingSbxFailsClosed) is retained here as the one shared
-// place that decision is made correctly, for a future caller that needs it.
-func runSetupHandoff(dir, name string, state sandbox.State, out io.Writer, runFn func([]string) error) error {
-	kickoffArgs := func() []string {
-		args := []string{}
-		if dir != "." {
-			args = append(args, dir)
-		}
-		return append(args, "--", launch.GeneratedInputMarker+setupOnboardingKickoff)
-	}
-	dirArg := ""
-	if dir != "." {
-		dirArg = " " + sys.ShellQuote(dir)
-	}
-
-	switch state {
-	case launch.SbxUnknown:
-		// FAIL CLOSED: launching would re-attach a live session and replay the kickoff
-		// into it. The host phase completed, so a retry is cheap.
-		which := fmt.Sprintf("sandbox %q", name)
-		if name == "" {
-			which = fmt.Sprintf("the sandbox for %s", dir)
-		}
-		return fmt.Errorf("cannot determine the state of %s (`sbx ls` failed or sbx is unavailable). Host setup completed; install or fix sbx and retry with: pix setup%s", which, dirArg)
-	case launch.SbxRunning, launch.SbxStopped:
-		fmt.Fprintln(out, "")
-		fmt.Fprintf(out, "Host configuration reconciled. Existing sandbox %q was left alone.\n", name)
-		fmt.Fprintln(out, "Attaching keeps the sandbox exactly as it was created (its pack, MCP")
-		fmt.Fprintln(out, "servers, and skills were attached at create time). To pick up current")
-		fmt.Fprintln(out, "settings instead, remove it first: removal is proof-gated, so it refuses")
-		fmt.Fprintln(out, "while another shell is still attached. Choose one:")
-		fmt.Fprintf(out, "  pix run%s                 # attach as-is\n", dirArg)
-		fmt.Fprintf(out, "  pix rm %s && pix setup%s  # recreate with current settings + get the tour\n", sys.ShellQuote(name), dirArg)
-		return nil
-	}
-
-	// launch.SbxAbsent (positively confirmed): normal first launch.
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Launching Pix: the agent will take it from here.")
-	return runFn(kickoffArgs())
-}
 
 func (c *setupCmd) Help() string { return provision.Description }
 

@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"sort"
@@ -104,6 +105,28 @@ type Config struct {
 	// anything else. A hand-edited entry with an unsafe NAME or a noncanonical
 	// PATH is dropped on Load, fail closed (see applyDefaults).
 	Environments map[string]string `toml:"environments,omitempty"`
+
+	// DefaultEnvironment is the v2 machine default environment NAME, written
+	// by the ONE named writer `pix env default NAME` owns (SetDefaultEnvironment/
+	// SetDefaultEnvironmentAt below) and read by every launch that does not
+	// pass an explicit --env. This replaces the short-lived, retired per-home
+	// pixhome-package struct (round-4) that competed with this very struct for
+	// the SAME config.toml bytes: a second schema over one file is how two
+	// writers silently stomp each other's fields, which is exactly what that
+	// retired struct did to VersionPin/Inference every time `pix env default`
+	// ran. config.Config is now the SOLE schema for <PIX_HOME>/config.toml;
+	// there is no other.
+	DefaultEnvironment string `toml:"default_environment,omitempty"`
+
+	// MemoryPort is the loopback port the one named pix-memory container
+	// publishes on THIS PIX_HOME, written once by `pix setup`
+	// (container.AllocateMemoryPortLocked/ReallocateMemoryPortLocked, QA F4:
+	// two independent PIX_HOME instances on the same host must never be
+	// forced onto the same fixed port). Zero means "not allocated yet" — a
+	// caller that only reads (doctor, run, env preview) treats that as the
+	// pre-setup state and falls back to container.DefaultMemoryPort for
+	// display purposes only; it never allocates or persists one itself.
+	MemoryPort int `toml:"memory_port,omitempty"`
 
 	// Inference describes WHERE catalog models can be called: user/pack-owned
 	// backend wiring and model-id bindings only, never model identity or secrets.
@@ -236,7 +259,116 @@ func Path() string {
 		// "use defaults", so this never hard-fails.
 		return "config.toml"
 	}
-	return filepath.Join(dir, "config.toml")
+	return PathAt(dir)
+}
+
+// PathAt resolves config.toml under an explicit PIX_HOME root, for a caller
+// that already holds a pixhome.Paths (or its .Home) rather than relying on
+// $PIX_HOME re-resolution — container's per-PIX_HOME memory-port helpers and
+// workflow/env's environment resolution both take this path so their tests
+// need not also export $PIX_HOME to agree with an explicit temp home.
+func PathAt(homeDir string) string {
+	return filepath.Join(homeDir, "config.toml")
+}
+
+// configLockName is the ONE advisory lock every config.toml mutation holds
+// (SaveTo, and every named writer built on WithLockAt below) — the
+// single-config-lock invariant: two named writers against the SAME PIX_HOME
+// (a concurrent `pix env default` and `pix setup` allocating a memory port,
+// say) must load-modify-save the FULL schema serialized against each other,
+// never race a read-then-write against the other's uncommitted change.
+const configLockName = ".config.lock"
+
+// LockPathAt is <homeDir>/.config.lock, for a caller resolving an explicit
+// PIX_HOME root (see PathAt). There is no bare $PIX_HOME-resolving LockPath:
+// every real caller already holds a pixhome.Paths (or its .Home) by the time
+// it needs a config lock, exactly like PathAt.
+func LockPathAt(homeDir string) string {
+	return filepath.Join(homeDir, configLockName)
+}
+
+// SaveTo persists c to an explicit path atomically (0600) — the SOLE writer
+// of config.toml. It marshals the WHOLE struct (VersionPin, Inference,
+// DefaultEnvironment, MemoryPort, everything), so a named writer that
+// LoadFrom()s, mutates one field, and calls SaveTo never drops a sibling
+// field a different writer set: there is exactly one schema for this file,
+// and this is its one encoder.
+func SaveTo(path string, c *Config) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
+		return err
+	}
+	return atomicWriteInDir(dir, filepath.Base(path), buf.Bytes(), 0o600)
+}
+
+// atomicWriteInDir is config's own copy of sys.AtomicWriteInDir's same-
+// directory temp-file-then-rename + fsync sequence (see lock_unix.go's doc
+// comment for why this package cannot import sys and duplicates instead).
+func atomicWriteInDir(dir, name string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(dir, name+".tmp-")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	fail := func(err error) error {
+		tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, filepath.Join(dir, name)); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
+// WithLockAt loads the current config at homeDir, lets mutate change it in
+// place, and saves the FULL result back — all while holding
+// LockPathAt(homeDir) — so two concurrent named writers against the SAME
+// PIX_HOME (container's memory-port allocator, `pix env default`) can never
+// lose one update to the other's (lost-update prevention for config.toml).
+// There is no bare $PIX_HOME-resolving WithLock: every real caller already
+// holds an explicit home root, exactly like PathAt/LockPathAt.
+func WithLockAt(homeDir string, mutate func(c *Config) error) error {
+	return withFileLock(LockPathAt(homeDir), func() error {
+		path := PathAt(homeDir)
+		c, err := LoadFrom(path)
+		if err != nil {
+			return err
+		}
+		if err := mutate(c); err != nil {
+			return err
+		}
+		return SaveTo(path, c)
+	})
+}
+
+// SetDefaultEnvironmentAt is the ONE named writer `pix env default NAME`
+// owns: load-modify-save the full schema under the config lock, so it can
+// never stomp VersionPin/Inference/MemoryPort/anything else a sibling
+// writer set.
+func SetDefaultEnvironmentAt(homeDir, name string) error {
+	return WithLockAt(homeDir, func(c *Config) error {
+		c.DefaultEnvironment = name
+		return nil
+	})
 }
 
 // StateDir resolves the per-user state dir: <PIX_HOME>/state. Runtime state
@@ -400,32 +532,34 @@ func (c *Config) Plugin(slot string) PluginSpec {
 	return PluginSpec{Impl: BuiltinImpl}
 }
 
-// OpRefsPath resolves the absolute path of op-refs.env (the 1Password refs file
-// the sbx gateway resolves via `op run --env-file`): <PIX_HOME>/op-refs.env.
+// OpRefsPath resolves the absolute path of secrets.env (the 1Password refs
+// file the sbx gateway resolves via `op run --env-file`):
+// <PIX_HOME>/secrets.env — the ONE accepted secrets file (pix-v2-surface.md
+// §4.1/architecture.md §5); there is no second op-refs.env location.
 func OpRefsPath() string {
 	dir, err := configDir()
 	if err != nil {
-		return "op-refs.env"
+		return "secrets.env"
 	}
-	return filepath.Join(dir, "op-refs.env")
+	return filepath.Join(dir, "secrets.env")
 }
 
-// OpRefsMentalModel is the ≤4-line plain explanation of what op-refs.env is, reused
+// OpRefsMentalModel is the ≤4-line plain explanation of what secrets.env is, reused
 // VERBATIM in `pix setup`, the `secret` help, and the template header.
-const OpRefsMentalModel = `op-refs.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
+const OpRefsMentalModel = `secrets.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
 host MCP server it resolves those refs from 1Password and injects them as env
 vars — the secret never touches disk or the sandbox. A server that needs no
 credentials needs no entry here at all.`
 
-// OpRefsTemplate is the seed content for a fresh op-refs.env: op:// references
+// OpRefsTemplate is the seed content for a fresh secrets.env: op:// references
 // ONLY, every example line COMMENTED OUT. There are no vendor examples here on
 // purpose — pix ships no built-in MCP server, so the only thing that can tell
 // you which ENV_VARs to add is the pack you activate, and it says so in its
 // own docs. A template that named vendors would go stale the moment one moved.
-const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway resolves via
+const OpRefsTemplate = `# pix secrets.env — 1Password refs the sbx gateway resolves via
 # ` + "`op run --env-file`" + ` when it spawns each host MCP server.
 #
-# op-refs.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
+# secrets.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
 # host MCP server it resolves those refs from 1Password and injects them as env
 # vars — the secret never touches disk or the sandbox. A server that needs no
 # credentials needs no entry here at all.
@@ -463,7 +597,7 @@ func SeedOpRefsAt(path string) (created bool, err error) {
 		return false, err
 	}
 	// Atomic no-clobber: O_CREATE|O_EXCL fails if the file already exists, so we
-	// never truncate a populated op-refs.env (no Stat-then-Write TOCTOU window).
+	// never truncate a populated secrets.env (no Stat-then-Write TOCTOU window).
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		if os.IsExist(err) {

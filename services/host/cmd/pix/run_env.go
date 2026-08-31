@@ -40,13 +40,13 @@ func resolveRunEnvironment(explicit string) (launch.EnvSelection, envTrustSnapsh
 	if err != nil {
 		return launch.EnvSelection{}, envTrustSnapshot{}, err
 	}
-	machine, err := pixhome.LoadMachine(home)
+	cfg, err := config.LoadFrom(config.PathAt(home.Home))
 	if err != nil {
 		return launch.EnvSelection{}, envTrustSnapshot{}, err
 	}
 	name := strings.TrimSpace(explicit)
 	if name == "" {
-		name = strings.TrimSpace(machine.DefaultEnvironment)
+		name = strings.TrimSpace(cfg.DefaultEnvironment)
 	}
 	if name == "" {
 		// D17's `none`: no environment registered or selected. The built-in

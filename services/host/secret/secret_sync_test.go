@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// fakeSyncEnv builds a hostenv.Env whose op-refs.env content is fixed, op is
+// fakeSyncEnv builds a hostenv.Env whose secrets.env content is fixed, op is
 // installed+signed-in, sbx is present, and op read returns a canned value.
 func fakeSyncEnv(refs string, opReadVal string, sbxSetErr error, capture *[]string) hostenv.Env {
 	return hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return refs, nil }, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {

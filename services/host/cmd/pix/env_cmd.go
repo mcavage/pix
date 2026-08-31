@@ -3,8 +3,9 @@
 // ~/.pix/envs/<name>/; there is no registration database and no
 // add/edit/use/forget mutation path — those verbs are gone in v2. Selection
 // and listing come from workflow/env's pixhome-based ResolveIn/List
-// (home.go). `default` reads/writes the one config.toml field pixhome.Machine
-// owns. `trust` is the explicit host-execution approval command: it
+// (home.go). `default` reads/writes the one config.toml field config.Config
+// owns (DefaultEnvironment, the sole config.toml schema). `trust` is the
+// explicit host-execution approval command: it
 // computes workflow/env's canonical host bill of materials (bom.go) and
 // records acceptance of its fingerprint under ~/.pix/state/trust, outside
 // the environment directory itself — never a hash of just the two authored
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"pix/host/cli"
+	"pix/host/config"
 	"pix/host/pixhome"
 	"pix/host/sys"
 	nativeenv "pix/host/workflow/env"
@@ -87,13 +89,13 @@ func (c *envListCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return envRun(d, err)
 	}
-	m, _ := pixhome.LoadMachine(home)
+	cfg, _ := config.LoadFrom(config.PathAt(home.Home))
 	rows := make([]envListRow, 0, len(sels))
 	for _, s := range sels {
 		trusted, _, _ := trustAccepted(home, s)
 		rows = append(rows, envListRow{
 			Name: s.Name, Root: s.Root, Symlinked: s.Symlinked,
-			Default: s.Name == m.DefaultEnvironment, Trusted: trusted,
+			Default: s.Name == cfg.DefaultEnvironment, Trusted: trusted,
 		})
 	}
 	if c.JSON {
@@ -157,11 +159,11 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 
 	name := strings.TrimSpace(c.Name)
 	if name == "" {
-		m, err := pixhome.LoadMachine(home)
+		cfg, err := config.LoadFrom(config.PathAt(home.Home))
 		if err != nil {
 			return err
 		}
-		name = strings.TrimSpace(m.DefaultEnvironment)
+		name = strings.TrimSpace(cfg.DefaultEnvironment)
 	}
 
 	if name == "" {
@@ -235,15 +237,15 @@ func (c *envDefaultCmd) Run(d *cli.Deps) error {
 		return err
 	}
 	if c.Name == "" {
-		m, err := pixhome.LoadMachine(home)
+		cfg, err := config.LoadFrom(config.PathAt(home.Home))
 		if err != nil {
 			return err
 		}
-		if m.DefaultEnvironment == "" {
+		if cfg.DefaultEnvironment == "" {
 			fmt.Fprintln(d.Out, "no default environment set")
 			return nil
 		}
-		fmt.Fprintln(d.Out, m.DefaultEnvironment)
+		fmt.Fprintln(d.Out, cfg.DefaultEnvironment)
 		return nil
 	}
 	// Validate it resolves before recording it as the default: a typo must
@@ -251,7 +253,7 @@ func (c *envDefaultCmd) Run(d *cli.Deps) error {
 	if _, err := nativeenv.ResolveIn(home, c.Name); err != nil {
 		return envRun(d, err)
 	}
-	if err := pixhome.SetDefaultEnvironment(home, c.Name); err != nil {
+	if err := config.SetDefaultEnvironmentAt(home.Home, c.Name); err != nil {
 		return err
 	}
 	fmt.Fprintf(d.Out, "pix: environment %q is now the default.\n", c.Name)

@@ -9,7 +9,7 @@
 export default [
 	{
 		id: "config-keys.top-level.surface",
-		description: "Config's top-level toml tags still name exactly this key set. The round-4 config collapse deleted services/mcp/packs/pack: config.toml declares no MCP server list and no service list any more (the environment's .sbxenv.yaml plus reserved built-ins are the ONE MCP declaration channel), and pixhome.Machine — not this struct — owns the two machine-only keys (default_environment, memory_port).",
+		description: "Config's top-level toml tags still name exactly this key set. The round-4 config collapse deleted services/mcp/packs/pack: config.toml declares no MCP server list and no service list any more (the environment's .sbxenv.yaml plus reserved built-ins are the ONE MCP declaration channel). Round 5 deleted the short-lived pixhome.Machine schema that used to compete with THIS struct for the same config.toml bytes (it silently dropped version_pin/inference on every `pix env default`); config.Config is now the SOLE schema, so default_environment and memory_port — the two machine-only keys — are real fields here, not on a second struct.",
 		checks: [
 			{
 				file: "services/host/config/config.go",
@@ -60,6 +60,8 @@ export default [
 					"inference",
 					"environment",
 					"environments",
+					"default_environment",
+					"memory_port",
 				],
 			},
 		],

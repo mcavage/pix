@@ -442,3 +442,78 @@ func TestFingerprint_ChangesWithAuthTokenFilePathButNeverLeaksItsContent(t *test
 		t.Fatal("fingerprint must never contain a token value")
 	}
 }
+
+// TestReconcile_StartPortConflict_ClassifiesAndRemovesFailedCreate proves
+// round 5's classification half of QA F4's port retry: when `docker create`
+// succeeds but the SUBSEQUENT `docker start` loses the bind race (the
+// window PortAvailable's pre-check cannot close — something else grabs the
+// port between the probe and the real bind), Reconcile must (1) classify
+// the failure as *PortInUseError naming spec.HostPort, never an opaque
+// wrapped docker error, and (2) remove the container it just created BY ITS
+// OWN ID so a caller's reallocate-and-retry never collides with, or later
+// adopts, that orphan.
+func TestReconcile_StartPortConflict_ClassifiesAndRemovesFailedCreate(t *testing.T) {
+	spec := testSpec()
+	r := &fakeRunner{}
+	r.script("inspect", "Error: No such object: test-pix-memory", errors.New("exit status 1"))
+	r.script("create", "created-container-id", nil)
+	r.script("start", "Error response from daemon: driver failed programming external connectivity "+
+		"on endpoint test-pix-memory: Bind for 0.0.0.0:18080 failed: port is already allocated",
+		errors.New("exit status 1"))
+	r.script("rm", "created-container-id", nil)
+
+	_, err := Reconcile(r, spec, nil, ReconcileOptions{})
+	portErr, ok := err.(*PortInUseError)
+	if !ok {
+		t.Fatalf("Reconcile error = %v (%T), want *PortInUseError", err, err)
+	}
+	if portErr.Port != spec.HostPort {
+		t.Errorf("PortInUseError.Port = %d, want %d", portErr.Port, spec.HostPort)
+	}
+
+	var removedByID bool
+	for _, call := range r.calls {
+		if len(call) >= 3 && call[0] == "rm" && call[len(call)-1] == "created-container-id" {
+			removedByID = true
+		}
+		// The cleanup must never remove by the container NAME (which could
+		// reach a DIFFERENT, unrelated container under the same name in a
+		// race); it must name the exact ID docker create just returned.
+		if len(call) >= 1 && call[0] == "rm" {
+			for _, a := range call {
+				if a == spec.containerName() {
+					t.Errorf("cleanup removed by NAME (%v), want by the created ID only", call)
+				}
+			}
+		}
+	}
+	if !removedByID {
+		t.Errorf("expected the failed create to be removed by its own ID, calls: %v", r.calls)
+	}
+}
+
+// TestIsDockerPortConflict_ScopedToTheExactPort proves the classifier never
+// fires on a marker phrase that names a DIFFERENT port or no port at all —
+// "do not trust arbitrary stderr" without checking it actually names the
+// port THIS operation cared about.
+func TestIsDockerPortConflict_ScopedToTheExactPort(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		port int
+		want bool
+	}{
+		{"exact port allocated", "Bind for 0.0.0.0:18080 failed: port is already allocated", 18080, true},
+		{"exact port address in use", "listen tcp 0.0.0.0:18080: bind: address already in use", 18080, true},
+		{"different port same marker", "Bind for 0.0.0.0:9999 failed: port is already allocated", 18080, false},
+		{"marker absent", "Error: no such image: pix-memory@sha256:deadbeef", 18080, false},
+		{"unrelated permission error mentioning a number", "permission denied opening file 18080.log", 18080, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isDockerPortConflict(c.out, c.port); got != c.want {
+				t.Errorf("isDockerPortConflict(%q, %d) = %v, want %v", c.out, c.port, got, c.want)
+			}
+		})
+	}
+}

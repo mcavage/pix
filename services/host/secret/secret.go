@@ -12,7 +12,7 @@ import (
 	"pix/host/hostenv"
 )
 
-// secret is the CRUD home of the 1Password / op-refs.env concept. It never
+// secret is the CRUD home of the 1Password / secrets.env concept. It never
 // writes a resolved secret to disk (values live in 1Password); it only reads,
 // classifies, and edits the REFS themselves (op://vault/item/field lines). See
 // the mental model in config.OpRefsMentalModel.
@@ -46,7 +46,7 @@ func NormalizeOpRef(s string) string {
 	return s
 }
 
-// OpRef is one parsed KEY=VALUE line of op-refs.env.
+// OpRef is one parsed KEY=VALUE line of secrets.env.
 type OpRef struct {
 	Key         string
 	Value       string
@@ -56,7 +56,7 @@ type OpRef struct {
 }
 
 // NonSecret is the set of env var names allowed to carry a LITERAL value in
-// op-refs.env instead of an op:// reference.
+// secrets.env instead of an op:// reference.
 //
 // Pix allowlists NOTHING of its own. This set is exactly what the active pack
 // declares as `env_keys` on its integrations, so the pack that needs a
@@ -70,7 +70,7 @@ type NonSecret map[string]bool
 // inventing an allowlist.
 func (n NonSecret) Allows(key string) bool { return n[key] }
 
-// ParseOpRefs parses op-refs.env content into its non-comment KEY=VALUE lines,
+// ParseOpRefs parses secrets.env content into its non-comment KEY=VALUE lines,
 // classifying each value as a filled op:// ref, an unfilled placeholder, or a
 // pack-authorized non-secret literal. It NEVER surfaces the raw value to
 // callers that print — classification only.
@@ -127,7 +127,7 @@ func OpSignedIn(env hostenv.Env) bool {
 	return err == nil && strings.TrimSpace(out) != ""
 }
 
-// OpRefsContent resolves + reads op-refs.env through the injected env, returning
+// OpRefsContent resolves + reads secrets.env through the injected env, returning
 // its path, contents, and whether it exists.
 func OpRefsContent(env hostenv.Env) (path, content string, exists bool) {
 	path = DefaultOpRefsPath()
@@ -138,7 +138,7 @@ func OpRefsContent(env hostenv.Env) (path, content string, exists bool) {
 	return path, c, true
 }
 
-// RunSecretLs prints op install/sign-in state + op-refs.env presence and, per
+// RunSecretLs prints op install/sign-in state + secrets.env presence and, per
 // configured ref, filled-vs-placeholder-vs-pasted-secret. It NEVER prints a
 // secret value. This is the default `secret` action (no subcommand).
 func RunSecretLs(env hostenv.Env, out io.Writer, nonSecret NonSecret) {
@@ -157,10 +157,10 @@ func RunSecretLs(env hostenv.Env, out io.Writer, nonSecret NonSecret) {
 
 	path, content, exists := OpRefsContent(env)
 	if !exists {
-		fmt.Fprintf(out, "  op-refs.env: ✗ not present — create it with: pix secret set <ENV_VAR> op://vault/item/field\n  (%s)\n", path)
+		fmt.Fprintf(out, "  secrets.env: ✗ not present — create it with: pix secret set <ENV_VAR> op://vault/item/field\n  (%s)\n", path)
 		return
 	}
-	fmt.Fprintf(out, "  op-refs.env: ✓ %s\n", path)
+	fmt.Fprintf(out, "  secrets.env: ✓ %s\n", path)
 	refs := ParseOpRefs(content, nonSecret)
 	if len(refs) == 0 {
 		fmt.Fprintln(out, "  refs: (none set yet — add ENV_VAR=op://vault/item/field lines)")
@@ -192,7 +192,7 @@ func RunSecretLs(env hostenv.Env, out io.Writer, nonSecret NonSecret) {
 }
 
 // RunSecretSet is the ONE authoring primitive: it upserts ENV_VAR=value into
-// op-refs.env, no editor involved. It enforces the refs-only policy — value
+// secrets.env, no editor involved. It enforces the refs-only policy — value
 // must be an op:// ref unless the ACTIVE PACK authorized ENV_VAR as a
 // non-secret (nonSecret) — and
 // normalizes any %20 in a ref to a literal space (op read/op run --env-file
@@ -219,11 +219,11 @@ func RunSecretSet(env hostenv.Env, out io.Writer, key, value string, nonSecret N
 	}
 
 	// Reject control characters (newline, carriage return, NUL, ...) in the value.
-	// op-refs.env is line-oriented and consumed by `op run --env-file`, so a value
+	// secrets.env is line-oriented and consumed by `op run --env-file`, so a value
 	// carrying a newline could inject a SECOND, attacker-controlled KEY=value line
 	// (e.g. a pasted plaintext secret) into the file. One ref = one clean line.
 	if i := strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }); i >= 0 {
-		fmt.Fprintf(out, "pix secret set: %s value contains a control character at byte %d; op-refs.env is one ref per line, so newlines/control chars are not allowed\n", key, i)
+		fmt.Fprintf(out, "pix secret set: %s value contains a control character at byte %d; secrets.env is one ref per line, so newlines/control chars are not allowed\n", key, i)
 		return exitCode(2)
 	}
 
@@ -252,7 +252,7 @@ func RunSecretSet(env hostenv.Env, out io.Writer, key, value string, nonSecret N
 }
 
 // RunSecretSetLocked is RunSecretSet's file transaction (read/seed/upsert
-// op-refs.env). Caller MUST hold the provider-refs lock; every failure returns
+// secrets.env). Caller MUST hold the provider-refs lock; every failure returns
 // an error, so the lock is always released.
 func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string, nonSecret NonSecret) error {
 	// %20 -> literal space BEFORE writing: op 2.35.0's `op read` AND `op run
@@ -314,7 +314,7 @@ func RunSecretSetLocked(env hostenv.Env, out io.Writer, key, value string, nonSe
 	return nil
 }
 
-// RunSecretRm removes ENV_VAR's line from op-refs.env, preserving every other
+// RunSecretRm removes ENV_VAR's line from secrets.env, preserving every other
 // line (comments, blanks, other refs). A missing file or a key that was never
 // present is a clean, exit-0 no-op — `rm` is idempotent.
 //
@@ -371,7 +371,7 @@ func runSecretRmLocked(env hostenv.Env, out io.Writer, key string) error {
 
 	switch {
 	case !exists:
-		fmt.Fprintf(out, "op-refs.env not found (%s) — nothing to remove\n", path)
+		fmt.Fprintf(out, "secrets.env not found (%s) — nothing to remove\n", path)
 	case !opRemoved:
 		fmt.Fprintf(out, "no ref named %s in %s\n", key, path)
 	default:
@@ -433,7 +433,7 @@ func removeOpRef(content, key string) (out string, removed bool) {
 	return strings.Join(kept, "\n") + "\n", true
 }
 
-// opRefLineKey returns the KEY of a raw op-refs.env line, or "" if the line is
+// opRefLineKey returns the KEY of a raw secrets.env line, or "" if the line is
 // blank, a comment, or not a KEY=VALUE line at all.
 func opRefLineKey(ln string) string {
 	t := strings.TrimSpace(ln)
@@ -467,14 +467,14 @@ func repairLegacyOpRefsTemplate(content string) (string, bool) {
 	return strings.Join(lines, "\n"), changed
 }
 
-// RunSecretCheck resolves every op:// ref in op-refs.env with `op read` and
+// RunSecretCheck resolves every op:// ref in secrets.env with `op read` and
 // reports OK/FAIL per KEY. It NEVER prints the resolved value (only OK/FAIL).
 // The three no-evidence arms (no refs file, no op, not signed in) return exit
 // 3; a ref that fails to RESOLVE is a plain failure, exit 1.
 func RunSecretCheck(env hostenv.Env, out io.Writer) error {
 	path, content, exists := OpRefsContent(env)
 	if !exists {
-		fmt.Fprintf(out, "op-refs.env not found (%s) — create it with: pix secret set <ENV_VAR> op://vault/item/field\n", path)
+		fmt.Fprintf(out, "secrets.env not found (%s) — create it with: pix secret set <ENV_VAR> op://vault/item/field\n", path)
 		return exitCode(3)
 	}
 	if !OpInstalled(env) {
@@ -552,7 +552,7 @@ func indent(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-// DefaultOpRefsPath is the ONE op-refs.env location: <PIX_HOME>/op-refs.env,
+// DefaultOpRefsPath is the ONE secrets.env location: <PIX_HOME>/secrets.env,
 // resolved through the canonical helper (config.OpRefsPath -> pixhome.Dir).
 // There is no $PIX_CONFIG, no $XDG_CONFIG_HOME, and no ~/.config/pix
 // fallback — set $PIX_HOME itself to redirect it (tests do exactly that).

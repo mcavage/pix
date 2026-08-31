@@ -14,10 +14,10 @@ import (
 // pix-v2-surface.md §3.5, §4, pix-v2-architecture.md §11): a single file
 // under PIX_HOME holding `NAME=op://vault/item/field` references ONLY. There
 // is no NonSecret allowlist here — v2 has no pack layer to author one — and
-// no literal value is ever accepted, unlike the v1 op-refs.env path this
+// no literal value is ever accepted, unlike the v1 secrets.env path this
 // package also serves. It reuses the existing line-oriented primitives
 // (upsertOpRef, removeOpRef, ParseOpRefs, NormalizeOpRef, EnvVarNameRe)
-// rather than re-deriving parsing, since a second op-refs.env grammar would
+// rather than re-deriving parsing, since a second secrets.env grammar would
 // be exactly the kind of drift this package exists to prevent.
 //
 // secret is L1 capability; pixhome is L0 foundation, so this import is a
@@ -69,9 +69,9 @@ func (e *InvalidEnvVarNameError) Error() string {
 // <home>/secrets.env's read-modify-write, a sibling of the file itself
 // (security re-review MEDIUM: SetRef/RemoveRef used to race a concurrent
 // `pix secret set`/`rm` in another process, silently losing whichever
-// reference lost the race — the same class of bug v1's op-refs.env already
+// reference lost the race — the same class of bug v1's secrets.env already
 // guards against via WithProviderRefsLock). It is a DIFFERENT file from v1's
-// provider-refs.lock: that one guards the v1 config-dir op-refs.env, this
+// provider-refs.lock: that one guards the v1 config-dir secrets.env, this
 // one guards the v2 PIX_HOME secrets.env, and the two must never share a
 // lock (a v1 and v2 transaction over two unrelated files must not be able to
 // block each other).
