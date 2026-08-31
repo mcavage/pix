@@ -38,8 +38,8 @@
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port."
     },
     "pix/host/config": {
-      "_prod_loc_note": "QA F5: config.Path/StateDir/DataDir/configDir now delegate to pixhome.Dir() (PIX_HOME) instead of re-deriving PIX_CONFIG/XDG_*/~/.config fallbacks inline \u2014 net prod_loc SHRANK (fewer resolution branches) but config now imports pixhome (edges 0 -> 1), closing the last executable-state escape.",
-      "prod_loc": 1046,
+      "_prod_loc_note": "QA F5: config.Path/StateDir/DataDir/configDir now delegate to pixhome.Dir() (PIX_HOME) instead of re-deriving PIX_CONFIG/XDG_*/~/.config fallbacks inline \u2014 net prod_loc SHRANK (fewer resolution branches) but config now imports pixhome (edges 0 -> 1), closing the last executable-state escape. Coexistence docs sync: OpRefsMentalModel/OpRefsTemplate reworded to drop stale pack/host-global-gateway prose and explain the ref feeds a per-sandbox scoped credential OR a declared MCP server's own host command, +3 prod_loc, no behavior change.",
+      "prod_loc": 1049,
       "test_loc": 1178,
       "exports": 36,
       "exports_used_externally": 13,

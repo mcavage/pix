@@ -68,15 +68,28 @@ session; pix does not score or choose one for you. `--resume SESSION` is an
 option on `run`, not a separate top-level verb. `--dev` mounts the current pix
 source for live development; it is not a second production launch path.
 
+Every launch carries this `PIX_HOME`'s own stack id (a 16-hex id derived
+from its canonical path) and the stamped launcher version as two composed
+environment facts; `pix env NAME --effective` shows both. Those two are the
+only environment drift a version bump can produce, so a sandbox whose sole
+drift is a newer launcher version is removed and recreated automatically,
+under the same proof gate (fresh listing, zero holders, no keep marker,
+direct host-mounted workspace) ordinary teardown already requires, instead
+of forcing a manual `pix rm && pix run`. Any other drift still refuses and
+names that sequence.
+
 ## 2. Memory
 
 Memory is a separate service, **`pix-memory`**, a Go MCP server that speaks
-Streamable HTTP. `pix setup` reconciles one named Docker container
-(`unless-stopped`, published only on host loopback, `~/.pix/state/memory`
-mounted). The sbx MCP Gateway registers that endpoint as a remote MCP server;
-the sandbox never dials the container directly. **Pix has no top-level
-`memory` command in v2**: memory is operated entirely through MCP tools
-and the slash commands that call them.
+Streamable HTTP. `pix setup` reconciles one Docker container, named and
+ported for THIS `PIX_HOME`'s stack (`pix-memory-<stack-id>`, on that stack's
+own allocated loopback port), `unless-stopped`, with `~/.pix/state/memory`
+mounted. The sbx MCP Gateway registers that endpoint as a remote MCP server
+under the same stack-scoped name (`pix-memory-<stack-id>`); the sandbox
+never dials the container directly. A second `PIX_HOME` on the same host
+gets its own container, port, and MCP registration, side by side with the
+first. **Pix has no top-level `memory` command in v2**: memory is operated
+entirely through MCP tools and the slash commands that call them.
 
 ```
 /recall <query>       # what memory would surface for this query
@@ -240,8 +253,10 @@ binary to a working first session. It:
 4. verifies the `pix-agent` image and strict kit;
 5. creates a default environment only when none exists, and selects it as
    the machine default in the same atomic step;
-6. seeds and validates `op://` references, never writing a secret value;
-7. creates or reconciles the `pix-memory` container;
+6. always seeds a refs-only `secrets.env` (no-op if one already exists) and,
+   on a TTY with `op` installed and no refs configured yet, offers to add one
+   per model provider interactively;
+7. creates or reconciles this stack's own `pix-memory` container;
 8. checks requirements declared by the selected environment (`--env NAME`),
    including validating any local inference backend (llmman or Ollama, over
    its native or OpenAI-compatible transport) that environment's `pix.toml`
@@ -251,12 +266,24 @@ binary to a working first session. It:
 10. probes the complete result before reporting it ready.
 
 There is no setup interview: setup never asks which cloud provider, llmman, or
-Ollama to use. A provider key is added with `pix secret set`; local inference
-is authored directly in an environment's own `pix.toml`, and `pix run` merges
-that declaration over machine config for the session it launches. Setup and
+Ollama to use. A provider key is added with `pix secret set`, or through
+setup's own interactive 1Password offer above; local inference is authored
+directly in an environment's own `pix.toml`, and `pix run` merges that
+declaration over machine config for the session it launches. Setup and
 doctor only validate what an environment already declares: neither chooses
 on the user's behalf, and neither silently prefers or migrates one backend
 over another.
+
+Setup only writes `secrets.env`. It never resolves a ref into a credential
+and never writes an sbx secret, host-global or scoped: every `pix run`
+create and every attach does that itself, re-resolving THIS `PIX_HOME`'s
+configured refs (model provider keys, tool keys, `GITHUB_TOKEN`) and writing
+each one as `sbx secret set -f --sandbox <name> <service> -t <value>` after
+the sandbox's instance receipt and before the session attaches. There is no
+"already set, skip it" branch, so a rotated 1Password item takes effect on
+the next run without a separate sync step. A host-global `sbx secret` (one
+written outside Pix, or by a v1 install) is never read as evidence and never
+removed automatically; `pix doctor` reports it in a separate, ignored row.
 
 `--env NAME` sets up one existing environment in addition to machine-level
 prerequisites; it does not select that environment as the default. When
@@ -358,10 +385,13 @@ model backends, `op://` reference resolution where required, sbx Gateway MCP
 registration and authentication,
 each required local command or integration-owned endpoint, the memory MCP
 endpoint/storage/embeddings/capture mode/scope isolation, session state, and
-sandbox declaration drift that requires recreation. Every failing row names
-the owning system and one exact next action; Gateway OAuth errors name the
-native `sbx mcp auth SERVER` command. Doctor never repairs, registers,
-restarts, or authenticates.
+sandbox declaration drift that requires recreation. The provider-key row is
+graded off THIS `PIX_HOME`'s own `secrets.env` refs, never off a host-global
+sbx secret; any host-global provider/GitHub secret this host holds is listed
+separately, as ignored, never as evidence and never as something doctor
+offers to remove. Every failing row names the owning system and one exact
+next action; Gateway OAuth errors name the native `sbx mcp auth SERVER`
+command. Doctor never repairs, registers, restarts, or authenticates.
 
 Exit codes: `2` on a usage error or safety refusal, other nonzero values on
 an operational failure, `0` when nothing checked verified a gap. `ready`,
@@ -413,19 +443,22 @@ under a recovery ref in the source repository.
 count, and task association. It does not report readiness; health belongs to
 `pix doctor`.
 
-`pix rm` removes only positively identified `pix-*` sandboxes, verifying the
-current sbx instance ID before removal. Unknown sbx state fails closed.
-`--force` is an explicit authority override for a NAMED pix sandbox: it does
-not widen the `pix-*` namespace and never authorizes removing a sandbox pix
-did not create.
+`pix rm` removes only positively identified `pix-*` sandboxes carrying THIS
+`PIX_HOME`'s own stack id, verifying the current sbx instance ID before
+removal. Unknown sbx state fails closed. `--force` is an explicit authority
+override for a NAMED pix sandbox: it does not widen the `pix-*` namespace and
+never authorizes removing a sandbox pix did not create, whatever stack it
+belongs to.
 
 An **orphan** is a pix-owned sandbox that still exists after no live
 session-tree node claims it, usually because a launcher or machine crashed
 before normal teardown. `--orphans` removes only sandboxes that pass five
-positive proofs (a fresh listing, a `pix-*` name, a matching recorded
-instance ID, zero reference locks, no keep marker) and preserves every keep
-marker; any unknown answer preserves the sandbox. `--keep NAME` excludes a
-named sandbox from a bulk operation.
+positive proofs (a fresh listing, a name carrying THIS `PIX_HOME`'s own
+stack id, a matching recorded instance ID, zero reference locks, no keep
+marker) and preserves every keep marker; any unknown answer preserves the
+sandbox. `--all` discovers through the same stack-scoped listing, so a
+second `PIX_HOME` running on this host is never a candidate. `--keep NAME`
+excludes a named sandbox from a bulk operation.
 
 ## 10. Secrets
 
@@ -456,7 +489,12 @@ doctor probe.
 environment's sandbox; Pix neither defines a second MCP registry nor spawns
 those processes. A registration mismatch (same name, different command, URL,
 or credential identity) refuses launch and is never silently overwritten.
-OAuth is performed with native `sbx mcp auth`.
+OAuth is performed with native `sbx mcp auth`. The registry itself stays one
+host-global list (the sbx Gateway's, not Pix's), but Pix's own two
+built-ins (memory and session control) register under this stack's scoped
+names (`pix-memory-<stack-id>`, `pix-session-<stack-id>`), so a second
+`PIX_HOME` on the same host adds its own entries instead of colliding with
+the first one's.
 
 An MCP implementation that needs direct host GUI, credential-store, or
 device access runs through the sbx Gateway's on-demand host command, or an
@@ -474,10 +512,13 @@ capability to a concrete provider (an `mcp` server, a `cli` on PATH, an
 
 ## 12. Reset
 
-`pix reset` is the safe clean-slate recovery command. It removes pix-owned
-sandboxes through the normal proof-gated removal path, stops and removes the
-named `pix-memory` container (and proves it is absent before proceeding),
-then renames `PIX_HOME` to a timestamped backup. It contains no recursive
+`pix reset` is the safe clean-slate recovery command. It removes THIS stack's
+pix-owned sandboxes through the normal proof-gated removal path, stops and
+removes THIS stack's own `pix-memory-<stack-id>` container (and proves it is
+absent before proceeding), best-effort removes THIS stack's own
+`pix-memory-<stack-id>`/`pix-session-<stack-id>` MCP registrations, then
+renames `PIX_HOME` to a timestamped backup. A second `PIX_HOME`'s sandboxes,
+container, and MCP registrations are untouched. It contains no recursive
 delete, and environment sources reached through symlinks outside `PIX_HOME`
 are never moved.
 
