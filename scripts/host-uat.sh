@@ -255,6 +255,9 @@ grep -qi "Accept this host-execution footprint" "$DEFAULT_LOG" && fail "U5b: a z
 grep -qi "has not been reviewed" "$DEFAULT_LOG" && fail "U5b: a zero-footprint environment was reported unreviewed"
 test -f "$PIX_HOME/state/trust/environments/default.json" && fail "U5b: a zero-footprint environment wrote a trust record"
 # sbx 0.41 renders its own plan and asks its own approval on `env create`.
+# This row is ALSO the only proof that the approval Pix writes on the create
+# child's stdin actually reaches sbx: a build that read /dev/tty instead
+# would fail the create here rather than pass quietly.
 # Pix answers it internally after its OWN gate; neither the prompt, the plan,
 # nor the token-bearing memory URL may appear on the user's terminal.
 grep -qi "Approve this plan" "$DEFAULT_LOG" && fail "U5b: sbx's duplicate plan approval reached the terminal"

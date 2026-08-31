@@ -19,6 +19,14 @@
 // is printed — bounded, terminal-safe, and with the memory token and every
 // configured secret value redacted. The raw plan is never displayed.
 //
+// One thing this file cannot prove on its own: if a future sbx reads its
+// approval from /dev/tty rather than from stdin, the bytes written here
+// never reach it and the create fails visibly (the captured, redacted
+// diagnostic is what the user then sees) instead of silently proceeding.
+// That is a host fact, so the proof is the host UAT row U5b in
+// scripts/host-uat.sh, run against a real sbx; there is deliberately no
+// shell/pty wrapper here to paper over it.
+//
 // The interactive `sbx exec` session keeps ordinary inherited stdio: it IS
 // the user's session. The two children are told apart by the SessionDeps
 // seam they come from (Spawn vs SpawnCreate), never by sniffing argv.
