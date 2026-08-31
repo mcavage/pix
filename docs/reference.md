@@ -278,8 +278,9 @@ Setup only writes `secrets.env`. It never resolves a ref into a credential
 and never writes an sbx secret, host-global or scoped: every `pix run`
 create and every attach does that itself, re-resolving THIS `PIX_HOME`'s
 configured refs (model provider keys, tool keys, `GITHUB_TOKEN`) and writing
-each one as `sbx secret set -f --sandbox <name> <service> -t <value>` after
-the sandbox's instance receipt and before the session attaches. There is no
+each one as `sbx secret set -f --sandbox <name> <service>`, with the resolved
+value on that command's stdin rather than in its argv, after the sandbox's
+instance receipt and before the session attaches. There is no
 "already set, skip it" branch, so a rotated 1Password item takes effect on
 the next run without a separate sync step. A host-global `sbx secret` (one
 written outside Pix, or by a v1 install) is never read as evidence and never

@@ -134,11 +134,16 @@ type sbxMemoryRegistrar struct{}
 // EnsureMemoryRemote registers name at url with the sbx Gateway if it is not
 // already present in `sbx mcp ls`'s listing. An existing registration under
 // name is left untouched — the one unconditional rule architecture §10
-// states regardless of what this host can observe — and reported as
-// MCPRegistrationPresent, never as a match: `sbx mcp ls` does not print
-// endpoints, so this host genuinely cannot tell whether the existing entry
-// points at the URL we would have registered (round-4 review: reporting it
-// as "ok" was a success word no probe earned).
+// states regardless of what this host can observe: and classified by what
+// an endpoint read-back actually proved:
+//
+//   - read back and EQUAL to url: MCPRegistrationPresentVerified.
+//   - read back and DIFFERENT: an error, naming the manual removal. Never an
+//     overwrite.
+//   - not readable at all (`sbx mcp ls` does not print endpoints, and both
+//     inspect and get failed): MCPRegistrationPresentUnverified, which the
+//     caller reports as not-ready. Presence is not a match, and calling it
+//     one would be a success word no probe earned.
 func (sbxMemoryRegistrar) EnsureMemoryRemote(name, url string) (provision.MCPRegistrationState, error) {
 	lsOut, _, lsErr := runSbxCapturedOut("mcp", "ls")
 	if lsErr == nil {
@@ -150,12 +155,17 @@ func (sbxMemoryRegistrar) EnsureMemoryRemote(name, url string) (provision.MCPReg
 				// scoped name pointed at a DIFFERENT endpoint is a real drift,
 				// never a silent "present" (round-4 review's own standard,
 				// applied here too — never a success word nothing probed).
-				if matches, verified := mcp.VerifyExistingEndpoint(name, url); verified && !matches {
+				matches, verified := mcp.VerifyExistingEndpoint(name, url)
+				switch {
+				case verified && !matches:
 					return provision.MCPRegistrationNone, fmt.Errorf(
 						"%s is already registered with the sbx Gateway at a different endpoint than %s; refusing to overwrite it (remove it manually first if you want pix to re-register it: sbx mcp rm %s)",
 						name, container.RedactMemoryURLToken(url), name)
+				case verified:
+					return provision.MCPRegistrationPresentVerified, nil
+				default:
+					return provision.MCPRegistrationPresentUnverified, nil
 				}
-				return provision.MCPRegistrationPresent, nil
 			}
 		}
 	}

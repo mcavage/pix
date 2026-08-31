@@ -22,10 +22,21 @@ VERSION      ?= 0.1.71
 # still correctly calls this UNRELEASED — it is never a bare X.Y.Z — so it
 # uses the local checkout kit instead of pinning a nonexistent v$(VERSION) tag.
 # A CI RELEASE build overrides this to a clean X.Y.Z (LAUNCHER_VERSION=$(VERSION)):
-# `?=` never evaluates the $(shell ...) default once the variable already has
-# a value from the command line or environment, so a release build never
-# shells out to derive anything.
-LAUNCHER_VERSION ?= $(shell scripts/release/derive-build-version.sh)
+# `?=` never evaluates the default once the variable already has a value from
+# the command line or environment, so a release build never shells out to
+# derive anything.
+#
+# A FAILED derivation stops the build. $(shell ...) reports a failing command
+# as the empty string, and an empty LAUNCHER_VERSION is silently poisonous: it
+# stamps a versionless binary, names the runtime archive
+# out/pix-runtime-.tar.gz, tags both images `pix-agent:` and binds a manifest
+# to that nothing. The script itself already refuses loudly (nonzero exit, a
+# reason on stderr, no stdout), so "empty" IS "it refused" and the only honest
+# response is to abort here with the reason and the override. DERIVE_VERSION_SH
+# is a variable so a test can point this at a script that fails on purpose.
+DERIVE_VERSION_SH ?= scripts/release/derive-build-version.sh
+launcher-version-or-die = $(if $(strip $(1)),$(1),$(error make: could not derive the local build version: $(DERIVE_VERSION_SH) failed (its own reason is on stderr above). Fix that, or build with an explicit identity: make $(MAKECMDGOALS) LAUNCHER_VERSION=X.Y.Z))
+LAUNCHER_VERSION ?= $(call launcher-version-or-die,$(shell $(DERIVE_VERSION_SH)))
 AGENT_DOCKERFILE  ?= images/agent/Dockerfile
 AGENT_IMAGE       ?= docker.io/$(DOCKER_USER)/pix-agent:$(VERSION)
 AGENT_LATEST      ?= docker.io/$(DOCKER_USER)/pix-agent:latest

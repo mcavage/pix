@@ -51,7 +51,10 @@ depends on it.
   machine to get stored now leaves it to get answered. The daemon requires
   the bearer token mounted from this stack's state; the host-global Gateway
   registration carries that token in its stack-scoped endpoint URL because
-  sbx cannot express a custom authorization header. See
+  sbx cannot express a custom authorization header. The stack-scoped name
+  prevents two `PIX_HOME` installations from colliding; it does not keep the
+  token private from another process running as the same host user, which can
+  read the stored URL out of sbx's own registry. See
   [../memory.md](../memory.md) for the full trust model and how capture and
   recall actually work.
 - **No transcript of its own.** pix used to ship a monitor: an in-sandbox tap

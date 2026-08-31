@@ -16,10 +16,11 @@
 //   - Every create AND every attach re-resolves and re-writes. There is no
 //     "already set, skip it" branch, because that branch is exactly what makes
 //     a rotated 1Password item invisible until someone recreates the sandbox.
-//   - A resolved value never lands on disk and never reaches the VM through
-//     pix: `op read` resolves it in-process, it is one argv element on the
-//     HOST for the length of one `sbx secret set`, and every error string is
-//     redacted before it is printed (sbx can echo its own argv back).
+//   - A resolved value never lands on disk, never appears in an argv, and
+//     never reaches the VM through pix: `op read` resolves it in-process, it
+//     is written to one `sbx secret set`'s STDIN (so no `ps` on the host ever
+//     sees it), and every error string is redacted before it is printed (sbx
+//     can echo back whatever it read).
 package secret
 
 import (
@@ -151,13 +152,23 @@ func prepareSandboxSecretsLocked(env hostenv.Env, sandbox string, out io.Writer,
 // setScopedSbxSecret is the ONE place `sbx secret set` is invoked anywhere in
 // this launcher, and it can only write the SANDBOX-SCOPED form. `-f`
 // overwrites (1Password is the source of truth, and sbx errors on an existing
-// secret without it); `--sandbox <name>` is the scope; the value is the last
-// argument and is never logged. On failure the detail is sbx's first output
-// line (or the Go error text) with every occurrence of the value redacted — an
-// exec error can echo the full argv ("-t <value>") back verbatim, so the error
-// string is as much a leak vector as sbx's own stdout.
+// secret without it); `--sandbox <name>` is the scope; the SERVICE name is the
+// last and only positional.
+//
+// The value is not in that argv at all: it goes over STDIN, the input form
+// `sbx secret set` already supports (`gh auth token | sbx secret set github`).
+// An argv is world-readable in the host's process table for the lifetime of
+// the child, which on a shared machine is a real disclosure to any other user
+// running `ps` at the wrong moment; a pipe is readable only by the two
+// processes holding it.
+//
+// On failure the detail is still sbx's first output line (or the Go error
+// text) with every occurrence of the value redacted. That redaction is
+// defence in depth now rather than the primary control: sbx is free to echo
+// back whatever it read on stdin, so the error string remains a leak vector
+// even though the argv no longer is.
 func setScopedSbxSecret(env hostenv.Env, sandbox, name, val string) (detail string, err error) {
-	sbxOut, err := env.Run("sbx", "secret", "set", "-f", "--sandbox", sandbox, name, "-t", val)
+	sbxOut, err := env.RunInput(val, "sbx", "secret", "set", "-f", "--sandbox", sandbox, name)
 	if err == nil {
 		return "", nil
 	}

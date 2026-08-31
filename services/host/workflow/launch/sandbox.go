@@ -259,7 +259,7 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 			continue
 		}
 		if opts.Force {
-			if err := RemovePixSandbox(env, n); err != nil {
+			if err := removePixSandbox(env, n); err != nil {
 				fmt.Fprintf(errOut, "failed to remove %s: %v\n", n, err)
 				failed = true
 				continue
@@ -312,20 +312,38 @@ func validateRmShape(opts RmOptions) error {
 	return nil
 }
 
-// RemovePixSandbox is the ONE forced seam: an explicitly-named `pix rm
+// removePixSandbox is the ONE forced seam: an explicitly-named `pix rm
 // --force` (or a task-checkout removal already cleared by its own git-hygiene
 // guard) that skips pix's own zero-holder-reference proof entirely — a human
 // (or an equivalent already-proven guard) is vouching for this ONE name, not
 // a wildcard. It routes through sandbox.PlanForceRemove for the exact same
 // pix-* scope/name-safety check every other removal path uses, so this seam
 // cannot reach a name PlanRemove would have refused either.
-func RemovePixSandbox(env hostenv.Env, name string) error {
+func removePixSandbox(env hostenv.Env, name string) error {
 	argv, err := sandbox.PlanForceRemove(name)
 	if err != nil {
 		return err
 	}
 	_, err = env.Run("sbx", argv...)
 	return err
+}
+
+// RemoveScopedPixSandbox is the ONLY EXPORTED forced seam (removePixSandbox
+// above is deliberately unexported, so no package outside this one can reach
+// the forced argv without passing a stack id first). It is for a caller
+// holding a RECORDED name rather than one it just derived: a task's metadata carries whatever
+// sandbox name the PIX_HOME that created the task composed, and on a host
+// where two Pix stacks coexist that may be another stack's sandbox (or a
+// pre-scoping name no stack owns). sandbox.PlanForceRemove cannot catch
+// either: it has no stack id to compare against, so "pix-*" is as far as its
+// scope check reaches: which is exactly the gap this closes: the stack check
+// runs BEFORE any argv is composed, and a name that fails it is never
+// executed in any form.
+func RemoveScopedPixSandbox(env hostenv.Env, stackID, name string) error {
+	if !stack.IsScopedSandboxName(stackID, name) {
+		return fmt.Errorf("refusing to remove %q: it is not this pix stack's sandbox (a different PIX_HOME, or a pre-scoping name). Remove it from the home that created it, or by hand: sbx rm -f %s", name, name)
+	}
+	return removePixSandbox(env, name)
 }
 
 const LsDescription = `List the pix sandboxes on this host (name, state, ws dir). These are the

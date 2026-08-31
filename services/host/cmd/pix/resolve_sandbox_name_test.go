@@ -239,9 +239,34 @@ func TestSessionKeyFor_DifferentExplicitNamesOnOneWorkspaceNeverCollide(t *testi
 	}
 }
 
+// TestResolveSandboxName_TwoLongExplicitNamesRefuseRatherThanAlias proves the
+// refusal from the caller a user actually reaches: `pix run --name`. Two
+// distinct long names once truncated to the same scoped name, so the second
+// run silently attached to the first run's sandbox. Both must now fail, and
+// the failure must say how long a name may be.
+func TestResolveSandboxName_TwoLongExplicitNamesRefuseRatherThanAlias(t *testing.T) {
+	isolatePixHome(t)
+	ws := t.TempDir()
+	base := strings.Repeat("n", 60)
+	gotA, errA := resolveSandboxName(base+"-alpha", ws)
+	gotB, errB := resolveSandboxName(base+"-beta", ws)
+	if errA == nil || errB == nil {
+		t.Fatalf("two overlong --name values must both be refused, got %q (%v) and %q (%v)", gotA, errA, gotB, errB)
+	}
+	if !strings.Contains(errA.Error(), "too long") {
+		t.Errorf("the refusal must say the name is too long, got: %v", errA)
+	}
+	// A normal short name is untouched by the new bound.
+	if _, err := resolveSandboxName("uat-one", ws); err != nil {
+		t.Errorf("an ordinary short --name must still resolve: %v", err)
+	}
+}
+
 // TestResolveSandboxName_LongDefaultNameFits: a workspace with a very long
 // basename still resolves to a name within sandbox.MaxNameLen, stack-id
-// segment included.
+// segment included. A DERIVED name still truncates, because it carries a
+// path digest that keeps two workspaces distinct; an explicit name has no
+// such digest, which is why only it refuses.
 func TestResolveSandboxName_LongDefaultNameFits(t *testing.T) {
 	isolatePixHome(t)
 	root := t.TempDir()

@@ -15,14 +15,21 @@ import (
 	"pix/host/config"
 )
 
-// Exec runs other programs. Five methods rather than one because the CALLER's
-// obligations differ: Run captures, RunTimed bounds an untrusted command,
-// RunInteractive hands over the terminal — collapsing them would hide that.
+// Exec runs other programs. Six methods rather than one because the CALLER's
+// obligations differ: Run captures, RunInput keeps a value out of argv,
+// RunTimed bounds an untrusted command, RunInteractive hands over the
+// terminal: collapsing them would hide that.
 type Exec interface {
 	// LookPath resolves a binary on PATH.
 	LookPath(name string) (string, error)
 	// Run executes name and returns its combined output.
 	Run(name string, args ...string) (string, error)
+	// RunInput executes name with input written to its STDIN and returns its
+	// combined output. It exists for one reason: a value that must never be
+	// readable in the host's process table (a resolved credential) travels
+	// over a pipe, so the argv this composes carries only flags and names.
+	// A caller with nothing to hide uses Run.
+	RunInput(input, name string, args ...string) (string, error)
 	// RunTimed executes an UNTRUSTED command with a hard timeout and capped output,
 	// so a server can neither hang nor flood us; the second return marks a timeout.
 	RunTimed(name string, args ...string) (out string, timedOut bool, err error)
@@ -97,6 +104,13 @@ func (Real) LookPath(name string) (string, error) { return exec.LookPath(name) }
 
 func (Real) Run(name string, args ...string) (string, error) {
 	out, err := exec.Command(name, args...).CombinedOutput()
+	return string(out), err
+}
+
+func (Real) RunInput(input, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 

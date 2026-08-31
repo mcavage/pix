@@ -5,6 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"pix/host/hostenv"
+	"pix/host/sys/systest"
 )
 
 // scoped_test.go pins Wave C's credential de-globalization: Pix resolves the
@@ -18,8 +21,8 @@ const scopedRefs = "ANTHROPIC_API_KEY=op://Private/anthropic/key\n" +
 	"GITHUB_TOKEN=op://Private/github/token\n"
 
 // TestPrepareSandboxSecrets_ExactScopedArgv is the argv contract: `sbx secret
-// set -f --sandbox <name> <service> -t <value>`, in that order, once per
-// configured known ref — and never a global flag.
+// set -f --sandbox <name> <service>`, in that order, once per configured
+// known ref: no value in argv, and never a global flag.
 func TestPrepareSandboxSecrets_ExactScopedArgv(t *testing.T) {
 	var calls []string
 	env := fakeSyncEnv(scopedRefs, "sk-secret-value\n", nil, &calls)
@@ -29,10 +32,16 @@ func TestPrepareSandboxSecrets_ExactScopedArgv(t *testing.T) {
 	}
 	joined := strings.Join(calls, "\n")
 	for _, service := range []string{"anthropic", "google", "parallel", "github"} {
-		want := "sbx secret set -f --sandbox pix-demo " + service + " -t sk-secret-value"
+		want := "sbx secret set -f --sandbox pix-demo " + service
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing scoped write %q; got:\n%s", want, joined)
 		}
+	}
+	if strings.Contains(joined, " -t ") {
+		t.Errorf("the value is still passed as an argv element:\n%s", joined)
+	}
+	if strings.Contains(joined, "sk-secret-value") {
+		t.Errorf("the resolved value reached an argv:\n%s", joined)
 	}
 	if strings.Contains(joined, "secret set -f -g ") || strings.Contains(joined, "--global") {
 		t.Errorf("a global secret was written:\n%s", joined)
@@ -42,9 +51,91 @@ func TestPrepareSandboxSecrets_ExactScopedArgv(t *testing.T) {
 	}
 }
 
-// TestPrepareSandboxSecrets_RedactsFailureDetail: sbx can echo its own argv
-// (which carries `-t <value>`) back in an error, so the reported detail must
-// never contain the value.
+// TestPrepareSandboxSecrets_ValueTravelsOverStdin is the finding this seam
+// exists for: the resolved credential is written to `sbx secret set`'s STDIN,
+// so it is never readable in the host's process table. The value must appear
+// in the injected input and NOWHERE else: not in the argv, not in the fake's
+// recorded calls, not in printed output.
+func TestPrepareSandboxSecrets_ValueTravelsOverStdin(t *testing.T) {
+	const val = "sk-stdin-only-value"
+	var argvs, inputs []string
+	fake := &systest.Fake{
+		ReadFileFn: func(string) (string, error) {
+			return "ANTHROPIC_API_KEY=op://Private/anthropic/key\n", nil
+		},
+		LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		RunFn: func(name string, args ...string) (string, error) {
+			argvs = append(argvs, name+" "+strings.Join(args, " "))
+			if name == "op" && len(args) >= 1 && args[0] == "read" {
+				return val + "\n", nil
+			}
+			return "2.0", nil
+		},
+		RunInputFn: func(input, name string, args ...string) (string, error) {
+			argvs = append(argvs, name+" "+strings.Join(args, " "))
+			inputs = append(inputs, input)
+			return "", nil
+		},
+	}
+	env := hostenv.Env{System: fake}
+	var out bytes.Buffer
+	if err := PrepareSandboxSecrets(env, "pix-demo", &out, ScopedSecretOptions{}); err != nil {
+		t.Fatalf("PrepareSandboxSecrets: %v (out=%q)", err, out.String())
+	}
+	if len(inputs) != 1 || inputs[0] != val {
+		t.Fatalf("stdin inputs = %q, want exactly one, the resolved value", inputs)
+	}
+	joined := strings.Join(argvs, "\n")
+	if !strings.Contains(joined, "sbx secret set -f --sandbox pix-demo anthropic") {
+		t.Errorf("the scoped write argv is wrong:\n%s", joined)
+	}
+	if strings.Contains(joined, val) {
+		t.Errorf("the value reached an argv:\n%s", joined)
+	}
+	if strings.Contains(strings.Join(fake.Calls, "\n"), val) {
+		t.Errorf("the value reached the recorded calls: %v", fake.Calls)
+	}
+	if strings.Contains(out.String(), val) {
+		t.Errorf("the value reached printed output:\n%s", out.String())
+	}
+}
+
+// TestPrepareSandboxSecrets_StdinFailureNeverEchoesTheValue: redaction stays
+// as defence in depth even though the argv no longer carries the value: sbx
+// is free to echo whatever it read, and this path prints its first line.
+func TestPrepareSandboxSecrets_StdinFailureNeverEchoesTheValue(t *testing.T) {
+	const val = "sk-echoed-back"
+	env := hostenv.Env{System: &systest.Fake{
+		ReadFileFn: func(string) (string, error) {
+			return "ANTHROPIC_API_KEY=op://Private/anthropic/key\n", nil
+		},
+		LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		RunFn: func(name string, args ...string) (string, error) {
+			if name == "op" && len(args) >= 1 && args[0] == "read" {
+				return val + "\n", nil
+			}
+			return "2.0", nil
+		},
+		RunInputFn: func(input, name string, args ...string) (string, error) {
+			return "sbx: rejected the value it read on stdin: " + input,
+				errors.New("exit status 1: " + input)
+		},
+	}}
+	var out bytes.Buffer
+	err := PrepareSandboxSecrets(env, "pix-demo", &out, ScopedSecretOptions{})
+	if err == nil {
+		t.Fatal("want a failure when the only model key cannot be written")
+	}
+	if strings.Contains(err.Error(), val) || strings.Contains(out.String(), val) {
+		t.Errorf("value leaked: err=%v out=%q", err, out.String())
+	}
+	if !strings.Contains(out.String(), "***") {
+		t.Errorf("expected the redaction marker in place of the value, got:\n%s", out.String())
+	}
+}
+
+// TestPrepareSandboxSecrets_RedactsFailureDetail: sbx can echo back whatever
+// it was handed, so the reported detail must never contain the value.
 func TestPrepareSandboxSecrets_RedactsFailureDetail(t *testing.T) {
 	var calls []string
 	env := fakeSyncEnv("ANTHROPIC_API_KEY=op://Private/anthropic/key\n", "sk-leak-me\n",
@@ -73,7 +164,7 @@ func TestPrepareSandboxSecrets_TwoSandboxesGetDistinctWrites(t *testing.T) {
 	}
 	joined := strings.Join(calls, "\n")
 	for _, name := range []string{"pix-alpha", "pix-beta"} {
-		if !strings.Contains(joined, "sbx secret set -f --sandbox "+name+" anthropic -t sk-v") {
+		if !strings.Contains(joined, "sbx secret set -f --sandbox "+name+" anthropic") {
 			t.Errorf("no scoped write for %s:\n%s", name, joined)
 		}
 	}
@@ -143,7 +234,7 @@ func TestPrepareSandboxSecrets_GitHubIsScoped(t *testing.T) {
 	if err := PrepareSandboxSecrets(env, "pix-demo", &out, ScopedSecretOptions{}); err != nil {
 		t.Fatalf("a github-only ref set must not fail the launch: %v", err)
 	}
-	if !strings.Contains(strings.Join(calls, "\n"), "sbx secret set -f --sandbox pix-demo github -t ghp-v") {
+	if !strings.Contains(strings.Join(calls, "\n"), "sbx secret set -f --sandbox pix-demo github") {
 		t.Errorf("GITHUB_TOKEN was not scoped:\n%s", strings.Join(calls, "\n"))
 	}
 	if isModelProviderKey(GitHubKeyRef.EnvVar) {

@@ -58,8 +58,10 @@ type fakeProber struct{}
 func (fakeProber) Probe(string) error { return nil }
 
 type fakeMCP struct {
-	registered map[string]string
-	calls      int
+	registered   map[string]string
+	calls        int
+	presentState MCPRegistrationState
+	presentErr   error
 }
 
 func (f *fakeMCP) EnsureMemoryRemote(name, url string) (MCPRegistrationState, error) {
@@ -71,9 +73,18 @@ func (f *fakeMCP) EnsureMemoryRemote(name, url string) (MCPRegistrationState, er
 		f.registered[name] = url
 		return MCPRegistrationAdded, nil
 	}
-	// Already registered: left untouched, and reported as an unverifiable
-	// PRESENCE — never as a match (round-4 review).
-	return MCPRegistrationPresent, nil
+	// Already registered and left untouched. What this fixture REPORTS for
+	// that case is the interesting axis, so it is declared per test: the
+	// production registrar answers PresentVerified only when it actually read
+	// the endpoint back, PresentUnverified when it could not, and an error
+	// when it read back a different endpoint.
+	if f.presentErr != nil {
+		return MCPRegistrationNone, f.presentErr
+	}
+	if f.presentState != MCPRegistrationNone {
+		return f.presentState, nil
+	}
+	return MCPRegistrationPresentUnverified, nil
 }
 
 func testManifest() release.Manifest {
@@ -132,19 +143,85 @@ func TestSetup_FromScratch(t *testing.T) {
 	}
 }
 
-func TestSetup_MCPMismatchIsReportedNotOverwritten(t *testing.T) {
+// TestSetup_UnverifiablePresentRegistrationIsNotReady is the finding: a
+// pre-existing registration under THIS stack's scoped name whose endpoint
+// this host cannot read back is not evidence that setup succeeded. It is
+// reported as present-unverified, nothing is overwritten or removed, and
+// Ready() is false so `pix setup` exits nonzero with a manual remedy instead
+// of printing a success word nothing probed (safety invariant 12).
+func TestSetup_UnverifiablePresentRegistrationIsNotReady(t *testing.T) {
 	home := pixhome.New(t.TempDir())
 	docker := &fakeDockerRunner{inspectErr: errors.New("exit 1"), inspectOut: "Error: No such object"}
 	memoryName := wantMemoryMCPName(t, home)
-	mcp := &fakeMCP{registered: map[string]string{memoryName: "http://127.0.0.1:9999/mcp"}}
+	mcp := &fakeMCP{
+		registered:   map[string]string{memoryName: "http://127.0.0.1:9999/mcp"},
+		presentState: MCPRegistrationPresentUnverified,
+	}
 	spec := container.Spec{ContainerName: "pix-memory-test", Image: "img@sha256:" + strings.Repeat("b", 64), HostPort: 18080, DataDir: home.StateMemory}
 
 	res, err := Setup(Deps{Home: home, ContainerRunner: docker, Prober: fakeProber{}, ContainerSpec: spec, MCP: mcp})
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
-	if !res.MCPRegistered || res.MCPState != MCPRegistrationPresent {
-		t.Fatalf("expected registered=true state=present, got %+v", res)
+	if !res.MCPRegistered || res.MCPState != MCPRegistrationPresentUnverified {
+		t.Fatalf("expected registered=true state=present-unverified, got %+v", res)
+	}
+	if res.Ready() {
+		t.Error("Ready() = true for a registration whose endpoint was never read back")
+	}
+	if res.MCPName != memoryName {
+		t.Errorf("MCPName = %q, want the scoped name %q so the caller can print an exact remedy", res.MCPName, memoryName)
+	}
+	if mcp.registered[memoryName] != "http://127.0.0.1:9999/mcp" {
+		t.Fatal("Setup must never overwrite an existing registration it could not verify")
+	}
+}
+
+// TestSetup_VerifiedPresentRegistrationIsReady: the other half. A host whose
+// sbx CAN read the endpoint back, and reads back the URL setup would have
+// registered, is genuinely ready: the unverified state must not make every
+// rerun of setup fail.
+func TestSetup_VerifiedPresentRegistrationIsReady(t *testing.T) {
+	home := pixhome.New(t.TempDir())
+	docker := &fakeDockerRunner{inspectErr: errors.New("exit 1"), inspectOut: "Error: No such object"}
+	memoryName := wantMemoryMCPName(t, home)
+	mcp := &fakeMCP{
+		registered:   map[string]string{memoryName: "http://127.0.0.1:18080/mcp"},
+		presentState: MCPRegistrationPresentVerified,
+	}
+	spec := container.Spec{ContainerName: "pix-memory-test", Image: "img@sha256:" + strings.Repeat("b", 64), HostPort: 18080, DataDir: home.StateMemory}
+
+	res, err := Setup(Deps{Home: home, ContainerRunner: docker, Prober: fakeProber{}, ContainerSpec: spec, MCP: mcp})
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	if res.MCPState != MCPRegistrationPresentVerified {
+		t.Fatalf("MCPState = %v, want present-verified", res.MCPState)
+	}
+	if !res.Ready() {
+		t.Error("Ready() = false for a registration whose endpoint was read back and matched")
+	}
+}
+
+// TestSetup_MCPMismatchIsReportedNotOverwritten: a registrar that positively
+// read back a DIFFERENT endpoint refuses, and the refusal reaches the caller
+// as an error with nothing mutated.
+func TestSetup_MCPMismatchIsReportedNotOverwritten(t *testing.T) {
+	home := pixhome.New(t.TempDir())
+	docker := &fakeDockerRunner{inspectErr: errors.New("exit 1"), inspectOut: "Error: No such object"}
+	memoryName := wantMemoryMCPName(t, home)
+	mcp := &fakeMCP{
+		registered: map[string]string{memoryName: "http://127.0.0.1:9999/mcp"},
+		presentErr: errors.New("registered at a different endpoint; refusing to overwrite it"),
+	}
+	spec := container.Spec{ContainerName: "pix-memory-test", Image: "img@sha256:" + strings.Repeat("b", 64), HostPort: 18080, DataDir: home.StateMemory}
+
+	res, err := Setup(Deps{Home: home, ContainerRunner: docker, Prober: fakeProber{}, ContainerSpec: spec, MCP: mcp})
+	if err == nil {
+		t.Fatalf("a positively mismatched endpoint must refuse, got %+v", res)
+	}
+	if !strings.Contains(err.Error(), memoryName) {
+		t.Errorf("the refusal must name the scoped registration, got: %v", err)
 	}
 	if mcp.registered[memoryName] != "http://127.0.0.1:9999/mcp" {
 		t.Fatal("Setup must never overwrite an existing mismatched registration")

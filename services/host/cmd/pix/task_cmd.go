@@ -10,6 +10,7 @@ import (
 	"os"
 	"pix/host/cli"
 	"pix/host/pixhome"
+	"pix/host/stack"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/task"
 	"strings"
@@ -302,7 +303,16 @@ func taskRm(d *cli.Deps, name string, force bool) error {
 		return err
 	}
 	if disposition != task.SandboxAbsent {
-		if err := launch.RemovePixSandbox(defaultShellEnv(), m.Sandbox); err != nil {
+		// m.Sandbox is a RECORDED name: whichever PIX_HOME created this task
+		// wrote it. On a host where two stacks coexist that may be another
+		// stack's sandbox, and the forced seam alone would happily remove it
+		// (it can only check "is it pix-*"). Validate against THIS stack
+		// first, so `pix task rm` can never reach outside its own namespace.
+		stackID, serr := stack.Current()
+		if serr != nil {
+			return fmt.Errorf("could not resolve this pix stack's identity; leaving %s and the checkout intact: %w", m.Sandbox, serr)
+		}
+		if err := launch.RemoveScopedPixSandbox(defaultShellEnv(), stackID, m.Sandbox); err != nil {
 			return fmt.Errorf("could not remove sandbox %s; leaving the checkout intact: %w", m.Sandbox, err)
 		}
 	}

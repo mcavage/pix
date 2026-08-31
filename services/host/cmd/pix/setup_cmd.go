@@ -275,10 +275,19 @@ func renderSetupResult(d *cli.Deps, home pixhome.Paths, res provision.Result, ve
 		fmt.Fprintln(d.Out, "pix setup: pix-memory MCP registration: not attempted (no registrar wired)")
 	case res.MCPState == provision.MCPRegistrationAdded:
 		fmt.Fprintln(d.Out, "pix setup: pix-memory MCP registration: registered")
-	case res.MCPState == provision.MCPRegistrationPresent:
-		// NOT "ok", and NOT "verified": nothing probed the existing entry's
-		// URL, and `sbx mcp ls` cannot show it (safety invariant 12).
-		fmt.Fprintln(d.Out, "pix setup: pix-memory MCP registration: present (URL unverifiable from this host); left untouched")
+	case res.MCPState == provision.MCPRegistrationPresentVerified:
+		fmt.Fprintln(d.Out, "pix setup: pix-memory MCP registration: already registered at this home's endpoint (read back and matched); left untouched")
+	case res.MCPState == provision.MCPRegistrationPresentUnverified:
+		// NOT "ok", and NOT "verified": nothing could read the existing
+		// entry's URL, so this run proved nothing about what the sandbox
+		// would reach through that name (safety invariant 12). Nothing was
+		// overwritten or removed; the user gets the exact commands.
+		name := res.MCPName
+		if name == "" {
+			name = "this home's pix-memory MCP name"
+		}
+		fmt.Fprintf(d.Out, "pix setup: pix-memory MCP registration: %s is already registered, and its endpoint could not be read on this host (`sbx mcp inspect %s` and `sbx mcp get %s` both failed); left untouched, nothing overwritten or removed\n", name, name, name)
+		fmt.Fprintf(d.Out, "  Check it yourself, and if it is not this home's memory endpoint, remove it and rerun setup:\n    sbx mcp inspect %s\n    sbx mcp rm %s\n    pix setup\n", name, name)
 	default:
 		fmt.Fprintln(d.Out, "pix setup: pix-memory MCP registration: not attempted")
 	}

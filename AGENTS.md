@@ -73,7 +73,7 @@ fallback:
 
 | resource | name |
 | --- | --- |
-| sandbox | `pix-<stack-id>-<basename>-<workspace-digest>` (an explicit `--name` is scoped too) |
+| sandbox | `pix-<stack-id>-<basename>-<workspace-digest>` (an explicit `--name` is scoped too, and is refused rather than truncated when it does not fit) |
 | memory container | `pix-memory-<stack-id>` |
 | memory MCP server | `pix-memory-<stack-id>` |
 | session MCP server | `pix-session-<stack-id>` |
@@ -84,6 +84,13 @@ derived from it; a malformed id is an error there, never a bare
 host-global** (it is the sbx Gateway's, not Pix's): the built-ins simply
 register under namespaced names, so two homes coexist in one registry.
 
+Stack scoping prevents accidental collisions between two homes; it is not a
+confidentiality boundary. The Gateway registration's URL carries that stack's
+memory bearer token (sbx cannot express a secret header yet) and sbx's
+registry is a host-global, same-user store, so another process running as the
+same user can read it. Say that plainly in docs; never imply scoping isolates
+one home's memory from another process under the same login.
+
 Each home allocates its **own loopback memory port** (`memory_port` in that
 home's `config.toml`, written by `pix setup`); every reader takes it from
 there. Cleanup (`pix rm --all`, `pix rm --orphans`, `pix reset`) discovers
@@ -92,8 +99,8 @@ only sandboxes carrying the current stack's id.
 **Credentials are sandbox-scoped.** `pix setup` creates
 `$PIX_HOME/secrets.env` (`op://` references only); every create AND every
 attach re-resolves those refs and writes them with
-`sbx secret set -f --sandbox <name> ...`, so a rotation lands on the next
-run. **Host-global sbx secrets are ignored and never removed
+`sbx secret set -f --sandbox <name> <service>`, the value on stdin and never
+in argv, so a rotation lands on the next run. **Host-global sbx secrets are ignored and never removed
 automatically**. `pix doctor` grades the provider row off this home's refs
 and reports globals separately, as ignored.
 
