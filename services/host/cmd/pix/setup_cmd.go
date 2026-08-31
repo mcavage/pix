@@ -14,6 +14,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/container"
+	"pix/host/envsetup"
 	"pix/host/pixhome"
 	"pix/host/release"
 	nativeenv "pix/host/workflow/env"
@@ -144,9 +145,23 @@ func setupSelectedEnvironment(d *cli.Deps, home pixhome.Paths, name string) erro
 	if terr := runEnvTrust(d, home, name, false, false); terr != nil {
 		return terr
 	}
+	// ONE snapshot from here on. Everything below — the requirements check
+	// AND any `[[setup]]` hook execution — reads this single in-memory
+	// load, and the fingerprint proven accepted just below is the
+	// fingerprint of THIS snapshot, never of a second, independently re-read
+	// copy that could disagree with it.
 	loaded, err := nativeenv.LoadHome(sel, nil, nil)
 	if err != nil {
 		return err
+	}
+	bom, fp, err := bomForLoaded(loaded)
+	if err != nil {
+		return err
+	}
+	if !trustAcceptedForFingerprint(home, sel, fp) {
+		// runEnvTrust accepted SOMETHING and this snapshot is not it: the
+		// environment changed under us between review and use. Fail closed.
+		return fmt.Errorf("pix setup --env %s: the environment changed after its trust review; re-run: pix env trust %s", name, name)
 	}
 	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
@@ -160,6 +175,36 @@ func setupSelectedEnvironment(d *cli.Deps, home pixhome.Paths, name string) erro
 		return fmt.Errorf("pix setup --env %s: %v", name, verr)
 	}
 	fmt.Fprintf(d.Out, "pix setup: environment %q declared requirements check passed.\n", name)
+	return runSetupHooks(d, name, loaded.Root, bom)
+}
+
+// runSetupHooks executes this environment's own `[[setup]]` hooks — the v2
+// replacement for a pack's install/auth hook (docs/reference.md §"Setup
+// hooks"). It runs ONLY here: `pix setup --env NAME`, after the default-No
+// trust review above accepted the exact executables, argv, kinds and
+// required bits it is about to run. `pix run` and `pix doctor` never reach
+// it, and nothing outside this environment's own directory can contribute
+// a hook.
+func runSetupHooks(d *cli.Deps, name, root string, bom nativeenv.BillOfMaterials) error {
+	if len(bom.SetupHooks) == 0 {
+		return nil
+	}
+	res, err := envsetup.Run(root, bom.SetupHooks, envsetup.Options{
+		EnvName:     name,
+		Out:         d.Out,
+		Err:         d.Err,
+		In:          d.In,
+		Interactive: d.Interactive,
+	})
+	for _, o := range res.Outcomes {
+		if o.State == envsetup.StateSkipped {
+			fmt.Fprintf(d.Out, "pix setup: setup hook %s: skipped (%s)\n", o.ID, o.Detail)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(d.Out, "pix setup: environment %q setup hooks: %d checked, all required hooks ready.\n", name, len(res.Outcomes))
 	return nil
 }
 

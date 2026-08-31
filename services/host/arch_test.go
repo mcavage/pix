@@ -186,7 +186,15 @@ var pkgLayer = map[string]int{
 	// only by history went to the domains that own them (model resolution,
 	// endpoint resolution and machine sizing to inference; "is a model key
 	// present" to secret; the launch gate and its warnings to workflow/launch).
-	"health": layerReadiness,
+	// envsetup is the environment `[[setup]]` hook runner: check, apply,
+	// check again, against ONE already-reviewed hook list a caller hands it.
+	// It sits at L2 beside health for the same reason health does — it
+	// PROVES readiness and owns no verb — and it deliberately does not
+	// import workflow/env: it OWNS the resolved-hook type (envsetup.Hook,
+	// aliased there as SetupHookFact) so the workflow that fingerprints a
+	// hook and the runner that executes it cannot disagree about it.
+	"envsetup": layerReadiness,
+	"health":   layerReadiness,
 
 	// L3 — workflow. A user-facing verb's logic. Allowed to compose L1+L2;
 	// may not contain a capability.

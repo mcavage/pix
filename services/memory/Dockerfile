@@ -10,7 +10,7 @@
 # release build can pin an immutable digest:
 #   docker build \
 #     --build-arg BUILDER_IMAGE=dhi.io/golang:1.26-debian13-dev@sha256:<digest> \
-#     --build-arg RUNTIME_IMAGE=dhi.io/static:latest@sha256:<digest> \
+#     --build-arg RUNTIME_IMAGE=dhi.io/static:20250419-debian13@sha256:<digest> \
 #     -f services/memory/Dockerfile services/memory
 # Resolve <digest> against your own DHI-entitled registry session; see
 # scripts/release/resolve-base-digest.sh at the repo root. This repo does not,
@@ -26,7 +26,9 @@
 ###############################################################################
 
 ARG BUILDER_IMAGE=dhi.io/golang:1.26-debian13-dev
-ARG RUNTIME_IMAGE=dhi.io/static:latest
+# DHI static publishes dated distribution tags, not `latest`. Keep this pinned:
+# an unavailable floating tag makes `make install`/`make load` fail before UAT.
+ARG RUNTIME_IMAGE=dhi.io/static:20250419-debian13
 
 FROM ${BUILDER_IMAGE} AS build
 WORKDIR /src

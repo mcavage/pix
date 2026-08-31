@@ -110,6 +110,30 @@ pix doctor                  # registered vs actually working
 See `docs/gworkspace.md` for the Google Workspace case worked through, and
 the `gworkspace` skill for its tools and the untrusted-content rule.
 
+If a tool has to be installed or logged into on your **host** before an
+environment works, declare it as that environment's own setup hook and run
+it explicitly:
+
+```toml
+# ~/.pix/envs/work/pix.toml
+[[setup]]
+id = "gh"
+command = "./setup-gh"
+check_args = ["check"]     # exit 0 = already ready, nothing runs
+apply_args = ["login"]
+required = true
+kind = "auth"              # needs a terminal; install hooks do not
+```
+
+```bash
+pix env trust work        # read and accept the exact argv + executable hash
+pix setup --env work      # the ONLY thing that runs it
+```
+
+This is where a v1 pack's install/auth hook goes. It runs on the host, only
+through that explicit command, only after trust, and never as a side effect
+of `pix run`. See `docs/reference.md` §6 for the full grammar and rules.
+
 ## Common questions
 
 **Is llmman or Ollama required?** No. Without one, memory still works but

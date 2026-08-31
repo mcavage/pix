@@ -18,7 +18,7 @@ What the sandbox protects:
   model responses. GitHub uses the same proxy injection.
 - **The network.** Egress is limited to the allowlist in `pi-kit/spec.yaml`. A
   new external host has to be added there explicitly.
-- **Host data tools.** Google Workspace, Slack, and pack-provided connectors
+- **Host data tools.** Google Workspace, Slack, and environment-declared connectors
   (containerized MCP servers or host daemons) run host-side, reached through the
   sbx gateway. Tokens stay on the host; the sandbox talks to a gateway, not to the
   service.
@@ -44,19 +44,33 @@ Be clear-eyed about these:
 
 ## Host-side MCP servers run with your trust, not the sandbox's
 
-A local-command MCP server (a mail bridge, `gog`, a pack's host wrapper) is a
-process the sbx gateway spawns on your **host**, not inside the sandbox. Pix
-ships none of them: every server is declared by the active pack, which is why
-adoption is gated. Registering one (`sbx mcp add`, `pix mcp add`) is a host-level
-trust decision:
-the command you register runs with whatever access the gateway's spawn
-environment has, resolved credentials included. Review a server's registered
-command before trusting it (`sbx mcp get <name>`), and treat a pack that ships
-a host-executing integration as running code on your machine, not just in the
-sandbox; `pix pack use` gates that with an explicit bill-of-materials
-prompt before adoption. A remote MCP server (notion/atlassian/granola-style,
-added by URL) authenticates through hosted OAuth handled entirely host-side by
-the gateway; the sandbox never sees the token.
+A local-command MCP server (a mail bridge, `gog`) is a process the sbx
+gateway spawns on your **host**, not inside the sandbox. Pix ships none of
+them: every server is declared by the environment you launch, in its own
+`.sbxenv.yaml`, which is why adoption is gated. Registering one (`sbx mcp
+add`) is a host-level trust decision: the command you register runs with
+whatever access the gateway's spawn environment has, resolved credentials
+included. Review a server's registered command before trusting it (`sbx mcp
+get <name>`), and treat an environment that declares a host-executing
+integration as running code on your machine, not just in the sandbox. `pix
+env trust NAME` gates that with an explicit bill-of-materials prompt that
+defaults to No. A remote MCP server (notion/atlassian/granola-style, added
+by URL) authenticates through hosted OAuth handled entirely host-side by the
+gateway; the sandbox never sees the token.
+
+**Environment setup hooks run on your host, on purpose.** An environment's
+`pix.toml` may declare `[[setup]]` hooks — the replacement for the removed
+pack install/auth hook. They are the only environment-authored code pix
+executes on your machine, and they run **only** when you type `pix setup
+--env NAME`, never during `pix run`, `pix doctor`, or any implicit launch.
+Before that, `pix env trust NAME` shows you each hook's id, kind, the exact
+check and apply argv, and the sha256 of the executable, and the fingerprint
+you accept covers all of it, so a hook whose script or arguments change is
+refused until you review it again. Immediately before running one, pix
+re-hashes the file on disk and refuses on any mismatch. Hooks execute as
+argv with no shell, and pix injects no environment variables or secret
+values into them. Treat a hook you did not write the way you would treat
+`curl | sh`: read the script, then decide.
 
 **Remote content is untrusted content.** Anything a capability reads back
 from the outside world, an email body, a Slack message, a doc, a wiki
@@ -69,12 +83,13 @@ by default.
 
 **Revoking and rotating access.** An OAuth grant (Google Workspace, a remote
 catalog server) is revoked from that provider's own account security page,
-not from pix; re-authorize through the pack's own setup step afterward if you
-need the integration back, then `pix mcp add <name>` again. A 1Password-backed
+not from pix; re-authorize afterward through that environment's own
+`[[setup]]` auth hook (`pix setup --env NAME`) or the server's own login
+flow, then register it again with `sbx mcp add <name>`. A 1Password-backed
 MCP credential (an API token, a keyring password) is rotated in 1Password itself;
 the gateway only resolves an `op://` ref at spawn time, so the new value takes
-effect once you re-register the server (`pix mcp add <name>`), which triggers a
-fresh spawn. `pix secret sync` is the equivalent for the cloud model provider
+effect once you re-register the server (`sbx mcp add <name>`), which triggers a
+fresh spawn. `pix secret set` is the equivalent for the cloud model provider
 keys (Anthropic/OpenAI/Google), not MCP credentials.
 
 ## Provider-key process exposure

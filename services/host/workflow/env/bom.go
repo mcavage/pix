@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"pix/host/envinfo"
+	"pix/host/envsetup"
 	"pix/host/hosttrust"
 )
 
@@ -105,6 +106,20 @@ type HostServiceItem struct {
 	Probe   string
 	SHA     string
 }
+
+// SetupHookFact is one pix.toml `[[setup]]` entry, resolved to the exact
+// executable `pix setup --env NAME` would run on this host — the v2
+// replacement for a pack's install/auth hook, fingerprinted the way a pack
+// manifest's bin/service entries were: identity, the RESOLVED executable's
+// content hash, both argv lists in order, its kind, and whether a failure
+// is fatal.
+//
+// It is a type ALIAS for envsetup.Hook, not a copy: the value a human
+// accepts in the trust bill is the identical value the runner executes, so
+// no conversion can let the reviewed argv and the executed argv drift
+// apart. envsetup (L2) owns the type and the executable proof;
+// this workflow owns the fingerprint and the render.
+type SetupHookFact = envsetup.Hook
 
 // CredentialTarget is one credential handed to one destination: a secret's
 // authored reference (an `op://...` string — never a resolved value) or
@@ -208,6 +223,7 @@ type InferenceFact struct {
 type BillOfMaterials struct {
 	HostCommands      []HostCommand
 	HostServices      []HostServiceItem
+	SetupHooks        []SetupHookFact
 	CredentialTargets []CredentialTarget
 	EffectiveMounts   EffectiveMounts
 	Secrets           []SecretFact
@@ -234,7 +250,7 @@ type BillOfMaterials struct {
 // alongside host execution, credential disclosure, and model-traffic
 // routing.
 func (b BillOfMaterials) Tier1() bool {
-	return len(b.HostCommands) > 0 || len(b.HostServices) > 0 || len(b.CredentialTargets) > 0 || len(b.NoVerifyRegistries()) > 0 || len(b.EffectiveMounts) > 0
+	return len(b.HostCommands) > 0 || len(b.HostServices) > 0 || len(b.SetupHooks) > 0 || len(b.CredentialTargets) > 0 || len(b.NoVerifyRegistries()) > 0 || len(b.EffectiveMounts) > 0
 }
 
 // NoVerifyRegistries returns the subset of Registries with NoVerify set —
@@ -297,6 +313,9 @@ func ComputeBoM(env *Environment, effective EffectiveMounts, lookPath func(strin
 	}
 	if env.Sidecar != nil {
 		if err := computeHostServices(env.Root, env.Sidecar, &b, lookPath); err != nil {
+			return BillOfMaterials{}, err
+		}
+		if err := computeSetupHooks(env.Root, env.Sidecar, &b); err != nil {
 			return BillOfMaterials{}, err
 		}
 		computeHostMCP(env.Sidecar, &b)
@@ -440,6 +459,36 @@ func computeHostServices(root string, s *envinfo.Sidecar, b *BillOfMaterials, lo
 	return nil
 }
 
+// computeSetupHooks resolves and content-hashes every `[[setup]]` entry.
+// The command is resolved WITHOUT a PATH lookup on purpose — envinfo's
+// parse already refused a bare name, so the only two shapes here are a
+// relative path against the environment root and an absolute path, and
+// neither depends on the calling process's cwd or environment. A hook that
+// cannot be proven to be a regular, executable, non-symlink file with a
+// readable content hash fails the whole bill closed: an unfingerprintable
+// host-exec surface is never silently reviewed as absent.
+func computeSetupHooks(root string, s *envinfo.Sidecar, b *BillOfMaterials) error {
+	for _, h := range s.Setup {
+		resolved := envsetup.Resolve(root, h.Command)
+		sha, err := envsetup.HashSetupExecutable(resolved)
+		if err != nil {
+			return fmt.Errorf("setup hook %q: %w (cannot fingerprint the host-exec surface; fail closed)", h.ID, err)
+		}
+		b.SetupHooks = append(b.SetupHooks, SetupHookFact{
+			ID:        h.ID,
+			Command:   h.Command,
+			Resolved:  resolved,
+			SHA:       sha,
+			CheckArgs: append([]string(nil), h.CheckArgs...),
+			ApplyArgs: append([]string(nil), h.ApplyArgs...),
+			Kind:      h.EffectiveKind(),
+			Required:  h.Required,
+		})
+	}
+	sort.Slice(b.SetupHooks, func(i, j int) bool { return b.SetupHooks[i].ID < b.SetupHooks[j].ID })
+	return nil
+}
+
 func computeHostMCP(s *envinfo.Sidecar, b *BillOfMaterials) {
 	for _, name := range sortedHostMCPKeys(s.Host.MCP) {
 		e := s.Host.MCP[name]
@@ -570,6 +619,7 @@ type fpDoc struct {
 	V                 int                     `json:"v"`
 	HostCommands      []HostCommand           `json:"host_commands,omitempty"`
 	HostServices      []HostServiceItem       `json:"host_services,omitempty"`
+	SetupHooks        []SetupHookFact         `json:"setup_hooks,omitempty"`
 	CredentialTargets []CredentialTarget      `json:"credential_targets,omitempty"`
 	EffectiveMounts   EffectiveMounts         `json:"effective_mounts,omitempty"`
 	Secrets           []SecretFact            `json:"secrets,omitempty"`
@@ -587,16 +637,21 @@ type fpDoc struct {
 // comment promises is both fingerprinted and (where §5.8 names it)
 // rendered. Every list is sorted canonically before hashing so a pure
 // authoring reorder never re-gates; HostCommands/HostServices/Ports/etc.
-// are already produced in a stable (sorted-key or identity) order by
+// V bumped 2 -> 3 when SetupHooks joined the surface: an already-accepted
+// environment is re-gated once, which is the correct outcome for a schema
+// that can now carry host execution it could not express before.
+// HostCommands/HostServices/Ports/etc. are already produced in a stable
+// (sorted-key or identity) order by
 // ComputeBoM, so this function only imposes the ordering ComputeBoM does
 // not already guarantee (none, currently — kept explicit rather than
 // assumed, the same discipline pack's sortedByKey applies at the
 // fingerprint boundary rather than trusting an upstream producer's order).
 func Fingerprint(b BillOfMaterials) (string, error) {
 	doc := fpDoc{
-		V:                 2,
+		V:                 3,
 		HostCommands:      sortedByField(b.HostCommands, func(v HostCommand) string { return v.Name }),
 		HostServices:      sortedByField(b.HostServices, func(v HostServiceItem) string { return v.Name }),
+		SetupHooks:        sortedByField(b.SetupHooks, func(v SetupHookFact) string { return v.ID }),
 		CredentialTargets: sortedByField(b.CredentialTargets, func(v CredentialTarget) string { return v.Source + "\x00" + v.Destination }),
 		EffectiveMounts:   EffectiveMounts(sortedByField([]WorkspaceMount(b.EffectiveMounts), func(v WorkspaceMount) string { return v.Path })),
 		Secrets:           sortedByField(b.Secrets, func(v SecretFact) string { return v.Name }),

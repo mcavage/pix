@@ -439,13 +439,29 @@ func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, ve
 	safe := sys.TerminalSafe
 	fmt.Fprintf(out, "pix env trust %s\n", safe(name))
 	fmt.Fprintln(out, "  environment runs code on your host and hands it credentials:")
-	fmt.Fprintf(out, "  %d host command(s), %d host service(s), %d credential target(s), %d mount(s), %d MCP server(s), %d kit(s), %d inference backend(s)\n\n",
-		len(b.HostCommands), len(b.HostServices), len(b.CredentialTargets), len(b.EffectiveMounts), len(b.MCPServers), len(b.Kits), len(b.Inference))
+	fmt.Fprintf(out, "  %d host command(s), %d host service(s), %d setup hook(s), %d credential target(s), %d mount(s), %d MCP server(s), %d kit(s), %d inference backend(s)\n\n",
+		len(b.HostCommands), len(b.HostServices), len(b.SetupHooks), len(b.CredentialTargets), len(b.EffectiveMounts), len(b.MCPServers), len(b.Kits), len(b.Inference))
 	for _, c := range b.HostCommands {
 		fmt.Fprintf(out, "  runs on this host: %s\n", safe(c.Name))
 	}
 	for _, s := range b.HostServices {
 		fmt.Fprintf(out, "  host service:      %s  port %d\n", safe(s.Name), s.Port)
+	}
+	// Setup hooks render BY DEFAULT, never only under --verbose, and with
+	// their full argv: they are the one thing in this bill that `pix setup
+	// --env NAME` will execute on this host with the human's own stdio
+	// attached, so "3 setup hook(s)" alone is not consent. Required/optional
+	// and install/auth are shown too, because those two bits decide whether
+	// a failure stops the run and whether the hook may talk to the terminal.
+	for _, h := range b.SetupHooks {
+		need := "optional"
+		if h.Required {
+			need = "required"
+		}
+		fmt.Fprintf(out, "  setup hook:        %s (%s, %s) %s\n", safe(h.ID), safe(h.Kind), need, safe(h.Command))
+		fmt.Fprintf(out, "                     check: %s %s\n", safe(h.Command), safe(strings.Join(h.CheckArgs, " ")))
+		fmt.Fprintf(out, "                     apply: %s %s\n", safe(h.Command), safe(strings.Join(h.ApplyArgs, " ")))
+		fmt.Fprintf(out, "                     sha256:%s\n", safe(h.SHA))
 	}
 	for _, t := range b.CredentialTargets {
 		fmt.Fprintf(out, "  credential:        %s -> %s\n", safe(t.Source), safe(t.Destination))

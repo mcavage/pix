@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,7 +31,61 @@ type Sidecar struct {
 	Pi        PiSection         `toml:"pi"`
 	Host      HostSection       `toml:"host"`
 	Inference InferenceSection  `toml:"inference"`
+	Setup     []SetupHook       `toml:"setup"`
 }
+
+// SetupHook is one `[[setup]]` entry: the environment's own, explicitly
+// consented replacement for a v1 pack's authored install/auth hook. It is
+// NOT a plugin system and NOT a registry — a hook exists only inside the
+// environment directory that declares it, runs only under an explicit `pix
+// setup --env NAME` after that environment's trust review accepted it, and
+// is never reached by `pix run`, `pix doctor`, or any implicit launch.
+//
+// The grammar is deliberately narrow, because every field here is host
+// execution a human has to be able to read in one consent screen:
+//
+//	[[setup]]
+//	id = "tool"                 # [A-Za-z0-9._-]+, unique in this file
+//	command = "./setup-tool"    # relative to the environment root, or absolute
+//	check_args = ["check"]      # argv that reports readiness; 0 = ready
+//	apply_args = ["install"]    # argv that makes it ready
+//	required = true             # absent = false = optional (warn, never fail)
+//	kind = "install"            # install | auth; absent = install
+//
+// There is no shell, no interpolation, and no env/value injection: argv is
+// executed directly (os/exec), so a `command` is a program, never a script
+// fragment. A bare command name is refused outright (PATH is ambiguous and
+// unfingerprintable); the executable's own content hash is what the trust
+// fingerprint binds to.
+type SetupHook struct {
+	ID        string   `toml:"id"`
+	Command   string   `toml:"command"`
+	CheckArgs []string `toml:"check_args"`
+	ApplyArgs []string `toml:"apply_args"`
+	Required  bool     `toml:"required"`
+	Kind      string   `toml:"kind"`
+}
+
+// Setup hook kinds. A hook that needs a human at a terminal (a browser
+// login, a device-code prompt) declares kind = "auth" so a non-interactive
+// run refuses it by name instead of hanging on a prompt nobody can answer.
+const (
+	SetupKindInstall = "install"
+	SetupKindAuth    = "auth"
+)
+
+// EffectiveKind is Kind with the documented default applied: an absent kind
+// is "install", never a guessed "auth".
+func (h SetupHook) EffectiveKind() string {
+	if h.Kind == "" {
+		return SetupKindInstall
+	}
+	return h.Kind
+}
+
+// setupIDRE is the whole id grammar: no spaces, no path separators, no
+// shell metacharacters, no empty string.
+var setupIDRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // ModelsSection is the literal model roster main entry, §6.3.
 type ModelsSection struct {
@@ -310,7 +365,102 @@ func ParseSidecar(path string) (*Sidecar, error) {
 		entry.Name = name
 		s.Host.MCP[name] = entry
 	}
+	if err := validateSetupHooks(base, text, s.Setup); err != nil {
+		return nil, err
+	}
 	return &s, nil
+}
+
+// validateSetupHooks enforces the whole `[[setup]]` grammar at parse time,
+// with no filesystem access at all: identity, argv shape, and character
+// safety. Everything that depends on the disk — the command resolving to a
+// REGULAR, executable, non-symlink file whose content can be hashed — is
+// deliberately NOT decided here: that belongs to whatever computes the
+// trust bill of materials (workflow/env.ComputeBoM) and, again, to the
+// re-proof taken immediately before execution. A parse must stay a pure
+// function of the file's bytes so `pix env show` can render a sidecar that
+// names a tool this host has not installed yet.
+//
+// Every refusal is an *Error naming the `setup` key and its line, because
+// the author needs the offending entry, not a generic "invalid pix.toml".
+func validateSetupHooks(base, text string, hooks []SetupHook) error {
+	if len(hooks) == 0 {
+		return nil
+	}
+	line := locateKeyLines(text)["setup"]
+	if line == 0 {
+		line = 1
+	}
+	bad := func(format string, args ...any) error {
+		return &Error{File: base, Line: line, Key: "setup", Reason: fmt.Sprintf(format, args...)}
+	}
+	seen := map[string]bool{}
+	for i, h := range hooks {
+		where := fmt.Sprintf("setup[%d]", i)
+		if !setupIDRE.MatchString(h.ID) {
+			return bad("%s: id %q must match [A-Za-z0-9._-]+", where, h.ID)
+		}
+		if seen[h.ID] {
+			return bad("%s: duplicate id %q; each setup hook needs its own identity", where, h.ID)
+		}
+		seen[h.ID] = true
+		if h.Command == "" {
+			return bad("%s (%s): command is required", where, h.ID)
+		}
+		if hasControlChars(h.Command) {
+			return bad("%s (%s): command contains a control character", where, h.ID)
+		}
+		if !strings.ContainsRune(h.Command, '/') {
+			return bad("%s (%s): command %q must be a path (./tool or /abs/tool); a bare name resolves through PATH, which is ambiguous and cannot be fingerprinted", where, h.ID, h.Command)
+		}
+		if hasDotDotSegment(h.Command) {
+			return bad("%s (%s): command %q must not contain a %q segment", where, h.ID, h.Command, "..")
+		}
+		for _, spec := range []struct {
+			key  string
+			argv []string
+		}{{"check_args", h.CheckArgs}, {"apply_args", h.ApplyArgs}} {
+			if len(spec.argv) == 0 {
+				return bad("%s (%s): %s is required and must name at least one argument", where, h.ID, spec.key)
+			}
+			for _, arg := range spec.argv {
+				if hasControlChars(arg) {
+					return bad("%s (%s): %s contains a control character", where, h.ID, spec.key)
+				}
+			}
+		}
+		switch h.Kind {
+		case "", SetupKindInstall, SetupKindAuth:
+		default:
+			return bad("%s (%s): kind %q must be %q or %q", where, h.ID, h.Kind, SetupKindInstall, SetupKindAuth)
+		}
+	}
+	return nil
+}
+
+// hasControlChars reports whether s carries any C0/C7F control character —
+// a NUL an exec boundary would truncate at, or an ESC/CR a consent screen
+// could be repainted with. Rejected at parse time so neither the renderer
+// nor os/exec ever sees one.
+func hasControlChars(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+// hasDotDotSegment reports whether a command path contains a ".." element.
+// A relative hook command resolves against the environment root; a `..`
+// segment would walk out of the directory the reviewer actually read.
+func hasDotDotSegment(p string) bool {
+	for _, seg := range strings.Split(filepath.ToSlash(p), "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateSkillWorkspaces confirms every [pi].skills path resolves, relative

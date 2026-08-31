@@ -563,8 +563,37 @@ when the selected environment needs direct 1Password resolution.
    local inference backend its `pix.toml` authors — setup never interviews
    for a machine-wide choice, and never writes one;
 7. creates or reconciles `pix-memory`;
-8. runs approved integration setup/authentication; and
+8. runs `--env NAME`'s own `[[setup]]` hooks (the v2 replacement for a pack's
+   install/auth hook, `envsetup`); and
 9. probes the complete result.
+
+**Setup hooks (`envsetup`, L2).** An environment's `pix.toml` may declare
+`[[setup]]` entries: `id`, `command`, `check_args`, `apply_args`, optional
+`required`/`kind` (`install`|`auth`). They are the only environment-authored
+code Pix executes on the host, and the path is narrow by construction:
+
+- Parsing is strict and filesystem-free (`envinfo`): id grammar, argv
+  presence, control characters, `..` segments, and unknown keys are refused
+  at the exact file and line. A bare command name is refused — PATH is
+  ambiguous and unfingerprintable.
+- Resolution and identity are `envsetup`'s: relative against the environment
+  root, absolute allowed only because it is proven the same way — a regular,
+  executable, non-symlink file with a sha256 content hash. `envsetup.Hook`
+  is the type; `workflow/env.SetupHookFact` is a type ALIAS for it, so the
+  value that is fingerprinted and rendered is the value that is executed.
+- The trust bill of materials (§11) carries id, command, content hash, both
+  argv lists, kind, and required; all of them render in the DEFAULT consent
+  screen, and any change re-gates (fingerprint `v3`).
+- Execution happens only under an explicit `pix setup --env NAME`, from ONE
+  environment snapshot whose fingerprint is proven equal to the accepted
+  record, with a re-hash of the executable immediately before exec (TOCTOU).
+  os/exec with argv, no shell, no injected environment. Check first (output
+  captured and bounded); apply only on a nonzero check, stdio inherited;
+  then check again — only that post-check earns a success word. A required
+  hook that stays unready fails setup; an optional one warns honestly. An
+  `auth` hook with no TTY refuses and names the exact command.
+- There is no hook registry, no supervisor, and no plugin API: a hook exists
+  only inside the environment directory that declares it.
 
 ### Doctor
 
@@ -747,6 +776,9 @@ The PR is ready to merge only after one supported host proves:
 12. a task checkout can commit and push from inside its sandbox and guarded
     removal preserves work;
 13. trust changes re-prompt and non-interactive first use fails closed;
+13b. an environment's `[[setup]]` hook converges under `pix setup --env NAME`
+    (check, apply, check), is idempotent on rerun, and never runs during
+    `pix run`;
 14. `pix reset` removes the memory container before renaming `PIX_HOME`; and
 15. `pix help --all` contains only the accepted v2 surface.
 

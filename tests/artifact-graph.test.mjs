@@ -222,3 +222,39 @@ test("install.sh and the Homebrew formula install exactly the pix binary, no pix
 	assert.match(formula, /bin\.install "pix"/);
 	assert.doesNotMatch(formula, /pix-host/);
 });
+
+// ── DHI base tags are DATED, never floating ───────────────────────────────
+// DHI publishes dated distribution tags (`20250419-debian13`), and its
+// static image has no `latest` at all. A floating `:latest` default is not
+// just unpinned, it is UNRESOLVABLE: `make install` / `make load` fail at
+// build time, which is how the host UAT run died before it started. Pin the
+// dated tag; a release still overrides it with an immutable digest via the
+// documented --build-arg path.
+test("no Dockerfile base image defaults to a floating :latest tag", () => {
+	for (const rel of ["images/agent/Dockerfile", "services/memory/Dockerfile"]) {
+		const text = fs.readFileSync(path.join(repoRoot, rel), "utf8");
+		for (const line of text.split("\n")) {
+			const m = /^ARG\s+(\w*IMAGE\w*)=(\S+)/.exec(line.trim());
+			if (!m) continue;
+			assert.doesNotMatch(
+				m[2],
+				/:latest(@|$)/,
+				`${rel}: ${m[1]} defaults to a floating tag (${m[2]}); DHI publishes dated tags and its static image has no :latest`,
+			);
+			assert.match(m[2], /:[^:@\s]+/, `${rel}: ${m[1]} (${m[2]}) must carry an explicit tag, never an implicit :latest`);
+		}
+		assert.doesNotMatch(text, /^FROM\s+\S+:latest/m, `${rel}: a FROM must not pin :latest`);
+	}
+});
+
+test("services/memory/Dockerfile pins the dated DHI static runtime tag", () => {
+	const memoryDockerfile = fs.readFileSync(path.join(repoRoot, "services/memory/Dockerfile"), "utf8");
+	assert.match(
+		memoryDockerfile,
+		/ARG RUNTIME_IMAGE=dhi\.io\/static:20250419-debian13/,
+		"the pix-memory runtime base must stay on the dated DHI static tag this repo verified",
+	);
+	// The digest-override path documented in the header must name the same
+	// dated tag, so a release pin and the default build agree.
+	assert.match(memoryDockerfile, /--build-arg RUNTIME_IMAGE=dhi\.io\/static:20250419-debian13@sha256:/);
+});

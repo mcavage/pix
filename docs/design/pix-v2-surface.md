@@ -277,8 +277,10 @@ It performs only these jobs:
 7. checks requirements declared by the selected environment (`--env NAME`),
    including validating any local inference backend that environment's
    `pix.toml` authors;
-8. runs previously trusted installer or interactive authentication commands
-   needed by selected integrations; and
+8. runs the selected environment's own `[[setup]]` hooks (§5.2) — the
+   previously trusted installer or interactive authentication commands that
+   replace a v1 pack's hook — check first, apply only on a failed check,
+   then check again; and
 9. probes the result before reporting it ready.
 
 There is no setup interview. Setup never asks which cloud provider, llmman, or
@@ -545,6 +547,14 @@ scope = "work"
 [host.mcp.google-workspace]
 env_keys = ["GOG_KEYRING_PASSWORD"]
 probe = ["gog", "auth", "doctor"]
+
+[[setup]]
+id = "gh"
+command = "./setup-gh"
+check_args = ["check"]
+apply_args = ["login"]
+required = true
+kind = "auth"           # install | auth; absent = install
 ```
 
 The sidecar may declare:
@@ -554,7 +564,15 @@ The sidecar may declare:
 - environment-local Pi content paths;
 - memory scope; and
 - credential, health, and host-capability annotations for an MCP server
-  declared in `.sbxenv.yaml`.
+  declared in `.sbxenv.yaml`; and
+- `[[setup]]` hooks: the host install/authentication commands `pix setup
+  --env NAME` may run for this environment, and the only replacement for a
+  v1 pack's authored hook. Each entry is strict (`id`, `command`,
+  `check_args`, `apply_args`, optional `required`/`kind`; unknown keys,
+  bare command names, control characters and `..` segments are refused),
+  is executed as argv with no shell and no injected values, is
+  content-fingerprinted into the trust bill, and never runs during a
+  launch.
 
 Environment content paths must resolve inside read-only or otherwise declared
 workspaces present in the effective environment. Mounting a directory does not
@@ -805,7 +823,15 @@ host-global resource is safe to delete.
 
 Pix v2 has no:
 
-- pack command, `pack.toml`, pack stack, activation ledger, or pack lock;
+- pack command, `pack.toml`, pack stack, activation ledger, or pack lock. A
+  pack's authored install/authentication hook maps to one `[[setup]]` entry
+  in the environment's own `pix.toml` (§3.6): it runs on the host only
+  through an explicit `pix setup --env NAME`, after that environment's
+  default-No trust review accepted its argv and its executable's content
+  hash, and never as a side effect of a launch. That is a per-environment
+  declaration, not a restored plugin system: there is no hook registry
+  outside the environment directory, no supervisor, and no activation
+  state;
 - scored model router, scorecard, policy, intent mapping, or `routing.json`;
 - Pix-owned MCP registration or authentication command;
 - generic config mutation command;
