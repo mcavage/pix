@@ -108,14 +108,15 @@ func TestSchemaRetirement_IsCompleteAndConsistent(t *testing.T) {
 	}
 }
 
-// Both verbs publish the SAME schema version. They emit one shape now, and a
-// consumer that can read `pix doctor --json` can read `pix status --json`.
-func TestSchemaV6_IsPublishedByBothSurfaces(t *testing.T) {
+// `pix doctor --json` is the one surface that publishes this schema now
+// (`pix status` and its own schema-version doc string were unreachable dead
+// code, deleted with the rest of AC-16's residue).
+func TestSchemaV6_IsPublishedByDoctor(t *testing.T) {
 	snap := health.Snapshot{}
 	if got := ReportJSON(snap, "", snap.ExitCode()).SchemaVersion; got != SchemaVersion {
 		t.Errorf("schema_version = %d, want %d", got, SchemaVersion)
 	}
-	if !strings.Contains(Description, "schema_version 6") || !strings.Contains(StatusDescription, "schema_version 6") {
-		t.Error("both --json flags must document the schema version they emit")
+	if !strings.Contains(Description, "schema_version 6") {
+		t.Error("--json must document the schema version it emits")
 	}
 }

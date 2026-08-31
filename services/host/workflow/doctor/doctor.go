@@ -1,11 +1,12 @@
 // Package doctor is `pix doctor`'s diagnosis: every probe, its evidence, and
-// the exact repair command. It once also rendered a second, shorter surface
-// for the `pix status` verb; that verb is not part of the v2 CLI surface
-// (docs/design/pix-v2-surface.md §3) and its dispatchable wrapper was deleted
-// as unreachable. RenderStatus/StatusDescription/RenderStatusConfigError
-// remain here because workflow/doctor's own tests still exercise them
-// directly as the library half of what was a fast/thorough pair; nothing
-// dispatches them as a verb any more.
+// the exact repair command. `pix status` (and the bare-`pix` landing screen
+// it once also served) is not part of the v2 CLI surface
+// (docs/design/pix-v2-surface.md §3) — its dispatchable wrapper, this
+// package's own short-form renderers for it, and the shared render helper
+// underneath them were all unreachable dead code and are deleted (AC-16).
+// UnreadableConfigSnapshot below is the one piece of that former file that
+// survives: `pix doctor` itself renders it when the workspace config will
+// not load.
 //
 // Everything below builds one probe set (probes.go) and renders one Snapshot
 // (health). Exit 1 is reserved for a REQUIRED probe that verified a gap;
@@ -36,6 +37,21 @@ import (
 // its own. A host diagnosed from a bad vantage point (inside the sandbox,
 // where sbx and launchctl do not exist) is not a broken host, and a doctor
 // that exits 1 there teaches everyone to ignore its exit code.
+// UnreadableConfigSnapshot is what a config that would not load looks like as
+// a health answer: one required check that VERIFIED a gap, with the parse
+// error and the file it came from as evidence. Nothing else can be probed
+// with no config, so it is the whole snapshot. There is no Fix command here
+// on purpose: `pix config path` is not a real verb (v2 has no `config`
+// command at all), so the only honest repair pointer is the path already
+// named in Evidence.
+func UnreadableConfigSnapshot(err error) health.Snapshot {
+	return health.Snapshot{Results: []health.Result{{
+		Name: "config", Status: health.StatusAbsent, Required: true,
+		Detail:   "could not be loaded",
+		Evidence: config.Path() + ": " + err.Error(),
+	}}}
+}
+
 func RunDoctor(ctx context.Context, cfg *config.Config, profile string, out io.Writer, o Options, jsonOut, verbose bool) int {
 	if o.Budget == 0 {
 		o.Budget = health.DoctorBudget

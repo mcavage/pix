@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -259,75 +258,28 @@ func TestDoctor_KeylessInferenceIsNotAMissingKey(t *testing.T) {
 	}
 }
 
-func TestStatus_AlwaysExitsZeroAndSendsYouToDoctor(t *testing.T) {
-	bin := buildFixture(t)
-	cfg := &config.Config{}
-	o := Options{Budget: 5 * time.Second, SbxBin: filepath.Join(t.TempDir(), "gone"),
-		KeyStoreBin: bin, KeyStoreArgs: []string{"nokeys"}}
-
-	var b strings.Builder
-	code := RenderStatus(context.Background(), cfg, "default", &b, o, false)
-	if code != health.ExitOK {
-		t.Fatalf("status exit = %d; the landing screen must never fail a shell", code)
+// TestUnreadableConfigSnapshot_IsABlockingRequiredGap pins the surviving
+// caller: `pix doctor` (cmd/pix/doctor_cmd.go) renders this snapshot when
+// workspace config will not load. Exit 1 is correct here (unlike the deleted
+// `pix status`, doctor is allowed to fail a shell on a verified gap), and the
+// evidence must show the parse error — there is no Fix command because
+// `pix config path` is not a real verb.
+func TestUnreadableConfigSnapshot_IsABlockingRequiredGap(t *testing.T) {
+	s := UnreadableConfigSnapshot(errors.New("boom"))
+	if s.ExitCode() != health.ExitNotReady {
+		t.Errorf("exit = %d, want %d", s.ExitCode(), health.ExitNotReady)
 	}
-	out := b.String()
-	if !strings.Contains(out, health.DoctorCommand) {
-		t.Errorf("status must point at doctor:\n%s", out)
+	if len(s.Blocking()) != 1 {
+		t.Errorf("want exactly one blocking result, got %v", s.Blocking())
 	}
-	if !strings.Contains(out, "issues") {
-		t.Errorf("status must count what is outstanding:\n%s", out)
+	if fixes := s.Fixes(); len(fixes) != 0 {
+		t.Errorf("want no fix command (pix config path is not a real verb), got %v", fixes)
 	}
-	for _, fix := range []string{health.SbxInstallFix, health.ModelKeyFix} {
-		if strings.Contains(out, fix) {
-			t.Errorf("status printed the repair %q; that is doctor's job:\n%s", fix, out)
-		}
+	var out strings.Builder
+	health.RenderDoctorWith(&out, s, health.DoctorOpts{})
+	if !strings.Contains(out.String(), "boom") {
+		t.Errorf("doctor must show the load error as evidence:\n%s", out.String())
 	}
-	if n := len(strings.Split(strings.TrimSpace(out), "\n")); n > 7 {
-		t.Errorf("status is the glance, got %d lines:\n%s", n, out)
-	}
-}
-
-// status and doctor may differ in DEPTH, never in FACTS. They ask the same
-// probes, so a gap one names is a gap the other names.
-func TestStatusAndDoctorTellTheSameStory(t *testing.T) {
-	bin := buildFixture(t)
-	cfg := &config.Config{}
-	o := Options{Budget: 5 * time.Second, SbxBin: bin, SbxArgs: []string{"healthy"},
-		KeyStoreBin: bin, KeyStoreArgs: []string{"nokeys"}}
-
-	var statusOut, doctorOut strings.Builder
-	RenderStatus(context.Background(), cfg, "p", &statusOut, o, true)
-	RunDoctor(context.Background(), cfg, "p", &doctorOut, o, true, false)
-
-	var st, dr ReportJSONView
-	if err := json.Unmarshal([]byte(statusOut.String()), &st); err != nil {
-		t.Fatalf("status --json: %v", err)
-	}
-	if err := json.Unmarshal([]byte(doctorOut.String()), &dr); err != nil {
-		t.Fatalf("doctor --json: %v", err)
-	}
-	if st.Exit != dr.Exit || st.Exit != health.ExitNotReady {
-		t.Errorf("status exit field %d, doctor %d; both must publish the verdict %d", st.Exit, dr.Exit, health.ExitNotReady)
-	}
-	if st.Verdict != dr.Verdict || st.Ready != dr.Ready {
-		t.Errorf("verdict/ready disagree: %+v vs %+v", st, dr)
-	}
-	if fmt.Sprint(names(st)) != fmt.Sprint(names(dr)) {
-		t.Errorf("check sets disagree: %v vs %v", names(st), names(dr))
-	}
-	for _, c := range st.Checks {
-		if c.Status != "absent" && c.Status != "denied" && c.Fix != "" {
-			t.Errorf("%s is %s and still carries the fix %q", c.Name, c.Status, c.Fix)
-		}
-	}
-}
-
-func names(v ReportJSONView) []string {
-	var out []string
-	for _, c := range v.Checks {
-		out = append(out, c.Name+"="+c.Status)
-	}
-	return out
 }
 
 func TestReportJSON_SchemaAndFixes(t *testing.T) {

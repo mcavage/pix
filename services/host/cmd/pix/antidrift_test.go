@@ -62,17 +62,14 @@ func TestScanEmDashSource_SelfTest(t *testing.T) {
 // surfaces in the project's direct house style. It intentionally does not make
 // a repo-wide claim about older diagnostics outside this change.
 func TestPrimaryHelpAndStatusAvoidEmDashes(t *testing.T) {
-	// The files by path, not by bare name: status.go moved into
-	// workflow/doctor and this guard silently stopped checking it. Every
-	// hand-written file list in this repo's guards has rotted the same way as
-	// packages were extracted; see TestRendererPurity and
-	// assertOnlyCalledFrom for the same fix.
+	// The files by path, not by bare name: a hand-written file list in this
+	// repo's guards has rotted before as packages were extracted; see
+	// TestRendererPurity and assertOnlyCalledFrom for the same fix.
+	// workflow/doctor/status.go (the `pix status` verb's own short-form
+	// renderers) was deleted outright as unreachable dead code (AC-16), not
+	// merely moved, so it has no replacement entry here.
 	for _, file := range []string{
 		"help.go",
-		filepath.Join("..", "..", "workflow", "doctor", "status.go"),
-		// The words status PRINTS now live in the health renderer; checking
-		// only the verb's file would leave the landing screen unguarded
-		// again, which is the exact rot the comment above describes.
 		filepath.Join("..", "..", "health", "render.go"),
 		// `pix setup` is a first-run, high-traffic surface exactly like the
 		// three above (finding C13): it was never in this list, so its two em

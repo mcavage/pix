@@ -201,8 +201,8 @@ var pkgLayer = map[string]int{
 	// archive format, and not this launcher package.
 	//
 	// workflow/reset is `pix reset`, BACK after U11r cut it: the manual,
-	// evidence-first walk that replaced it (`pix doctor` -> `pix config path` ->
-	// move things aside by hand -> `pix setup`) is the right RECOVERY story but
+	// evidence-first walk that replaced it (`pix doctor` -> open <PIX_HOME>/config.toml
+	// by hand -> move things aside -> `pix setup`) is the right RECOVERY story but
 	// was never a clean-slate story, and "start over" is a thing users ask for
 	// on its own. What U11r was actually right about is preserved in the shape,
 	// not the absence: nothing durable is hard-deleted, and the sandbox half is

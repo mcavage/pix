@@ -6,9 +6,10 @@ import (
 	"pix/host/launcher"
 )
 
-// json.go is ONE schema for both verbs — one parser, and no second chance to
-// disagree about the same host. A consumer reads one shape from either command
-// and gets the same rows.
+// json.go is `pix doctor --json`'s one schema — one parser, no second shape
+// to disagree with. (It was briefly one schema shared with `pix status`;
+// that verb is gone, deleted as unreachable dead code in the Pix v2 cutover,
+// AC-16.)
 //
 // SchemaVersion 6 DROPS the v5 `supervisor` object: `pix-host serve` and its
 // Suture tree are gone (Pix v2 deletion sweep, docs/design/pix-v2-architecture.md
@@ -74,9 +75,7 @@ type ReportJSONView struct {
 	// Fixes are the exact repair commands, de-duplicated, in probe order.
 	// Only a verified gap contributes one.
 	Fixes []string `json:"fixes"`
-	// Exit is the code `pix doctor` returns for this snapshot. `pix status`
-	// publishes the same number while itself exiting 0, so the two surfaces
-	// cannot tell a reader different things.
+	// Exit is the code `pix doctor` returns for this snapshot.
 	Exit      int   `json:"exit"`
 	ElapsedMS int64 `json:"elapsed_ms"`
 }
@@ -95,8 +94,8 @@ type CheckJSON struct {
 }
 
 // ReportJSON renders a snapshot into its serializable form. exit is passed in
-// rather than derived so status can publish doctor's verdict while returning
-// its own (always 0) exit code.
+// rather than derived because the caller (RunDoctor) already computed it once
+// against the same snapshot, and this keeps the two agreeing by construction.
 func ReportJSON(s health.Snapshot, profile string, exit int) ReportJSONView {
 	v := ReportJSONView{
 		SchemaVersion: SchemaVersion,

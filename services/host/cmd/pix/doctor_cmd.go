@@ -77,7 +77,7 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		// Doctor DOES fail here: an unreadable config is a verified gap in something
 		// required. Status renders the same fact and exits 0.
-		health.RenderDoctorWith(d.Out, doctor.ConfigLoadSnapshot(err), health.DoctorOpts{Verbose: c.Verbose})
+		health.RenderDoctorWith(d.Out, doctor.UnreadableConfigSnapshot(err), health.DoctorOpts{Verbose: c.Verbose})
 		return cli.SilentError{Code: health.ExitNotReady}
 	}
 	code := doctor.RunDoctor(context.Background(), cfg, profile, d.Out, doctorOptions(), c.JSON, c.Verbose)
@@ -100,10 +100,10 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 // The `status` verb (and the bare-`pix` landing screen it once also served)
 // is not part of the v2 CLI surface (docs/design/pix-v2-surface.md §3;
 // root.go's own doc comment names it among the removed verbs) — its
-// dispatchable wrapper (statusCmd) was unreachable dead code and is deleted.
-// workflow/doctor's RenderStatus/StatusDescription/RenderStatusConfigError
-// remain: they are still exercised directly by workflow/doctor's own tests
-// as the library half of the fast/thorough pair `pix doctor` implements.
+// dispatchable wrapper (statusCmd) and workflow/doctor's own short-form
+// renderers for it were all unreachable dead code and are deleted (AC-16).
+// doctor.UnreadableConfigSnapshot is the one piece that survives, above,
+// because `pix doctor` itself renders it.
 
 // doctorOptions fills the seams both surfaces share: the host environment and the
 // workspace the MCP attachment answer is about. An unresolvable workspace stays

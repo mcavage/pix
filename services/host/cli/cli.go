@@ -93,7 +93,7 @@ func (d *Deps) warnUnknownConfigKeys() {
 	}
 	fmt.Fprintf(d.Err, "pix: config.toml has %d key(s) this build does nothing with: %s\n",
 		len(unknown), strings.Join(unknown, ", "))
-	fmt.Fprintf(d.Err, "     Check for a typo, or delete them (`pix config path` to find the file).\n")
+	fmt.Fprintf(d.Err, "     Check for a typo, or delete them (the file is %s).\n", config.Path())
 }
 
 // SetConfig injects a config, for tests and for commands that have already

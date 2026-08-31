@@ -242,6 +242,47 @@ func TestDeletionSweep_NoSecondConfigSchemaOrMCPChannel(t *testing.T) {
 	})
 }
 
+// TestDeletionSweep_NoStatusVerbResidue is the PM P2 AC-16 closeout: `pix
+// status` (and the bare-`pix` landing screen it once also served) is not
+// part of the v2 CLI surface, and the unreachable library it left behind
+// (workflow/doctor's RenderStatus/StatusDescription/RenderStatusConfigError,
+// health.RenderStatus underneath them, and their status-only tests) is
+// deleted, not merely hidden. Three patterns are banned:
+//
+//   - `RenderStatusConfigError(` and `StatusDescription` as declarations/uses
+//     (not bare prose mentions — a comment explaining the deletion may still
+//     name the OLD identifier without a trailing call/reference form).
+//   - `ConfigLoadSnapshot` bare: this was status.go's name for the one piece
+//     that survives the sweep (a required config-load-failure Snapshot that
+//     `pix doctor` itself renders); it now lives in doctor.go as
+//     UnreadableConfigSnapshot, and the OLD name must not come back.
+//   - the exact Go string literal `"pix config path"`: that verb does not
+//     exist in v2 (there is no `config` command at all), so nothing may hand
+//     it to a user as a Fix/command value. Backtick prose mentions inside a
+//     comment explaining WHY it does not exist are a different, longer
+//     substring and do not match this exact quoted literal.
+func TestDeletionSweep_NoStatusVerbResidue(t *testing.T) {
+	self, err := filepath.Abs("deletion_sentinel_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bannedExact := []string{"ConfigLoadSnapshot", "StatusDescription"}
+	bannedCallOrLiteral := regexp.MustCompile(`RenderStatusConfigError\(|"pix config path"`)
+	walkGoSource(t, hostRoot(t), func(path, content string) {
+		if abs, _ := filepath.Abs(path); abs == self {
+			return
+		}
+		for _, sym := range bannedExact {
+			if strings.Contains(content, sym) {
+				t.Errorf("%s mentions %q: the removed `pix status` verb's library was deleted outright (AC-16) and must not come back", path, sym)
+			}
+		}
+		if m := bannedCallOrLiteral.FindString(content); m != "" {
+			t.Errorf("%s uses %s: the removed `pix status` verb's library was deleted outright (AC-16) and must not come back", path, m)
+		}
+	})
+}
+
 // TestDeletionSweep_OpRefsResolvesUnderPixHomeOnly is QA F5's closing
 // sentinel: no production file may consult $PIX_CONFIG or any XDG_* variable
 // to locate a Pix-owned file. PIX_HOME is the single root (safety invariant 1).
