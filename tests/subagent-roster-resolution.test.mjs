@@ -138,6 +138,23 @@ test("an agent name absent from BOTH roster.agents and any roster at all inherit
 	assert.doesNotMatch(listing, /designer.*·\s*(zai|google|anthropic|openai)\//);
 });
 
+test("a native cloud parent becomes the runtime model for an otherwise inheriting agent", async () => {
+	const { agentDir } = setup();
+	process.env.PI_TEST_AGENT_DIR = agentDir;
+	const reg = await loadSubagents();
+	const agents = [{ name: "review", model: undefined }];
+	const resolved = reg.mod.inheritActiveParentModel(agents, {
+		provider: "openai",
+		id: "gpt-5.6-sol",
+	});
+	assert.equal(resolved[0].model, "openai/gpt-5.6-sol");
+	const source = fs.readFileSync(
+		new URL("../extensions/subagents.ts", import.meta.url),
+		"utf8",
+	);
+	assert.match(source, /inheritActiveParentModel\(discovered\.agents, ctx\.model\)/);
+});
+
 test("declaring `intent:` in frontmatter has NO effect on the resolved model and is never shown (E3.4 review fix: not merely inert, entirely unparsed/displayless)", async () => {
 	const { agentDir, projectRoot } = setup();
 	writeInference(agentDir, {

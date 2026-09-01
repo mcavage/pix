@@ -212,6 +212,22 @@ export function explicitParentOllamaModel(argv: string[] = process.argv): string
 
 const PARENT_OLLAMA_MODEL = explicitParentOllamaModel();
 
+// A native cloud parent is selected by the running pi session, not present in
+// process.argv. Fill only agents that exhausted explicit model + environment
+// roster resolution, so "inherit parent" is a real --model argument rather
+// than letting a headless child fall through to pi's unrelated default.
+export function inheritActiveParentModel<T extends { model?: string }>(
+	agents: T[],
+	model: { provider?: string; id?: string } | undefined,
+): T[] {
+	const provider = model?.provider?.trim();
+	const id = model?.id?.trim();
+	if (!provider || !id) return agents;
+	const parent = id.startsWith(`${provider}/`) ? id : `${provider}/${id}`;
+	if (!isQualifiedModelId(parent)) return agents;
+	return agents.map((agent) => (agent.model ? agent : { ...agent, model: parent }));
+}
+
 // ─── Agent discovery (pix convention: filename = name) ──────────────────
 type AgentScope = "user" | "project" | "both";
 interface AgentConfig {
@@ -2034,7 +2050,9 @@ export default function (pi: ExtensionAPI) {
 			) {
 				captureUi(ctx); // stable UI ref for the live pin
 				const scope: AgentScope = params.agentScope ?? "user";
-				const { agents, projectDir } = discoverAgents(ctx.cwd, scope);
+				const discovered = discoverAgents(ctx.cwd, scope);
+				const agents = inheritActiveParentModel(discovered.agents, ctx.model);
+				const projectDir = discovered.projectDir;
 
 				// Host-mode guard: refuse to spawn ANY child (single/parallel/chain
 				// alike), explicitly and early. See PI_SUBAGENT_DISABLED comment above.
