@@ -83,20 +83,13 @@ permissions:
       # Ollama. Optional; cloud models work without it.
       - host.docker.internal:11434
       - localhost:11434
-      # Host memory service (the recall extension calls it over JSON-RPC). The store
-      # and its embeddings live on the host; the sandbox only needs this URL. Host-
-      # internal traffic bypasses the proxy MITM (see NO_PROXY in the Dockerfile);
-      # recall is skipped if the service isn't running. Same pattern a pack's
-      # own host-daemon integration uses to reach host services on host.docker.internal.
-      - host.docker.internal:11435
-      - localhost:11435
       # NOTE: :11437 used to be allowlisted here for the monitor ingest
       # listener. The whole monitor subsystem is gone, tap included: nothing
       # in the sandbox POSTs a transcript anywhere, or writes one to disk
       # under any other name, so the hole in the network policy went with it.
       # Nothing in the sandbox needs :11437.
-      # A pack that needs a host service (e.g. a CLI exec-proxy) adds its own
-      # domain to permissions.network.allow from its own synthesized mixin kit: the
+      # An environment that needs another host service adds its own domain through
+      # its reviewed kit: the
       # public kit stays free of company-specific host services. See
       # docs/design/packs.md.
       # Note: local stdio MCP servers (e.g. google-workspace) are NOT here.
