@@ -40,11 +40,12 @@ loopback endpoint. Call `memory_status`, `memory_stats`, and one small
 `memory_recall` instead. A successful zero-count response proves the service is
 reachable and the store is empty.
 
-Report `embed_healthy:false` as keyword-only recall, not automatically as a
-fault. It is expected when the selected environment declares no local embedding
-backend. Call it degraded only when an embedding backend is configured and the
-status says that configured backend failed. In that case point only to
-host-side `pix doctor`.
+`embed_model` is the service's built-in candidate name, not proof that the
+selected environment configured an embedding backend. `embed_healthy:false`
+means recall is keyword-only; by itself it does not make overall harness health
+degraded. Call it a degradation only when independent environment evidence
+proves the user configured or required semantic recall and that backend failed.
+In that case point only to host-side `pix doctor`.
 `capture_mode: explicit` is the normal default, not a failure.
 
 ### A3. MCP servers
