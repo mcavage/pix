@@ -101,9 +101,12 @@ the `subagent` tool with trivial tasks. Report each role, resolved model, and
 ok/slow/fail. Do not claim fixed model tiers: v2 resolves an explicit agent
 model, then the environment's agent mapping, then the selected main model.
 Agents resolving to the same vendor or model as the parent is the documented
-fallback, not degraded. Call routing degraded only when an authored explicit
-agent model or environment `[agents]` mapping fails to resolve. Do not launch
-the whole roster.
+fallback, not degraded. A retired model is always **FAIL**. When there is no
+explicit agent model or environment roster, a child resolving to a different
+model than the parent is also **FAIL**: inheritance broke and Pi selected an
+unrelated fallback. Otherwise call routing degraded only when an authored
+explicit agent model or environment `[agents]` mapping fails to resolve. Do not
+launch the whole roster.
 
 ### A6. Skills + tool routing
 ```bash

@@ -15,6 +15,11 @@ test("healthcheck does not invent native-provider roster degradation", () => {
 	assert.match(skill, /same vendor.*not.*degraded/is);
 });
 
+test("healthcheck rejects unexpected or retired subagent models", () => {
+	assert.match(skill, /retired model.*FAIL/is);
+	assert.match(skill, /no\s+explicit agent model or environment roster.*different.*parent.*FAIL/is);
+});
+
 test("healthcheck uses v2 MCP memory and no removed host-service advice", () => {
 	assert.match(skill, /memory_status.*memory_stats.*memory_recall/s);
 	assert.doesNotMatch(skill, /host\.docker\.internal:11435|make serve|pix serve|active pack|pack-provided/i);
