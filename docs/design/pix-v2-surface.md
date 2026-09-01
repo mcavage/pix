@@ -650,7 +650,7 @@ Selection order is:
 
 1. `pix run --model MODEL`;
 2. selected environment `[models].main`;
-3. the shipped literal default for the first provider this `PIX_HOME` configures.
+3. the shipped literal default in OpenAI, Anthropic, Google order among providers this `PIX_HOME` configures.
 
 With no selected model and no configured provider, Pix refuses rather than
 letting Pi's native fallback select a retired model. The provider default is a

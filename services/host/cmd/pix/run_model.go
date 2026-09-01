@@ -29,7 +29,25 @@ func resolveRunModel(explicit string, sidecar *envinfo.Sidecar, env hostenv.Env)
 	if err != nil {
 		return "", "", err
 	}
-	model, err = inference.DefaultModelForProviders(catalog, providers)
+	// The shipped top-level default remains OpenAI Sol when it is configured.
+	// The rest are deterministic provider fallbacks, not a score or router.
+	configured := make(map[string]bool, len(providers))
+	for _, provider := range providers {
+		configured[provider] = true
+	}
+	ordered := make([]string, 0, len(providers))
+	for _, provider := range []string{"openai", "anthropic", "google"} {
+		if configured[provider] {
+			ordered = append(ordered, provider)
+			delete(configured, provider)
+		}
+	}
+	for _, provider := range providers {
+		if configured[provider] {
+			ordered = append(ordered, provider)
+		}
+	}
+	model, err = inference.DefaultModelForProviders(catalog, ordered)
 	if err != nil || model == "" {
 		return model, "", err
 	}

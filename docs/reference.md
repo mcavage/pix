@@ -175,8 +175,9 @@ Alt+P               # cycle models without leaving the keyboard
 
 There is no model router in v2: nothing scores a model, and nothing chooses
 one for you. Selection order is `pix run --model MODEL`, then the selected
-environment's `pix.toml` `[models].main`, then the shipped literal default for
-the first provider this `PIX_HOME` configures. With no choice and no configured
+environment's `pix.toml` `[models].main`, then the shipped literal default in
+OpenAI, Anthropic, Google order among providers this `PIX_HOME` configures. With
+no choice and no configured
 provider, Pix refuses rather than falling into Pi's stale native default. Agent selection
 order is an explicit model in a custom agent definition, then the
 environment's `[agents].<name>` mapping, then the session's main model, then

@@ -23,6 +23,22 @@ func TestResolveRunModel_ConfiguredAnthropicUsesCurrentCatalogDefault(t *testing
 	}
 }
 
+func TestResolveRunModel_AllCloudProvidersUsesShippedSessionDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	refs := "ANTHROPIC_API_KEY=op://Vault/Anthropic/key\nOPENAI_API_KEY=op://Vault/OpenAI/key\nGEMINI_API_KEY=op://Vault/Google/key\n"
+	if err := os.WriteFile(filepath.Join(home, "secrets.env"), []byte(refs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, _, err := resolveRunModel("", nil, defaultShellEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "openai/gpt-5.6-sol" {
+		t.Fatalf("resolveRunModel with all cloud providers = %q, want shipped session default", model)
+	}
+}
+
 func TestResolveRunModel_NoChoiceAndNoProviderRefusesStalePiFallback(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("PIX_HOME", home)
