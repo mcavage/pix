@@ -350,6 +350,16 @@ test("/remember: blank args show usage and never call the daemon or claim succes
 	}
 });
 
+test("/remember sends only fields accepted by the memory_remember MCP schema", async (t) => {
+	const { server, requests } = makeFakeDaemon(() => ({ id: "abc123", reaffirmed: false }));
+	t.after(() => server.close());
+	const mod = await loadWithEnv({ MEMORY_URL: await listen(server) });
+	const handler = getCommandHandler(mod, "remember");
+	await handler("docker sandboxes are great", fakeCtx([]));
+	assert.equal(requests[0].method, "memory_remember");
+	assert.deepEqual(Object.keys(requests[0].params).sort(), ["content", "profile"]);
+});
+
 test("/remember: a daemon response with an empty id is a visible error, never 'remembered'", async (t) => {
 	const { server } = makeFakeDaemon(() => ({ id: "", reaffirmed: false }));
 	t.after(() => server.close());
@@ -535,12 +545,12 @@ test("buildRecallBlock returns null on a zero-hit response, never an empty heade
 
 // ── typed agent-facing tools (memory_recall/memory_stats, read-only) ───────
 
-test("only the two read-only memory tools are registered; write/delete stay human slash commands", async () => {
+test("the extension registers only its two read helpers; the MCP adapter owns the full memory tool surface", async () => {
 	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
 	const { commands, tools } = capturePi(mod);
 	assert.deepEqual([...tools.keys()].sort(), ["memory_recall", "memory_stats"]);
-	assert.ok(!tools.has("memory_remember"), "memory_remember must not be agent-callable");
-	assert.ok(!tools.has("memory_forget"), "memory_forget must not be agent-callable");
+	assert.ok(!tools.has("memory_remember"), "the extension must not duplicate the Gateway's memory_remember tool");
+	assert.ok(!tools.has("memory_forget"), "the extension must not duplicate the Gateway's memory_forget tool");
 	for (const name of ["recall", "remember", "forget"]) {
 		assert.ok(commands.has(name), `/${name} command still registered`);
 	}
@@ -660,30 +670,27 @@ test("the injected block tells the model it's a relevance-filtered subset and to
 	assert.match(block, /Use memory_recall to inspect the store/);
 });
 
-// ── descriptions encode read-only + capability semantics ───────────────────
+// ── descriptions distinguish helpers from the full MCP surface ─────────────
 //
-// This tool surface (memory_recall/memory_stats) is read-only by design, but
-// that is a UX/safety posture on the AGENT'S TYPED TOOLS, not a security
-// boundary on the daemon: the host memory service is unauthenticated and
-// reachable, so arbitrary sandbox code could still POST to it directly. The
-// descriptions must say the tool surface is read-only without claiming the
-// agent/sandbox is incapable of mutating the store.
+// This extension registers two deterministic read helpers. The sbx Gateway's
+// MCP adapter separately exposes the service's annotated mutating tools, so the
+// descriptions must never teach the model that memory as a whole is read-only.
 
-test("memory tool descriptions state this tool surface is read-only, without over-claiming the agent/sandbox cannot mutate memory", async () => {
+test("memory helper descriptions distinguish themselves from the Gateway's mutating MCP tools", async () => {
 	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
 	const { tools } = capturePi(mod);
 	for (const name of ["memory_recall", "memory_stats"]) {
 		const d = tools.get(name).description;
 		assert.match(d, /read-only/i, `${name} description`);
-		assert.match(d, /cannot store or delete/i, `${name} description`);
-		assert.match(d, /human-driven slash commands/i, `${name} description`);
-		assert.match(d, /not a security control/i, `${name} description must caveat this is UX posture, not a security boundary`);
+		assert.match(d, /helper tool is read-only/i, `${name} description`);
+		assert.match(d, /memory_remember/i, `${name} description must name the Gateway's mutating surface`);
+		assert.match(d, /same MCP service/i, `${name} description must connect slash commands to MCP`);
 		assert.doesNotMatch(
 			d,
 			/cannot autonomously mutate/i,
 			`${name} description must not claim the agent/sandbox cannot mutate memory (the daemon is unauthenticated and reachable)`,
 		);
-		assert.doesNotMatch(d, /memory_remember/, `${name} description must not reference memory_remember`);
+		assert.match(d, /do not claim the memory service or agent tool surface is read-only/i, `${name} must reject the stale read-only claim`);
 	}
 });
 

@@ -1,5 +1,5 @@
 {
-  "_note": "Curated shipped model catalog: LITERAL model facts only (identity, provider, label, limits, local-vs-cloud, whether the row is still offered). Canonical identity/capabilities are seeded from models.dev and reviewed at release. It carries NO price, score, accuracy, policy or ranking of any kind -- selection is the user's, not a resolver's -- and no local-hardware facts: RAM/download/KV live once, in inference/hardware.go's rung table (E4.3). This file never claims a model is callable: runtime availability comes only from backend bindings and probes. Packs map these canonical identities to private upstream model IDs without exposing those IDs here.",
+  "_note": "Curated shipped model catalog: LITERAL model facts only (identity, provider, label, limits, local-vs-cloud, whether the row is still offered, and one explicit provider default). Canonical identity/capabilities are seeded from models.dev and reviewed at release. It carries NO price, score, accuracy or ranking: an explicit CLI/environment model always wins, and the provider default is used only to avoid Pi's stale native fallback when that provider is configured. Local hardware facts live once in inference/hardware.go's rung table. Runtime availability still comes only from backend bindings and probes.",
   "models": [
     {
       "id": "anthropic/claude-opus-5",
@@ -10,6 +10,7 @@
       "max_output_tokens": 128000,
       "local": false,
       "available": true,
+      "default": true,
       "adaptive_thinking": true,
       "notes": "Anthropic flagship (shipped 2026-07-24)."
     },
@@ -68,6 +69,7 @@
       "max_output_tokens": 128000,
       "local": false,
       "available": true,
+      "default": true,
       "notes": "OpenAI flagship."
     },
     {
@@ -90,6 +92,7 @@
       "max_output_tokens": 65536,
       "local": false,
       "available": true,
+      "default": true,
       "notes": "Google frontier tier, 1M+ context."
     },
     {

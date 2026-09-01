@@ -176,22 +176,16 @@ export async function buildRecallBlock(
 // memory service through the sbx MCP Gateway (no shelling out), auto-recall
 // only injects a small filtered subset each turn (this tool can return up to
 // 100 rows, not the whole store), every memory is durable with no automatic
-// expiry (see docs/memory.md's Legacy data section for what that replaced),
-// and writes/deletes are human-driven slash commands (`/remember`, `/forget`).
-//
-// IMPORTANT, this is a UX/safety posture, not a security boundary: the
-// Gateway-fronted memory service enforces no per-caller identity beyond the
-// sandbox's own Gateway credential (see docs/memory.md's Trust model), so it
-// does NOT claim the agent or sandbox code is incapable of writing to memory,
-// arbitrary sandbox code could still call the same MCP tools directly. It
-// only says this specific tool surface (the two tools below) is read-only by
-// design.
+// expiry (see docs/memory.md's Legacy data section for what that replaced).
+// These two deterministic helper tools are read-only, while the same Gateway
+// also exposes the service's annotated mutating and administrative MCP tools.
+// `/remember` and `/forget` call that same MCP surface.
 const MEMORY_TOOL_SEMANTICS =
 	"Reaches the memory service through the sbx MCP Gateway, never a direct host connection, never shell out to `pix` or `curl`. " +
 	"Only a small relevance-filtered subset of memory is silently injected into context each turn; this tool can return up to 100 rows visible to the active profile, not the whole store. " +
 	"Every memory is durable, with no automatic expiry. " +
-	"This tool surface is read-only: it can inspect memory but cannot store or delete it. Writing (`/remember`) and deleting (`/forget`) are human-driven slash commands, not agent tools, " +
-	"that's a UX/safety design choice on this tool surface, not a security control.";
+	"This helper tool is read-only, but the same Gateway may expose annotated memory_remember, memory_forget, memory_observe, memory_snapshot, and memory_restore MCP tools; do not claim the memory service or agent tool surface is read-only. " +
+	"The `/remember` and `/forget` slash commands call that same MCP service.";
 
 // Always-visible honesty guardrail, surfaced in promptGuidelines (not just the
 // description) so it stays in the model's face on every turn a memory tool is in
@@ -362,7 +356,7 @@ export default function (pi: any) {
 			// /recall above, whose try/catch this mirrors). The silent best-effort
 			// behavior stays on the before_agent_start hook only.
 			try {
-				const r = await rpc(MEMORY_TOOL.remember, { content, source: "user", profile: ACTIVE_PROFILE });
+				const r = await rpc(MEMORY_TOOL.remember, { content, profile: ACTIVE_PROFILE });
 				// The daemon can respond 200 with an empty id (e.g. content collapsed to
 				// "" after its own trim, or a budget/dedupe path returned nothing to
 				// store) — that is NOT success and must not be reported as "remembered"

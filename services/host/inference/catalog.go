@@ -48,6 +48,7 @@ type Model struct {
 	MaxOutputTokens  int      `json:"max_output_tokens"`           // maximum generated tokens per response
 	Local            bool     `json:"local"`                       // runs on this machine (Ollama/DMR)
 	Available        bool     `json:"available"`                   // still offered by this catalog
+	Default          bool     `json:"default,omitempty"`           // literal provider default when the user selected no model
 	AdaptiveThinking bool     `json:"adaptive_thinking,omitempty"` // Anthropic adaptive-thinking request shape
 	Aliases          []string `json:"aliases,omitempty"`
 	Notes            string   `json:"notes,omitempty"`
@@ -74,6 +75,23 @@ func (c *Catalog) Get(id string) (Model, bool) {
 		}
 	}
 	return Model{}, false
+}
+
+// DefaultModelForProviders returns the literal shipped default for the first
+// configured provider in caller order. It never scores models or chooses a
+// provider the caller did not configure.
+func DefaultModelForProviders(c *Catalog, providers []string) (string, error) {
+	if c == nil {
+		return "", nil
+	}
+	for _, provider := range providers {
+		for _, m := range c.Models {
+			if m.Provider == provider && m.Default && m.Available && !m.Local {
+				return m.ID, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // Binding is the availability boundary between the shipped catalog and a
@@ -128,6 +146,7 @@ func ValidateCatalog(c *Catalog) error {
 		return fmt.Errorf("model catalog is empty")
 	}
 	ids := map[string]bool{}
+	defaults := map[string]string{}
 	for _, m := range c.Models {
 		if !IsQualifiedID(m.ID) {
 			return fmt.Errorf("model id %q is not fully qualified (provider/id)", m.ID)
@@ -144,6 +163,15 @@ func ValidateCatalog(c *Catalog) error {
 		}
 		if m.MaxOutputTokens > m.ContextWindow {
 			return fmt.Errorf("model %q max_output_tokens exceeds context_window", m.ID)
+		}
+		if m.Default {
+			if !m.Available || m.Local {
+				return fmt.Errorf("default model %q must be an available cloud model", m.ID)
+			}
+			if prior := defaults[m.Provider]; prior != "" {
+				return fmt.Errorf("provider %q has two default models: %s and %s", m.Provider, prior, m.ID)
+			}
+			defaults[m.Provider] = m.ID
 		}
 	}
 	return nil

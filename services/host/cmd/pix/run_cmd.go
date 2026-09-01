@@ -361,15 +361,6 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		return terr
 	}
 
-	// §6.3's model precedence, in one place: --model > the selected
-	// environment's [models].main > pi's own default.
-	if model, source := launch.SelectSessionModel(o.Model, selection.Sidecar); model != "" {
-		o.Model = model
-		if source == "[models].main" {
-			fmt.Fprintf(d.Err, "pix: environment %q -> model %s\n", selection.Name, model)
-		}
-	}
-
 	// A pi session needs at least one provider key, and the evidence is THIS
 	// PIX_HOME's configured op:// refs — never `sbx secret ls`, whose global
 	// entries belong to the host rather than to this stack. Offer to write a
@@ -386,6 +377,21 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			fmt.Fprint(d.Err, secret.ModelKeyMissingMessage(env))
 			return cli.SilentError{Code: 1}
 		}
+	}
+
+	// Explicit and environment model choices win. If neither exists, use the
+	// current shipped default for the first provider this PIX_HOME configures,
+	// never Pi's stale native fallback and never an unconfigured provider.
+	model, modelSource, merr := resolveRunModel(o.Model, selection.Sidecar, defaultShellEnv())
+	if merr != nil {
+		return runFail(d, 1, "model catalog: %v", merr)
+	}
+	o.Model = model
+	switch modelSource {
+	case "[models].main":
+		fmt.Fprintf(d.Err, "pix: environment %q -> model %s\n", selection.Name, model)
+	case "configured provider default":
+		fmt.Fprintf(d.Err, "pix: no model selected; using %s\n", model)
 	}
 
 	// There is no onboarding-proposal reconcile step here any more: an

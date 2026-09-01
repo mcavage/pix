@@ -650,7 +650,11 @@ Selection order is:
 
 1. `pix run --model MODEL`;
 2. selected environment `[models].main`;
-3. Pi's default.
+3. the shipped literal default for the first provider this `PIX_HOME` configures.
+
+With no selected model and no configured provider, Pix refuses rather than
+letting Pi's native fallback select a retired model. The provider default is a
+catalog fact, not a score or cross-provider router.
 
 Agent selection order is:
 

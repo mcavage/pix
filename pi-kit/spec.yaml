@@ -208,13 +208,17 @@ agentInstructions:
     tell the user it must happen on their host. Use pip `--user`, language-local
     package managers, or static binaries in-VM.
 
-    ## Memory (automatic recall, explicit capture)
-    A host memory service silently recalls relevant facts before every turn;
-    you never call it. Capture is explicit by default: stored only via
-    /remember, unless the user opts into `experimental-auto` (quiet capture of
-    durable facts/corrections, capped daily). Steer it with /recall, /remember,
-    /forget. Empty recall means the user needs `make serve` (or `pix serve`)
-    running on the host.
+    ## Memory (MCP through the sbx Gateway)
+    `pix-memory` is a stack-scoped MCP service managed by `pix setup` and reached
+    only through the sbx MCP Gateway. Automatic recall calls `memory_recall`
+    before a turn and injects a small relevant subset. `/recall`, `/remember`,
+    and `/forget` call the same MCP service explicitly. The full MCP surface also
+    includes `memory_remember`, `memory_forget`, `memory_observe`, `memory_stats`,
+    `memory_status`, `memory_snapshot`, and `memory_restore`; use their annotations
+    and do not claim memory is read-only. Capture is explicit by default unless
+    the environment enables `experimental-auto`. A successful zero-count
+    `memory_stats` call means the service is reachable and the store is empty,
+    not that a removed `pix serve` command needs to run.
 
     ## Multi-model
     Four providers in the cycle: Claude, GPT, and Gemini (cloud, keys injected by the
@@ -231,7 +235,7 @@ agentInstructions:
     each child spawned with an inactivity + wall-clock watchdog so a stuck one is
     killed and reported, never left hanging. Call it with {agent, task} (single),
     {tasks:[...]} (parallel), or {chain:[...]} with a {previous} placeholder:
-    agent = a preset in ~/.pi/agent/agents (see `pix agent ls`):
+    agent = a preset mounted in ~/.pi/agent/agents:
       - fanout (cheap/read-only): spawn many for breadth.
       - deep: one genuinely hard sub-problem.
       - review (cross-vendor): adversarial second opinion.
@@ -264,8 +268,7 @@ agentInstructions:
     `gh` is installed; GitHub auth is routed through sbx credentials. Google
     Workspace runs host-side as the `gog` MCP server (spawned by the MCP gateway,
     authed with the host's own gog credentials, read-only by default). The VM
-    never talks to Google directly. Run the host services with `make serve`.
-    Use sbx Cloud MCP Gateway profiles for catalog servers (notion, atlassian,
+    never talks to Google directly. Use sbx Cloud MCP Gateway profiles for catalog servers (notion, atlassian,
     granola, …).
 
     ## Posture

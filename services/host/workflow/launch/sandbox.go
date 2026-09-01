@@ -160,7 +160,7 @@ func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 		// answer to whether the word was right.
 		fmt.Fprintln(out, "A held box has a live `pix` session on this host; it is removed when the last one exits.")
 	}
-	fmt.Fprintln(out, "Remove one:  pix rm <name>   (or `sbx rm -f <name>` for non-pix boxes)")
+	fmt.Fprintln(out, "Remove this stack:  pix rm <scoped-name>\nLegacy/foreign names: use their owning PIX_HOME, or explicitly `sbx rm -f <name>`")
 	return nil
 }
 

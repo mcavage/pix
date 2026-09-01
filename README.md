@@ -118,6 +118,8 @@ failure otherwise, `2` on a usage error.
 Usually yes, for a direct key. One key for any one of Anthropic, OpenAI, or
 Google is enough; you do not need all three. Interactive `pix setup` can offer
 to record a 1Password reference; `pix secret check` proves it with a live read.
+When neither `--model` nor `[models].main` is set, Pix uses the shipped current
+default for the first configured provider instead of Pi's native fallback.
 If your environment's backends carry their own auth (a credentialed gateway,
 for example), doctor reports no provider key needed and means it.
 

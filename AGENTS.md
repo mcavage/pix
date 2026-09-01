@@ -220,7 +220,8 @@ you touch the surface it names.
     deleted, not merely hidden.** No code path reaches any of them; there is
     no `pack.toml`, no `routing.json`, no pix-owned top-level `memory` command,
     and no unsandboxed host-agent mode. A model is chosen by name
-    (`--model`, then the environment's `[models].main`, then Pi's default);
+    (`--model`, then `[models].main`, then the shipped default for the first
+    configured provider; no choice refuses rather than falling into Pi's stale native default);
     nothing scores or auto-selects one.
 11. **Memory is operated through MCP tools, never a private protocol.**
     `memory_recall`/`memory_remember`/`memory_forget`/`memory_observe`/
@@ -255,7 +256,9 @@ you touch the surface it names.
 ## Models and subagents
 
 Selection is by name, never by score: `--model`, else the environment's
-`[models].main`, else Pi's default. An agent preset's model comes from its
+`[models].main`, else the catalog's literal default for the first provider this
+`PIX_HOME` configures; no choice refuses rather than falling into Pi's stale
+native default. An agent preset's model comes from its
 own frontmatter, else the environment's `[agents].<name>` mapping, else the
 parent's model. There is no model catalog administration command and no
 agent administration command; edit `agents/*.md` or `pix.toml` by hand.

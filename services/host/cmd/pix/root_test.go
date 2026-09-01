@@ -233,13 +233,10 @@ func TestDispatch_BareInteractive_StillLaunches(t *testing.T) {
 
 // TestDispatch_BareInteractive_NeverTouchesARealSandbox is the side-effect
 // proof bareLaunchDeps exists for: with sbx forced absent, `pix DIR` must fail
-// CLOSED — sandbox state it cannot determine is never treated as "absent"
-// (safety invariant 6's sibling for sbx itself) — rather than reaching the
-// real `exec.Command("sbx", ...)` spawn buried at the bottom of runLaunch. The
-// exact refusal text is PlanSandboxLaunch's own "could not determine whether
-// sandbox ... exists", which only prints if run stopped BEFORE that exec, so
-// asserting it is evidence no subprocess was spawned, not just an absence of
-// a crash.
+// CLOSED before reaching the real `exec.Command("sbx", ...)` spawn buried at
+// the bottom of runLaunch. With no provider refs, the model-selection gate now
+// refuses first rather than letting Pi pick its retired native default; either
+// way the forbidden exec markers below prove no subprocess was spawned.
 func TestDispatch_BareInteractive_NeverTouchesARealSandbox(t *testing.T) {
 	dir := t.TempDir()
 	d, _, errb := bareLaunchDeps(t)
@@ -250,8 +247,8 @@ func TestDispatch_BareInteractive_NeverTouchesARealSandbox(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("a launch with sbx forced absent must not report success, stderr = %q", errb.String())
 	}
-	if !strings.Contains(errb.String(), "could not determine whether sandbox") {
-		t.Errorf("expected the fail-closed sbx-unknown refusal (proof the real `sbx` exec was never reached), got stderr = %q", errb.String())
+	if !strings.Contains(errb.String(), "no model selected") {
+		t.Errorf("expected the fail-closed model-selection refusal, got stderr = %q", errb.String())
 	}
 	for _, leak := range []string{"attaching to running sandbox", "starting + attaching", "exec sbx:"} {
 		if strings.Contains(errb.String(), leak) {
