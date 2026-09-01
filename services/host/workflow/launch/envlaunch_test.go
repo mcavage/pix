@@ -71,6 +71,18 @@ func TestRenderEffectiveEnvironment_PersistsExactBytes(t *testing.T) {
 	}
 }
 
+func TestRenderEffectiveEnvironment_NoSelectedEnvironmentStillNamesPixAgent(t *testing.T) {
+	stateHome(t)
+	in := testInput("pix-repo-abc123")
+	eff, err := RenderEffectiveEnvironment(in, nil)
+	if err != nil {
+		t.Fatalf("RenderEffectiveEnvironment: %v", err)
+	}
+	if !strings.Contains(string(eff.Bytes), "agent: pix\n") {
+		t.Fatalf("built-in default environment omits sbx's required agent field:\n%s", eff.Bytes)
+	}
+}
+
 // The effective document names the ACTUAL pix-* sandbox name, attributed
 // BEFORE composition: two repositories under ONE environment get two
 // distinct names and two distinct files, never a collision.

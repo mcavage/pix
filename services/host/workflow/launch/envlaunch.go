@@ -178,7 +178,7 @@ const EffectiveEnvFileName = "effective.sbxenv.yaml"
 // own — it exists so `none` renders a real document instead of erroring
 // with envinfo.ErrNoDocument.
 func builtinDefaultsDocument() *envinfo.Document {
-	return &envinfo.Document{SchemaVersion: envinfo.SchemaVersionV1}
+	return &envinfo.Document{SchemaVersion: envinfo.SchemaVersionV1, Agent: "pix"}
 }
 
 // ComposeRuntimeFacts is the LAUNCH's single RuntimeFacts producer.
