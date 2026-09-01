@@ -360,19 +360,15 @@ Pix keeps all user-owned files under one root:
   .git/
   .gitignore
   README.md
-  AGENTS.md
-  skills/
-  agents/
-  output-styles/
-  envs/
-  pi/
-    settings.json
-    keybindings.json
-    themes/
   config.toml
   secrets.env
+  envs/
+  context/
+    AGENTS.md
+    skills/
+    output-styles/
   runtime/
-  state/
+  .state/
 ```
 
 `PIX_HOME` replaces `~/.pix` when set. The operating-system package manager
@@ -392,11 +388,12 @@ The generated ignore rules exclude machine and runtime material:
 /config.toml
 /secrets.env
 /runtime/
-/state/
+/.state/
 ```
 
-The shareable working tree is therefore the obvious part of `~/.pix`: global
-instructions, skills, agents, output styles, Pi UX settings, and environments.
+The shareable working tree is therefore the obvious part of `~/.pix`:
+`context/` and `envs/`. Shipped agents and Pi UX files live under the
+versioned, ignored `runtime/` tree rather than appearing as duplicate roots.
 `secrets.env` is created with mode `0600`. Pix never runs `git add` on the user's
 behalf.
 
@@ -408,10 +405,9 @@ environments cannot own:
 - the default environment name, written by `pix env default NAME` (and once,
   atomically, by `pix setup` itself the moment it scaffolds a fresh host's
   first environment — see §3.6);
-- the allocated pix-memory loopback port (`memory_port`), written once by
-  `pix setup` on first run — a per-`PIX_HOME` allocation, never a shared
-  constant, so two independent `PIX_HOME` installs on one host never collide;
-- the pinned Pix image set and kit version, written by install or upgrade.
+Release identity and the allocated pix-memory loopback port live under
+`.state/`; neither is user configuration. The port remains a per-`PIX_HOME`
+allocation, so independent stacks do not collide.
 
 Local inference is never a machine-wide `config.toml` field: it is authored
 per environment in that environment's own `pix.toml` (§7), so two
@@ -420,8 +416,9 @@ either one touching the other.
 
 Pix v2 has no generic config mutation command. Each field has one named writer.
 
-Global Pi settings, keybindings, and themes apply to every environment. An
-environment cannot replace them.
+Shipped Pi settings, keybindings, themes, skills, and agents apply to every
+environment from `runtime/<version>/`. Personal additions live under
+`context/`.
 
 `~/.pix/secrets.env` contains 1Password references only. Pix never writes a
 resolved secret value to disk.
@@ -446,23 +443,14 @@ sharing workflow from inside Pi.
 
 ### 4.3 User-owned content and sharing
 
-The root-level `AGENTS.md`, `skills/`, `agents/`, and `output-styles/` directories
-are the user's global writable content. Pix mounts them into every sandbox and
-creates them even when empty.
+`context/` is the user's one global writable content layer. Pix mounts its
+root into every sandbox and loads `context/skills/`; `context/AGENTS.md` and
+`context/output-styles/` live beside those skills. There are no duplicate
+root-level `skills/`, `agents/`, `output-styles/`, or `pi/` trees.
 
-Content precedence is:
-
-1. environment-local content;
-2. user-owned content at `~/.pix`;
-3. shipped runtime content.
-
-A higher layer shadows the same named skill or agent in a lower layer. `pix env
-NAME` reports the winning source for every resolved name.
-
-To hack a shipped skill, the `pix` skill copies it from the versioned runtime
-into `~/.pix/skills/<name>`, where it becomes the live winning copy. The user
-edits and tests it with `/reload`, then commits and publishes `~/.pix` with
-ordinary Git tools.
+Content precedence is environment-local content, personal `context/`, then
+shipped runtime content. To customize a shipped skill, copy it into
+`context/skills/<name>`, edit it there, and reload the session.
 
 Sharing is a product goal, but this proposal does not add `pix share` yet. The
 first version is the Git repository the installer already initialized plus the
@@ -480,7 +468,7 @@ publication.
 
 Trust acceptance, sandbox instance records, session trees, leases, generated
 effective sbx environments, task checkouts, and memory data live under
-`~/.pix/state`. They remain outside every environment directory.
+`~/.pix/.state`. They remain outside every environment directory.
 
 Deleting runtime state may require re-review or orphan recovery, but it never
 deletes an environment source.
@@ -708,7 +696,7 @@ Memory is a regular, independently versioned `pix-memory` OCI service using
 Streamable HTTP, not a stdio subprocess. `pix setup` starts one container named
 and ported for THIS `PIX_HOME`'s own stack (`pix-memory-<stack-id>`, §10)
 with Docker's `unless-stopped` restart policy, a loopback-published endpoint,
-and only `~/.pix/state/memory` mounted writable. The Gateway registers that
+and only `~/.pix/.state/memory` mounted writable. The Gateway registers that
 endpoint as a remote MCP server under the same stack-scoped name. This gives
 all local sandboxes one durable, multi-client store without launching one
 memory process per sandbox or sharing a live SQLite file among competing
@@ -797,7 +785,7 @@ Host trust covers:
 - writable host mounts and network expansion; and
 - host UI or device grants.
 
-Approval is stored under `~/.pix/state`, never inside the environment being approved.
+Approval is stored under `~/.pix/.state`, never inside the environment being approved.
 Pix recomputes the fingerprint before every use. A changed fingerprint refuses
 launch and names `pix env trust NAME`.
 

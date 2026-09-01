@@ -712,7 +712,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		// before the first fingerprint and before anything is created. A
 		// fresh host's first interpolated create is an ordinary create, not a
 		// reset-invalidated one.
-		resolver, kerr := launch.CreateHMACResolver(configDirOrEmpty(), nil)
+		resolver, kerr := launch.CreateHMACResolver(trustDirOrEmpty(), nil)
 		if kerr != nil {
 			return runFail(d, 1, "environment: %v", kerr)
 		}

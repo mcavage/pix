@@ -178,7 +178,7 @@ func ResetHome(d HomeDeps) (HomeResult, error) {
 		return res, fmt.Errorf("pix reset: probe %s absence: %w", name, err)
 	}
 	if !absent {
-		return res, fmt.Errorf("pix reset: %s still exists after stop/remove; refusing to rename PIX_HOME while it might still be writing to state/memory", name)
+		return res, fmt.Errorf("pix reset: %s still exists after stop/remove; refusing to rename PIX_HOME while it might still be writing to .state/memory", name)
 	}
 	res.ContainerRemoved = true
 

@@ -162,7 +162,7 @@ type Node struct {
 // Root reports whether n is a tree's root node (no parent).
 func (n Node) Root() bool { return strings.TrimSpace(n.Parent) == "" }
 
-// Store is the session record store, rooted at PIX_HOME/state/sessions.
+// Store is the session record store, rooted at PIX_HOME/.state/sessions.
 type Store struct{ Root string }
 
 // NewID returns a random, stable, filesystem-safe identifier. Tree and node

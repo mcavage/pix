@@ -10,7 +10,7 @@ name:    pix-memory-<stack-id>
 image:   the immutable digest from the release manifest
 restart: unless-stopped
 publish: 127.0.0.1:<port>:8080   (host loopback only)
-mount:   ~/.pix/state/memory:/data
+mount:   ~/.pix/.state/memory:/data
 ```
 
 The sandbox never dials that container directly. The sbx MCP Gateway
@@ -142,7 +142,7 @@ probes; a wedged (but Docker-alive) container is the case Docker's
 
 ## Storage
 
-Data lives at `~/.pix/state/memory` (`PIX_HOME`-relative), mounted into the
+Data lives at `~/.pix/.state/memory` (`PIX_HOME`-relative), mounted into the
 stack-scoped `pix-memory-<stack-id>` container: SQLite plus FTS5, with embeddings on disk when a
 local backend is configured. `memory_snapshot`/`memory_restore` are the
 supported backup path; there is no separate `pix` CLI verb for it.

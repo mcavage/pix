@@ -62,12 +62,17 @@ func TestInit_CreatesLayoutAndGitRepo(t *testing.T) {
 	}
 
 	for _, dir := range []string{
-		p.Skills, p.Agents, p.OutputStyles, p.Envs, p.Pi, p.PiThemes, p.Runtime,
+		p.Context, p.ContextSkills, p.ContextOutputStyles, p.Envs, p.Runtime,
 		p.State, p.StateEffective, p.StateMemory, p.StateMemoryBackups,
 		p.StateSandboxes, p.StateSessions, p.StateTasks, p.StateTrust, p.StateTrustEnvironments,
 	} {
 		if !isDir(dir) {
 			t.Errorf("expected directory %s to exist after Init", dir)
+		}
+	}
+	for _, dead := range []string{"skills", "agents", "output-styles", "pi", "state"} {
+		if _, err := os.Stat(filepath.Join(home, dead)); !os.IsNotExist(err) {
+			t.Errorf("dead root %s exists after Init; err=%v", dead, err)
 		}
 	}
 
@@ -90,7 +95,7 @@ func TestInit_ExactGitignoreContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	want := "/config.toml\n/secrets.env\n/runtime/\n/state/\n"
+	want := "/config.toml\n/secrets.env\n/runtime/\n/.state/\n"
 	if string(got) != want {
 		t.Errorf(".gitignore content = %q, want exactly %q", got, want)
 	}
@@ -175,12 +180,12 @@ func TestInit_RerunIsNoopAndFillsInMissingPieces(t *testing.T) {
 	}
 	found := false
 	for _, d := range res.CreatedDirs {
-		if d == filepath.Join("state", "tasks") {
+		if d == filepath.Join(".state", "tasks") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("res.CreatedDirs = %v, want it to report state/tasks recreated", res.CreatedDirs)
+		t.Errorf("res.CreatedDirs = %v, want it to report .state/tasks recreated", res.CreatedDirs)
 	}
 }
 
@@ -194,7 +199,7 @@ func TestInit_DirectoryAndFileModes(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 
-	for _, dir := range []string{p.Home, p.State, p.StateTrustEnvironments, p.Skills} {
+	for _, dir := range []string{p.Home, p.State, p.StateTrustEnvironments, p.ContextSkills} {
 		info, err := os.Stat(dir)
 		if err != nil {
 			t.Fatalf("stat %s: %v", dir, err)
@@ -228,8 +233,8 @@ func TestInit_GitInitFailure_PropagatesError(t *testing.T) {
 	}
 	// Directories/files created before the git step must still be in place —
 	// Init is not required to unwind partial progress.
-	if !isDir(p.Skills) {
-		t.Error("expected skills/ to exist even though git init failed")
+	if !isDir(p.ContextSkills) {
+		t.Error("expected context/skills/ to exist even though git init failed")
 	}
 }
 

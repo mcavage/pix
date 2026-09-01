@@ -23,7 +23,6 @@ func TestEnsureDefaultEnvironment_SelectsItAtomically_PreservingSiblings(t *test
 	// 3/4, but this proves the invariant independent of that ordering: ANY
 	// writer's field must survive).
 	if err := config.WithLockAt(home.Home, func(c *config.Config) error {
-		c.MemoryPort = 54321
 		c.VersionPin = "9.9.9"
 		return nil
 	}); err != nil {
@@ -44,9 +43,6 @@ func TestEnsureDefaultEnvironment_SelectsItAtomically_PreservingSiblings(t *test
 	}
 	if c.DefaultEnvironment != DefaultEnvironmentName {
 		t.Errorf("DefaultEnvironment = %q, want %q", c.DefaultEnvironment, DefaultEnvironmentName)
-	}
-	if c.MemoryPort != 54321 {
-		t.Errorf("MemoryPort = %d, want 54321 (sibling field must survive)", c.MemoryPort)
 	}
 	if c.VersionPin != "9.9.9" {
 		t.Errorf("VersionPin = %q, want 9.9.9 (sibling field must survive)", c.VersionPin)

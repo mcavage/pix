@@ -58,32 +58,26 @@ type Paths struct {
 	Git       string // .git
 	Gitignore string // .gitignore
 	README    string // README.md
-	AgentsMD  string // AGENTS.md — user-owned global instructions
 
-	Skills       string // skills/
-	Agents       string // agents/
-	OutputStyles string // output-styles/
-	Envs         string // envs/<name>/
-
-	Pi            string // pi/
-	PiSettings    string // pi/settings.json
-	PiKeybindings string // pi/keybindings.json
-	PiThemes      string // pi/themes/
+	Context             string // context/ — the one personal content layer
+	ContextSkills       string // context/skills/
+	ContextOutputStyles string // context/output-styles/
+	Envs                string // envs/<name>/
 
 	ConfigTOML string // config.toml — machine-wide choices only
 	SecretsEnv string // secrets.env — op:// references only
 
 	Runtime string // runtime/<pix-version>/
 
-	State                  string // state/
-	StateEffective         string // state/effective/<sandbox>/
-	StateMemory            string // state/memory/
-	StateMemoryBackups     string // state/memory/backups/
-	StateSandboxes         string // state/sandboxes/<sandbox>/
-	StateSessions          string // state/sessions/<tree-id>/
-	StateTasks             string // state/tasks/<repo-key>/
-	StateTrust             string // state/trust/
-	StateTrustEnvironments string // state/trust/environments/<name>.json
+	State                  string // .state/
+	StateEffective         string // .state/effective/<sandbox>/
+	StateMemory            string // .state/memory/
+	StateMemoryBackups     string // .state/memory/backups/
+	StateSandboxes         string // .state/sandboxes/<sandbox>/
+	StateSessions          string // .state/sessions/<tree-id>/
+	StateTasks             string // .state/tasks/<repo-key>/
+	StateTrust             string // .state/trust/
+	StateTrustEnvironments string // .state/trust/environments/<name>.json
 }
 
 // Resolve builds Paths from Dir().
@@ -104,24 +98,18 @@ func New(home string) Paths {
 	p.Git = filepath.Join(home, ".git")
 	p.Gitignore = filepath.Join(home, ".gitignore")
 	p.README = filepath.Join(home, "README.md")
-	p.AgentsMD = filepath.Join(home, "AGENTS.md")
 
-	p.Skills = filepath.Join(home, "skills")
-	p.Agents = filepath.Join(home, "agents")
-	p.OutputStyles = filepath.Join(home, "output-styles")
+	p.Context = filepath.Join(home, "context")
+	p.ContextSkills = filepath.Join(p.Context, "skills")
+	p.ContextOutputStyles = filepath.Join(p.Context, "output-styles")
 	p.Envs = filepath.Join(home, "envs")
-
-	p.Pi = filepath.Join(home, "pi")
-	p.PiSettings = filepath.Join(p.Pi, "settings.json")
-	p.PiKeybindings = filepath.Join(p.Pi, "keybindings.json")
-	p.PiThemes = filepath.Join(p.Pi, "themes")
 
 	p.ConfigTOML = filepath.Join(home, "config.toml")
 	p.SecretsEnv = filepath.Join(home, "secrets.env")
 
 	p.Runtime = filepath.Join(home, "runtime")
 
-	p.State = filepath.Join(home, "state")
+	p.State = filepath.Join(home, ".state")
 	p.StateEffective = filepath.Join(p.State, "effective")
 	p.StateMemory = filepath.Join(p.State, "memory")
 	p.StateMemoryBackups = filepath.Join(p.StateMemory, "backups")

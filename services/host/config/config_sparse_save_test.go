@@ -19,6 +19,42 @@ func tempConfig(t *testing.T) string {
 	return filepath.Join(home, "config.toml")
 }
 
+func TestSaveOmitsAppliedDefaultsAndEmptyLegacySections(t *testing.T) {
+	path := tempConfig(t)
+	c, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.DefaultEnvironment = "default"
+	if err := SaveTo(path, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "default_environment = \"default\"\n"
+	if string(got) != want {
+		t.Fatalf("saved config = %q, want sparse %q", got, want)
+	}
+}
+
+func TestSaveKeepsExplicitNondefaultMemoryChoice(t *testing.T) {
+	path := tempConfig(t)
+	c, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.MemoryCapture = MemoryCaptureExperimentalAuto
+	if err := SaveTo(path, c); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "memory_capture = \"experimental-auto\"\n" {
+		t.Fatalf("saved config = %q", got)
+	}
+}
+
 // (d) Simulate a DEFAULT CHANGE reaching an existing user: a config file with
 // no watcher key must resolve to the CURRENT DefaultMemoryWatcherModel, proving
 // future default bumps propagate to saved configs.

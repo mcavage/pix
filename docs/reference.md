@@ -83,7 +83,7 @@ names that sequence.
 Memory is a separate service, **`pix-memory`**, a Go MCP server that speaks
 Streamable HTTP. `pix setup` reconciles one Docker container, named and
 ported for THIS `PIX_HOME`'s stack (`pix-memory-<stack-id>`, on that stack's
-own allocated loopback port), `unless-stopped`, with `~/.pix/state/memory`
+own allocated loopback port), `unless-stopped`, with `~/.pix/.state/memory`
 mounted. The sbx MCP Gateway registers that endpoint as a remote MCP server
 under the same stack-scoped name (`pix-memory-<stack-id>`); the sandbox
 never dials the container directly. A second `PIX_HOME` on the same host
@@ -182,8 +182,8 @@ provider, Pix refuses rather than falling into Pi's stale native default. Agent 
 order is an explicit model in a custom agent definition, then the
 environment's `[agents].<name>` mapping, then the session's main model, then
 parent-model inheritance. There is no model catalog administration command
-and no agent administration command: edit `agents/*.md` or `pix.toml` by
-hand.
+and no agent administration command: environment model and agent overrides
+are authored in `pix.toml`; personal skills live under `context/skills/`.
 
 **Limits.** A model is only as good as the one you picked; pix measures none
 of them and ranks none of them. Subagents run headless
@@ -199,7 +199,7 @@ the directory name is the environment name, and an environment stored
 elsewhere is represented by a symlink under `~/.pix/envs`.
 
 ```
-pix env [NAME] [--path|--effective|--json]   # list, or one environment's detail
+pix env [NAME] [--path|--effective|--json]   # detail includes resolved model + agent overrides
 pix env default [NAME]                        # print, or set, the machine default
 pix env trust NAME [--yes]                    # read and accept what NAME runs on your host
 ```
@@ -244,7 +244,7 @@ Unknown keys are errors.
 
 **Trust.** An environment that runs host code or handles a credential must be
 approved with `pix env trust NAME` before a launch will use it. The
-fingerprint is HMAC-bound and stored under `~/.pix/state/trust`, outside the
+fingerprint is HMAC-bound and stored under `~/.pix/.state/trust`, outside the
 environment directory itself, and recomputed before every use: a changed
 fact (kit, workspace mounts, MCP command or URL, secret destinations,
 network expansion) refuses launch and reprints the same review. Trust review

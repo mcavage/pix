@@ -154,9 +154,9 @@ pix setup
 # at the end of an && list would abort the script.
 if memory_container_exists; then CREATED_MEMORY_CONTAINER=1; fi
 if mcp_registration_exists; then CREATED_MCP_REGISTRATION=1; fi
-test -s "$PIX_HOME/state/memory/auth.token" || fail "U1: no pix-memory auth token was generated"
+test -s "$PIX_HOME/.state/memory/auth.token" || fail "U1: no pix-memory auth token was generated"
 docker ps -a --format '{{.Names}}' | grep -qx "$MEMORY_CONTAINER" || fail "U1: no $MEMORY_CONTAINER container exists; setup did not reconcile THIS stack's memory container"
-grep -q 'memory_port' "$PIX_HOME/config.toml" || fail "U1: no memory_port persisted in config.toml"
+test -s "$PIX_HOME/.state/memory/port" || fail "U1: no memory port persisted in .state"
 
 step "U2 setup is idempotent: a second run changes nothing"
 before="$(cat "$PIX_HOME/config.toml")"
@@ -181,7 +181,7 @@ grep -q 'PIX_LAUNCHER_VERSION' "$PIX_HOME/effective.yaml" || fail "U4: the effec
 pix env trust uat --yes || fail "U4: pix env trust refused a fresh environment"
 pix env default uat || fail "U4: pix env default failed"
 grep -q 'default_environment = "uat"' "$PIX_HOME/config.toml" || fail "U4: default_environment not persisted"
-grep -q 'memory_port' "$PIX_HOME/config.toml" || fail "U4: env default clobbered memory_port"
+test -s "$PIX_HOME/.state/memory/port" || fail "U4: env default clobbered memory port state"
 
 step "U4b setup hooks: an environment's own [[setup]] hook runs only under an explicit pix setup --env"
 mkdir -p "$PIX_HOME/envs/hooked"
@@ -253,7 +253,7 @@ else
 fi
 grep -qi "Accept this host-execution footprint" "$DEFAULT_LOG" && fail "U5b: a zero-footprint environment still prompted for trust"
 grep -qi "has not been reviewed" "$DEFAULT_LOG" && fail "U5b: a zero-footprint environment was reported unreviewed"
-test -f "$PIX_HOME/state/trust/environments/default.json" && fail "U5b: a zero-footprint environment wrote a trust record"
+test -f "$PIX_HOME/.state/trust/environments/default.json" && fail "U5b: a zero-footprint environment wrote a trust record"
 # sbx 0.41 renders its own plan and asks its own approval on `env create`.
 # This row is ALSO the only proof that the approval Pix writes on the create
 # child's stdin actually reaches sbx: a build that read /dev/tty instead
@@ -262,7 +262,7 @@ test -f "$PIX_HOME/state/trust/environments/default.json" && fail "U5b: a zero-f
 # nor the token-bearing memory URL may appear on the user's terminal.
 grep -qi "Approve this plan" "$DEFAULT_LOG" && fail "U5b: sbx's duplicate plan approval reached the terminal"
 grep -q "token=" "$DEFAULT_LOG" && fail "U5b: a token-bearing memory URL reached the terminal"
-MEMORY_TOKEN_FILE="$PIX_HOME/state/memory/auth.token"
+MEMORY_TOKEN_FILE="$PIX_HOME/.state/memory/auth.token"
 if [ -s "$MEMORY_TOKEN_FILE" ] && grep -qF "$(cat "$MEMORY_TOKEN_FILE")" "$DEFAULT_LOG"; then
   fail "U5b: the pix-memory bearer token itself reached the terminal"
 fi
@@ -275,7 +275,7 @@ step "U5c an upgraded binary reconciles this home without pix setup"
 # release than the bundle beside the binary. The next ORDINARY run must
 # reconcile the machine-owned artifacts by itself, print one upgrade line,
 # and leave credentials, trust and setup hooks alone.
-INSTALLED_JSON="$PIX_HOME/state/release.json"
+INSTALLED_JSON="$PIX_HOME/.state/release.json"
 if [ -f "$INSTALLED_JSON" ]; then
   cp "$INSTALLED_JSON" "$INSTALLED_JSON.uat-backup"
   sed 's/"version": "[^"]*"/"version": "0.0.1"/' "$INSTALLED_JSON.uat-backup" > "$INSTALLED_JSON"
@@ -329,9 +329,9 @@ fi
 if [ -n "$(docker ps -a --filter "name=^$MEMORY_CONTAINER_B\$" --format '{{.Names}}' 2>/dev/null)" ]; then CREATED_MEMORY_CONTAINER_B=1; fi
 [ "$CREATED_MEMORY_CONTAINER_B" = "1" ] || fail "U8: the second PIX_HOME did not get its own $MEMORY_CONTAINER_B container"
 docker ps -a --format '{{.Names}}' | grep -qx "$MEMORY_CONTAINER" || fail "U8: setting up the second PIX_HOME removed or renamed the first stack's container"
-PORT_A="$(grep -E '^memory_port' "$PIX_HOME/config.toml" | tr -dc '0-9')"
-PORT_B="$(grep -E '^memory_port' "$HOME_B/config.toml" | tr -dc '0-9')"
-[ -n "$PORT_A" ] && [ -n "$PORT_B" ] || fail "U8: one of the two homes persisted no memory_port"
+PORT_A="$(tr -dc '0-9' < "$PIX_HOME/.state/memory/port")"
+PORT_B="$(tr -dc '0-9' < "$HOME_B/.state/memory/port")"
+[ -n "$PORT_A" ] && [ -n "$PORT_B" ] || fail "U8: one of the two homes persisted no memory port"
 [ "$PORT_A" != "$PORT_B" ] || fail "U8: both PIX_HOMEs allocated the SAME loopback memory port ($PORT_A)"
 sbx mcp ls | grep -q "$MEMORY_MCP_B" || fail "U8: the second stack's $MEMORY_MCP_B registration is missing (the MCP registry is host-global but namespaced)"
 sbx mcp ls | grep -q "$MEMORY_MCP" || fail "U8: registering the second stack dropped the first stack's $MEMORY_MCP registration"
@@ -349,6 +349,6 @@ CREATED_MEMORY_CONTAINER_B=0
 docker ps -a --format '{{.Names}}' | grep -qx "$MEMORY_CONTAINER" || fail "U9: resetting stack B removed stack A's memory container"
 sbx mcp ls | grep -q "$MEMORY_MCP" || fail "U9: resetting stack B removed stack A's MCP registration"
 test -f "$PIX_HOME/config.toml" || fail "U9: resetting stack B renamed stack A's PIX_HOME aside"
-grep -q "memory_port = $PORT_A" "$PIX_HOME/config.toml" || fail "U9: resetting stack B changed stack A's memory port"
+grep -qx "$PORT_A" "$PIX_HOME/.state/memory/port" || fail "U9: resetting stack B changed stack A's memory port"
 
 printf '\nhost-uat: every row above PASSED on this host. Paste these lines into the delivery matrix as earned evidence.\n'

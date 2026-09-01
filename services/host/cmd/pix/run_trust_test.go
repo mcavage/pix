@@ -54,7 +54,7 @@ func trustGateDeps(t *testing.T, home string) (*cli.Deps, *bytes.Buffer, *bytes.
 }
 
 func trustRecordFile(home, envName string) string {
-	return filepath.Join(home, "state", "trust", "environments", envName+".json")
+	return filepath.Join(home, ".state", "trust", "environments", envName+".json")
 }
 
 // TestRunTrustGate_NonInteractive_RefusesUnreviewedEnvironment is the

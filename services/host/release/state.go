@@ -11,7 +11,7 @@ import (
 const InstallStateFile = "release.json"
 
 // InstallStatePath is where the currently-installed release manifest is
-// recorded: <home>/state/release.json. home is a caller-resolved Pix home
+// recorded: <home>/.state/release.json. home is a caller-resolved Pix home
 // root (e.g. pixhome.Dir()'s result) — this package takes no dependency on
 // pixhome so it stays usable from anything that already has a home path in
 // hand. Setup writes this file after installing a release; doctor reads it
@@ -19,7 +19,7 @@ const InstallStateFile = "release.json"
 // authoritative "what is installed" record, never a second version map
 // (architecture §3, §12).
 func InstallStatePath(home string) string {
-	return filepath.Join(home, "state", InstallStateFile)
+	return filepath.Join(home, ".state", InstallStateFile)
 }
 
 // LoadInstalled reads and validates the manifest recorded at

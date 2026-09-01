@@ -48,7 +48,7 @@ func (execRunner) Run(dir, name string, args ...string) (string, error) {
 // gitignoreContent is byte-for-byte the ignore rule pix-v2-surface.md §4
 // specifies: exclude machine state and runtime material, track everything
 // else (README, skills, agents, output styles, environments).
-const gitignoreContent = "/config.toml\n/secrets.env\n/runtime/\n/state/\n"
+const gitignoreContent = "/config.toml\n/secrets.env\n/runtime/\n/.state/\n"
 
 // readmeContent is the seed README.md Init writes into a fresh home. It is
 // never overwritten once present — an existing README, however the user
@@ -59,10 +59,9 @@ This directory holds your Pix configuration, skills, agents, and
 environments. It was initialized as an ordinary Git repository, but nothing
 here is staged or committed on your behalf.
 
-Machine state and runtime data (config.toml, secrets.env, runtime/, state/)
-are excluded by .gitignore. Everything else — this README, your skills,
-agents, output styles, and environments — is yours to edit, commit, and
-share.
+Machine state and runtime data (config.toml, secrets.env, runtime/, .state/)
+are excluded by .gitignore. Everything else — this README, context/, and
+environments — is yours to edit, commit, and share.
 `
 
 // InitResult reports what Init actually did on this call, so a caller
@@ -107,9 +106,7 @@ func Init(p Paths, runner Runner) (InitResult, error) {
 	res.CreatedHome = !homeExisted
 
 	dirs := []string{
-		p.Skills, p.Agents, p.OutputStyles, p.Envs,
-		p.Pi, p.PiThemes,
-		p.Runtime,
+		p.Context, p.ContextSkills, p.ContextOutputStyles, p.Envs, p.Runtime,
 		p.State, p.StateEffective, p.StateMemory, p.StateMemoryBackups,
 		p.StateSandboxes, p.StateSessions, p.StateTasks,
 		p.StateTrust, p.StateTrustEnvironments,

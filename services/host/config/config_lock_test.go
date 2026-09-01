@@ -8,8 +8,7 @@ import (
 )
 
 // config_lock_test.go pins round 5's config collapse: config.Config is the
-// SOLE <PIX_HOME>/config.toml schema, and every named writer (SetMemoryPort-
-// shaped callers like container's allocator, SetDefaultEnvironment) must
+// SOLE <PIX_HOME>/config.toml schema, and every named writer must
 // load-modify-save the FULL schema under the one config lock — never a
 // second schema that persists only the fields IT knows about and silently
 // drops VersionPin/Inference/whatever a sibling writer already set.
@@ -30,23 +29,16 @@ func seedFullSchema(t *testing.T, path string) *Config {
 	return c
 }
 
-// TestSetupMemoryPortThenEnvDefault_PreservesPortInferenceVersion: a caller
-// that allocates a memory port (the shape container.AllocateMemoryPortLocked
-// uses) followed by `pix env default NAME` (SetDefaultEnvironmentAt) must
+// TestConfigMutationThenEnvDefault_PreservesInferenceVersion: a config
+// mutation followed by `pix env default NAME` (SetDefaultEnvironmentAt) must
 // never lose VersionPin/Inference set by an earlier `pix setup` — the exact
 // data loss the retired per-home Machine struct caused by overwriting
 // config.toml with only its own two fields.
-func TestSetupMemoryPortThenEnvDefault_PreservesPortInferenceVersion(t *testing.T) {
+func TestConfigMutationThenEnvDefault_PreservesInferenceVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := PathAt(dir)
 	seedFullSchema(t, path)
 
-	if err := WithLockAt(dir, func(c *Config) error {
-		c.MemoryPort = 18123
-		return nil
-	}); err != nil {
-		t.Fatalf("allocate memory port: %v", err)
-	}
 	if err := SetDefaultEnvironmentAt(dir, "work"); err != nil {
 		t.Fatalf("SetDefaultEnvironmentAt: %v", err)
 	}
@@ -61,18 +53,15 @@ func TestSetupMemoryPortThenEnvDefault_PreservesPortInferenceVersion(t *testing.
 	if _, ok := got.Inference.Backends["anthropic"]; !ok {
 		t.Errorf("Inference.Backends[anthropic] dropped: %+v", got.Inference.Backends)
 	}
-	if got.MemoryPort != 18123 {
-		t.Errorf("MemoryPort = %d, want 18123", got.MemoryPort)
-	}
 	if got.DefaultEnvironment != "work" {
 		t.Errorf("DefaultEnvironment = %q, want work", got.DefaultEnvironment)
 	}
 }
 
-// TestEnvDefaultThenSetupMemoryPort_ReversedOrderPreservesDefault is the
-// mirror: writing the default FIRST, then allocating a port, must not lose
-// the default either — the fix must not just happen to work for one order.
-func TestEnvDefaultThenSetupMemoryPort_ReversedOrderPreservesDefault(t *testing.T) {
+// TestEnvDefaultThenConfigMutation_ReversedOrderPreservesDefault is the
+// mirror: writing the default FIRST, then another config field, must not lose
+// the default either.
+func TestEnvDefaultThenConfigMutation_ReversedOrderPreservesDefault(t *testing.T) {
 	dir := t.TempDir()
 	path := PathAt(dir)
 	seedFullSchema(t, path)
@@ -81,10 +70,10 @@ func TestEnvDefaultThenSetupMemoryPort_ReversedOrderPreservesDefault(t *testing.
 		t.Fatalf("SetDefaultEnvironmentAt: %v", err)
 	}
 	if err := WithLockAt(dir, func(c *Config) error {
-		c.MemoryPort = 18456
+		c.MemoryCapture = MemoryCaptureExperimentalAuto
 		return nil
 	}); err != nil {
-		t.Fatalf("allocate memory port: %v", err)
+		t.Fatalf("set memory capture: %v", err)
 	}
 
 	got, err := LoadFrom(path)
@@ -94,8 +83,8 @@ func TestEnvDefaultThenSetupMemoryPort_ReversedOrderPreservesDefault(t *testing.
 	if got.DefaultEnvironment != "home" {
 		t.Errorf("DefaultEnvironment = %q, want home (must survive a later writer)", got.DefaultEnvironment)
 	}
-	if got.MemoryPort != 18456 {
-		t.Errorf("MemoryPort = %d, want 18456", got.MemoryPort)
+	if got.MemoryCapture != MemoryCaptureExperimentalAuto {
+		t.Errorf("MemoryCapture = %q, want experimental-auto", got.MemoryCapture)
 	}
 	if got.VersionPin != "9.9.9" {
 		t.Errorf("VersionPin = %q, want preserved 9.9.9", got.VersionPin)
@@ -105,9 +94,8 @@ func TestEnvDefaultThenSetupMemoryPort_ReversedOrderPreservesDefault(t *testing.
 	}
 }
 
-// TestWithLockAt_ConcurrentWritersNoLostUpdate: N goroutines each increment
-// a counter field (MemoryPort, repurposed as a counter here — any field
-// works) by exactly 1 under WithLockAt. Without a real lock serializing the
+// TestWithLockAt_ConcurrentWritersNoLostUpdate: N goroutines each append
+// one element under WithLockAt. Without a real lock serializing the
 // read-modify-write, concurrent goroutines racing Load-then-Save lose
 // updates; the final value must equal N exactly.
 func TestWithLockAt_ConcurrentWritersNoLostUpdate(t *testing.T) {
@@ -120,7 +108,7 @@ func TestWithLockAt_ConcurrentWritersNoLostUpdate(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			errs[i] = WithLockAt(dir, func(c *Config) error {
-				c.MemoryPort++
+				c.Inference.AllowedModels = append(c.Inference.AllowedModels, "x")
 				return nil
 			})
 		}(i)
@@ -135,13 +123,13 @@ func TestWithLockAt_ConcurrentWritersNoLostUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFrom: %v", err)
 	}
-	if got.MemoryPort != n {
-		t.Errorf("MemoryPort = %d, want %d (a lost update means the lock is not exclusive)", got.MemoryPort, n)
+	if len(got.Inference.AllowedModels) != n {
+		t.Errorf("AllowedModels length = %d, want %d (a lost update means the lock is not exclusive)", len(got.Inference.AllowedModels), n)
 	}
 }
 
 // TestWithLockAt_ConcurrentMixedWritersNoLostUpdate: concurrent
-// SetDefaultEnvironmentAt callers and MemoryPort-incrementing callers
+// SetDefaultEnvironmentAt callers and inference-slice writers
 // against the SAME PIX_HOME must never lose EITHER kind of update — the
 // mixed-writer shape `pix env default` racing `pix setup`'s port allocation
 // would actually produce.
@@ -155,7 +143,7 @@ func TestWithLockAt_ConcurrentMixedWritersNoLostUpdate(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			errs[i] = WithLockAt(dir, func(c *Config) error {
-				c.MemoryPort++
+				c.Inference.AllowedModels = append(c.Inference.AllowedModels, "x")
 				return nil
 			})
 		}(i)
@@ -174,8 +162,8 @@ func TestWithLockAt_ConcurrentMixedWritersNoLostUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFrom: %v", err)
 	}
-	if got.MemoryPort != n {
-		t.Errorf("MemoryPort = %d, want %d (lost update against a mixed writer)", got.MemoryPort, n)
+	if len(got.Inference.AllowedModels) != n {
+		t.Errorf("AllowedModels length = %d, want %d (lost update against a mixed writer)", len(got.Inference.AllowedModels), n)
 	}
 	if got.DefaultEnvironment != "env-stable" {
 		t.Errorf("DefaultEnvironment = %q, want env-stable", got.DefaultEnvironment)

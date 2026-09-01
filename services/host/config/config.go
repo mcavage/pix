@@ -118,16 +118,6 @@ type Config struct {
 	// there is no other.
 	DefaultEnvironment string `toml:"default_environment,omitempty"`
 
-	// MemoryPort is the loopback port the one named pix-memory container
-	// publishes on THIS PIX_HOME, written once by `pix setup`
-	// (container.AllocateMemoryPortLocked/ReallocateMemoryPortLocked, QA F4:
-	// two independent PIX_HOME instances on the same host must never be
-	// forced onto the same fixed port). Zero means "not allocated yet" — a
-	// caller that only reads (doctor, run, env preview) treats that as the
-	// pre-setup state and falls back to container.DefaultMemoryPort for
-	// display purposes only; it never allocates or persists one itself.
-	MemoryPort int `toml:"memory_port,omitempty"`
-
 	// Inference describes WHERE catalog models can be called: user/pack-owned
 	// backend wiring and model-id bindings only, never model identity or secrets.
 	Inference InferenceConfig `toml:"inference,omitempty"`
@@ -287,9 +277,63 @@ func LockPathAt(homeDir string) string {
 	return filepath.Join(homeDir, configLockName)
 }
 
+type sparseConfig struct {
+	VersionPin         string            `toml:"version_pin,omitempty"`
+	MemoryWatcherModel string            `toml:"memory_watcher_model,omitempty"`
+	MemoryEmbedModel   string            `toml:"memory_embed_model,omitempty"`
+	OllamaBridgeModel  string            `toml:"ollama_bridge_model,omitempty"`
+	MemoryCapture      string            `toml:"memory_capture,omitempty"`
+	Environment        string            `toml:"environment,omitempty"`
+	Environments       map[string]string `toml:"environments,omitempty"`
+	DefaultEnvironment string            `toml:"default_environment,omitempty"`
+	Inference          *InferenceConfig  `toml:"inference,omitempty"`
+	Kits               *struct {
+		Stack []string `toml:"stack"`
+	} `toml:"kits,omitempty"`
+	Skills *struct {
+		Paths []string `toml:"paths"`
+	} `toml:"skills,omitempty"`
+}
+
+func sparseForSave(c *Config) sparseConfig {
+	s := sparseConfig{
+		VersionPin: c.VersionPin, Environment: c.Environment,
+		Environments: c.Environments, DefaultEnvironment: c.DefaultEnvironment,
+	}
+	if c.MemoryWatcherModel != DefaultMemoryWatcherModel {
+		s.MemoryWatcherModel = c.MemoryWatcherModel
+	}
+	if c.MemoryEmbedModel != DefaultMemoryEmbedModel {
+		s.MemoryEmbedModel = c.MemoryEmbedModel
+	}
+	if c.OllamaBridgeModel != DefaultOllamaBridgeModel {
+		s.OllamaBridgeModel = c.OllamaBridgeModel
+	}
+	if c.MemoryCapture != DefaultMemoryCapture {
+		s.MemoryCapture = c.MemoryCapture
+	}
+	if len(c.Inference.Backends) > 0 || len(c.Inference.Models) > 0 ||
+		len(c.Inference.AllowedModels) > 0 || len(c.Inference.RosterProviders) > 0 ||
+		c.Inference.ExclusiveBackend != "" || c.Inference.ExclusiveSource != "" {
+		inf := c.Inference
+		s.Inference = &inf
+	}
+	if len(c.Kits.Stack) > 0 {
+		s.Kits = &struct {
+			Stack []string `toml:"stack"`
+		}{Stack: append([]string(nil), c.Kits.Stack...)}
+	}
+	if len(c.Skills.Paths) > 0 {
+		s.Skills = &struct {
+			Paths []string `toml:"paths"`
+		}{Paths: append([]string(nil), c.Skills.Paths...)}
+	}
+	return s
+}
+
 // SaveTo persists c to an explicit path atomically (0600) — the SOLE writer
 // of config.toml. It marshals the WHOLE struct (VersionPin, Inference,
-// DefaultEnvironment, MemoryPort, everything), so a named writer that
+// DefaultEnvironment, everything), so a named writer that
 // LoadFrom()s, mutates one field, and calls SaveTo never drops a sibling
 // field a different writer set: there is exactly one schema for this file,
 // and this is its one encoder.
@@ -299,7 +343,7 @@ func SaveTo(path string, c *Config) error {
 		return err
 	}
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
+	if err := toml.NewEncoder(&buf).Encode(sparseForSave(c)); err != nil {
 		return err
 	}
 	return atomicWriteInDir(dir, filepath.Base(path), buf.Bytes(), 0o600)
@@ -362,8 +406,7 @@ func WithLockAt(homeDir string, mutate func(c *Config) error) error {
 
 // SetDefaultEnvironmentAt is the ONE named writer `pix env default NAME`
 // owns: load-modify-save the full schema under the config lock, so it can
-// never stomp VersionPin/Inference/MemoryPort/anything else a sibling
-// writer set.
+// never stomp VersionPin/Inference/anything else a sibling writer set.
 func SetDefaultEnvironmentAt(homeDir, name string) error {
 	return WithLockAt(homeDir, func(c *Config) error {
 		c.DefaultEnvironment = name
@@ -371,14 +414,14 @@ func SetDefaultEnvironmentAt(homeDir, name string) error {
 	})
 }
 
-// StateDir resolves the per-user state dir: <PIX_HOME>/state. Runtime state
+// StateDir resolves the per-user state dir: <PIX_HOME>/.state. Runtime state
 // lives here, never config. No $XDG_STATE_HOME fallback in production.
 func StateDir() (string, error) {
 	home, err := pixhome.Dir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, "state"), nil
+	return pixhome.New(home).State, nil
 }
 
 // DataDir resolves the per-user DATA dir: PIX_HOME itself — the durable root
@@ -390,7 +433,7 @@ func DataDir() (string, error) {
 
 // ContextDir is the always-on, user-authored context layer: <PIX_HOME>/context
 // (durable AGENTS.md + skills), personal — team context belongs in a pack.
-func ContextDir() string { return filepath.Join(dataDirOr(), "context") }
+func ContextDir() string { return pixhome.New(dataDirOr()).Context }
 
 // dataDirOr returns DataDir() or, if HOME cannot be resolved, a relative
 // "pix" so path builders never panic on an empty base.

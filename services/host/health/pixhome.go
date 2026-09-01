@@ -27,7 +27,7 @@ import (
 const Setup2Fix = "pix setup"
 
 // ReleaseInstalledProbe verifies a release manifest is recorded at
-// <home>/state/release.json and is well-formed (release.LoadInstalled
+// <home>/.state/release.json and is well-formed (release.LoadInstalled
 // already validates every field). It says nothing about whether the
 // binaries it names still match what is actually running — that is a
 // separate, evidence-bearing probe a later unit may add once there is a

@@ -9,7 +9,7 @@
 //     envelope with nested `artifacts` and a `generatedAt` stamp, which is
 //     what release CI writes and what `pix setup` reads off disk here;
 //   - the RECORDED document (state.go): the flat internal Manifest this
-//     module validates, compares, and stores at <home>/state/release.json.
+//     module validates, compares, and stores at <home>/.state/release.json.
 //
 // ParseBundleManifest is the one translation between them, so nothing else
 // in the launcher has to know the shipped envelope's shape.

@@ -87,6 +87,11 @@ references, without choosing a provider for you; the explicit path is
 own `pix.toml` (section 5).
 A gap it cannot repair is printed with the exact command that fixes it.
 
+The home stays small: `context/` is personal content, `envs/` holds named
+environments, `runtime/` is versioned shipped content, and hidden `.state/`
+holds release, memory, trust, sandbox, session, and task state. `config.toml`
+is sparse and records only explicit choices.
+
 Bare interactive `pix` runs `pix setup` automatically when this `PIX_HOME`
 has no config, then launches only after setup succeeds. `pix setup` remains the
 explicit first-run and repair command. You do not run it after every upgrade:

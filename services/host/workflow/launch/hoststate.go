@@ -15,23 +15,24 @@ import (
 	"pix/host/container"
 	"pix/host/hostenv"
 	"pix/host/inference"
+	"pix/host/pixhome"
 	"pix/host/secret"
 )
 
-// memoryPort is the port THIS PIX_HOME's pix-memory container is published
-// on. It is a per-home fact, not a constant: two PIX_HOMEs coexisting on one
-// host each allocate their own loopback port (container.EnsureMemoryPort,
-// persisted as config.toml's memory_port), so a hardcoded literal here dialed
-// the OTHER stack's container — or nothing at all — and reported the answer
-// as this stack's. cfg is the same machine config every other fact in this
-// payload comes from; a home that has not run `pix setup` yet reads
-// container.DefaultMemoryPort, the same "not allocated yet" value
-// container.ReadMemoryPort returns.
-func memoryPort(cfg *config.Config) int {
-	if cfg != nil && cfg.MemoryPort != 0 {
-		return cfg.MemoryPort
+// memoryPort is the port THIS PIX_HOME's pix-memory container publishes.
+// It is persisted under .state/memory, not in user configuration. The cfg
+// parameter remains because callers build all host-state facts from one shape;
+// it is deliberately irrelevant to this machine-owned value.
+func memoryPort(_ *config.Config) int {
+	home, err := pixhome.Resolve()
+	if err != nil {
+		return container.DefaultMemoryPort
 	}
-	return container.DefaultMemoryPort
+	port, err := container.ReadMemoryPort(home)
+	if err != nil {
+		return container.DefaultMemoryPort
+	}
+	return port
 }
 
 type hostStateKeys struct {

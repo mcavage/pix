@@ -3,10 +3,11 @@ package provision
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"pix/host/config"
 	"pix/host/container"
 	"pix/host/pixhome"
 	"pix/host/release"
@@ -419,15 +420,18 @@ func strconvItoa(n int) string {
 // TestSetup_PortConflictFirstFailsSecondSucceeds_PersistsPortAndMCPURL pins
 // round 5's provision-level retry proof: when the FIRST reconcile attempt
 // loses a bind race on the persisted port, Setup must reallocate under the
-// config lock, retry, and land on a container/registration/persisted-config
+// setup lock, retry, and land on a container/registration/persisted-state
 // triple that all name the SAME final port — never the stale conflicting
 // one, and never a mismatch between what Docker is running, what
-// config.toml records, and what the Gateway URL says.
+// .state/memory/port records, and what the Gateway URL says.
 func TestSetup_PortConflictFirstFailsSecondSucceeds_PersistsPortAndMCPURL(t *testing.T) {
 	home := pixhome.New(t.TempDir())
 	const conflictingPort = 18099
-	if err := config.SaveTo(config.PathAt(home.Home), &config.Config{MemoryPort: conflictingPort}); err != nil {
-		t.Fatalf("seed config: %v", err)
+	if err := os.MkdirAll(home.StateMemory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home.StateMemory, "port"), []byte(fmt.Sprintf("%d\n", conflictingPort)), 0o600); err != nil {
+		t.Fatalf("seed memory port: %v", err)
 	}
 	docker := &flakyPortDockerRunner{failPort: conflictingPort}
 	mcp := &fakeMCP{}
@@ -450,13 +454,9 @@ func TestSetup_PortConflictFirstFailsSecondSucceeds_PersistsPortAndMCPURL(t *tes
 		t.Fatalf("expected first-fails/second-succeeds (>=2 start attempts), got %d", docker.startCalls)
 	}
 
-	// Persisted config.toml must agree with what Setup reports resolved.
-	c, err := config.LoadFrom(config.PathAt(home.Home))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.MemoryPort != res.MemoryPort {
-		t.Errorf("persisted MemoryPort = %d, want %d (config.toml must never disagree with the container that actually started)", c.MemoryPort, res.MemoryPort)
+	// Persisted machine state must agree with what Setup reports resolved.
+	if got, err := container.ReadMemoryPort(home); err != nil || got != res.MemoryPort {
+		t.Errorf("persisted memory port = (%d, %v), want (%d, nil)", got, err, res.MemoryPort)
 	}
 
 	// The registered Gateway URL must name the SAME final port — never the

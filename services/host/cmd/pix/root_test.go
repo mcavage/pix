@@ -430,6 +430,9 @@ func TestEnvNameShorthand_RealDispatchShowsTheNamedEnvironment(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(envDir, ".sbxenv.yaml"), []byte("schemaVersion: \"1\"\nagent: pix\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(envDir, "pix.toml"), []byte("schema = 1\n[models]\nmain = \"openai/gpt-5.6-sol\"\n[agents]\nreview = \"google/gemini-3.1-pro-preview\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PIX_HOME", home)
 
 	d1, out1, _ := rootDeps()
@@ -445,6 +448,10 @@ func TestEnvNameShorthand_RealDispatchShowsTheNamedEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(out1.String(), "name:        work") {
 		t.Errorf("pix env work did not show the named environment: %q", out1.String())
+	}
+	if !strings.Contains(out1.String(), "model:       openai/gpt-5.6-sol ([models].main)") ||
+		!strings.Contains(out1.String(), "review -> google/gemini-3.1-pro-preview") {
+		t.Errorf("pix env work did not show effective model mapping: %q", out1.String())
 	}
 }
 

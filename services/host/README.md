@@ -68,7 +68,7 @@ Host-only acceptance (Docker + `sbx`, cannot run inside a pix sandbox):
 Everything user-owned lives under `PIX_HOME` (default `~/.pix`, overridable
 with `$PIX_HOME`). There is no XDG split and no `$PIX_CONFIG`:
 
-- `~/.pix/config.toml` — machine-only fields, one named writer each
-  (`default_environment` from `pix env default`, `memory_port` from `pix setup`)
+- `~/.pix/config.toml` — sparse explicit choices, primarily
+  `default_environment` from `pix env default`
 - `~/.pix/secrets.env` — the ONE secrets file, `op://` references only, 0600
-- `~/.pix/state/` — sandboxes, sessions, trust, memory data, effective documents
+- `~/.pix/.state/` — release identity, sandboxes, sessions, trust, memory data and port, effective documents

@@ -1,7 +1,5 @@
-// W0 pin: the top-level ~/.config/pix/config.toml key surface (AGENTS.md's
-// config.toml row: "Declares `services`, `mcp`,
-// and the Ollama model names"). config.toml is managed exclusively through
-// `pix config set`/`unset` (safety invariant #1) — the Go struct's `toml:"…"`
+// W0 pin: the top-level PIX_HOME/config.toml key surface. The file is written
+// only by named mutations such as `pix env default`; the Go struct's `toml:"…"`
 // tags ARE the on-disk contract, so a rename here is a silent breaking change
 // for every user's existing file (an unknown key becomes `unknownKeys`, a
 // dropped default becomes an unexplained behavior change) with no compiler or
@@ -9,7 +7,7 @@
 export default [
 	{
 		id: "config-keys.top-level.surface",
-		description: "Config's top-level toml tags still name exactly this key set. The round-4 config collapse deleted services/mcp/packs/pack: config.toml declares no MCP server list and no service list any more (the environment's .sbxenv.yaml plus reserved built-ins are the ONE MCP declaration channel). Round 5 deleted the short-lived pixhome.Machine schema that used to compete with THIS struct for the same config.toml bytes (it silently dropped version_pin/inference on every `pix env default`); config.Config is now the SOLE schema, so default_environment and memory_port — the two machine-only keys — are real fields here, not on a second struct.",
+		description: "Config's top-level toml tags still name exactly this key set. Runtime state such as the memory port lives under PIX_HOME/.state, while config.toml remains the sparse explicit-choice schema.",
 		checks: [
 			{
 				file: "services/host/config/config.go",
@@ -61,7 +59,6 @@ export default [
 					"environment",
 					"environments",
 					"default_environment",
-					"memory_port",
 				],
 			},
 		],

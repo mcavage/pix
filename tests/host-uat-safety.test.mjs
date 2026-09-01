@@ -157,7 +157,7 @@ test("host-uat.sh proves resetting stack B leaves stack A intact, and never adop
 	assert.match(u9, /PIX_HOME="\$HOME_B" pix reset --yes/, "reset must run against the SECOND home");
 	assert.match(u9, /grep -qx "\$MEMORY_CONTAINER"/, "stack A's container must still exist afterwards");
 	assert.match(u9, /grep -q "\$MEMORY_MCP"/, "stack A's MCP registration must still exist afterwards");
-	assert.match(u9, /memory_port = \$PORT_A/, "stack A's memory port must be unchanged");
+	assert.match(u9, /\.state\/memory\/port/, "stack A's memory port state must be unchanged");
 	// The second home's container is cleaned up only if this run created it.
 	assert.match(script, /CREATED_MEMORY_CONTAINER_B=0/, "the second home's container flag must default to \"not mine\"");
 	assert.match(script, /if \[ "\$CREATED_MEMORY_CONTAINER_B" = "1" \]/, "cleanup must gate on it");

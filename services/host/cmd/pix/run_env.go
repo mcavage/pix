@@ -242,13 +242,17 @@ func validateRunRoster(cfg *config.Config, sel launch.EnvSelection, shipped []st
 	return models.ValidateRoster(cfg, facts)
 }
 
-// configDirOrEmpty is the launcher config dir the creation HMAC key record
-// lives in. An unresolvable one degrades to "": the ATTACH resolver then
+// trustDirOrEmpty is the launcher-private state directory where the creation
+// HMAC key record lives. An unresolvable one degrades to "": the ATTACH resolver then
 // reports the key as missing, which is the reset-invalidated state, and the
 // CREATE resolver refuses outright — fail closed either way, never a
 // silently unkeyed fingerprint.
-func configDirOrEmpty() string {
-	return filepath.Dir(config.Path())
+func trustDirOrEmpty() string {
+	home, err := pixhome.Resolve()
+	if err != nil {
+		return ""
+	}
+	return home.StateTrust
 }
 
 // currentCreationFingerprint is the ATTACH half of §10.2's third condition:
@@ -261,7 +265,7 @@ func currentCreationFingerprint(cfg *config.Config, o launch.RunOpts, sel launch
 	if err != nil {
 		return nil, false, err
 	}
-	return launch.CreationFingerprint(launch.CreationFactsFor(in), launch.AttachHMACResolver(configDirOrEmpty(), nil))
+	return launch.CreationFingerprint(launch.CreationFactsFor(in), launch.AttachHMACResolver(trustDirOrEmpty(), nil))
 }
 
 // envHolderProbe and envSandboxState were removed: both supported an env

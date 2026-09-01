@@ -27,7 +27,7 @@ and no XDG path split: everything user-owned lives under `PIX_HOME`.
 | path | what |
 | --- | --- |
 | `services/host/` | the Go module that builds `pix` (`cmd/pix` is the launcher's dispatch tree; `pixhome`, `sandbox`, `session`, `launcher`, `hosttrust`, `secret`, `mcp`, `envinfo`, `recreatelog`, `container`, `health` are the domain packages). This is on its way to the target `cmd/`/`internal/` split in `docs/design/pix-v2-architecture.md` §3; treat that document as the ownership map, not a requirement to move a cohesive package just to match a diagram. |
-| `services/memory/` | **`pix-memory`**: an independent Go module and Dockerfile. One Streamable HTTP MCP endpoint (`/mcp`) plus `/healthz`. Built and tagged separately from the agent image; `pix setup` reconciles it as a single named Docker container (`unless-stopped`, loopback-published, `~/.pix/state/memory:/data` mounted). |
+| `services/memory/` | **`pix-memory`**: an independent Go module and Dockerfile. One Streamable HTTP MCP endpoint (`/mcp`) plus `/healthz`. Built and tagged separately from the agent image; `pix setup` reconciles it as a single named Docker container (`unless-stopped`, loopback-published, `~/.pix/.state/memory:/data` mounted). |
 | `images/agent/Dockerfile` | **`pix-agent`**: the DHI Node/Debian sandbox image, containing the pinned pi build, core extensions, patches, and the entrypoint. Consumers pull this by name; `make load` builds and loads a local copy for dev. |
 | `pi-kit/spec.yaml` | the strict kit-spec v2 the sandbox launches with: image ref, entrypoint, `credentials[]` (multi-model proxy), `permissions.network.allow`, `setup`. |
 | `settings.json`, `keybindings.json`, `themes/` | shipped Pi defaults, mounted into every sandbox as `~/.pix/pi/*`. |
@@ -43,19 +43,20 @@ with `PIX_HOME` (no XDG config/data/state/cache split, ever):
 
 ```text
 ~/.pix/
-  .git/  README.md  AGENTS.md  skills/  agents/  output-styles/
-  envs/<name>/          # .sbxenv.yaml + optional pix.toml, a plain directory
-  pi/{settings.json,keybindings.json,themes/}
-  config.toml            # default environment, local inference backend, release manifest identity
-  secrets.env             # NAME=op://... references only, mode 0600
-  runtime/<pix-version>/  # shipped skills + agents, package data, not user-edited
-  state/
+  .git/  README.md
+  config.toml            # sparse, explicit machine choices only
+  secrets.env            # NAME=op://... references only, mode 0600
+  envs/<name>/           # .sbxenv.yaml + optional pix.toml, a plain directory
+  context/               # personal AGENTS.md, skills/, output-styles/
+  runtime/<pix-version>/ # shipped skills + agents + Pi files, not user-edited
+  .state/
+    release.json
     effective/<sandbox>/effective.sbxenv.yaml
-    memory/{memory.db,backups/}
+    memory/{memory.db,backups/,auth.token,port}
     sandboxes/<sandbox>/{record.json,fingerprint.json,invocation.json,keep.json,lifecycle.lock}
     sessions/<tree-id>/{tree.json,nodes/<node-id>.json}
     tasks/<repo-key>/{meta/,co/}
-    trust/environments/<name>.json
+    trust/{creation-hmac.key,environments/<name>.json}
 ```
 
 `config.toml` and `secrets.env` are the only two files with a single named
@@ -211,7 +212,7 @@ you touch the surface it names.
    selected environment needs direct key resolution. Keyless and
    Gateway-authenticated backends never trigger an irrelevant 1Password flow.
 9. **Environment trust is HMAC-bound and stored outside the environment**
-   (`~/.pix/state/trust`), never inside the directory being approved. A
+   (`~/.pix/.state/trust`), never inside the directory being approved. A
    changed fingerprint (any host-affecting fact: kit, workspace mounts, MCP
    command/URL, secret destinations, network expansion) refuses launch and
    names `pix env trust NAME`. Trust review defaults to No; `--yes`

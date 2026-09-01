@@ -40,10 +40,10 @@ runtime, and no compatibility adapters.
           │                                    │           │
           ├── docker ──> pix-memory <───────────┘           └── integrations
           │                 │
-          │                 ├── ~/.pix/state/memory:/data
+          │                 ├── ~/.pix/.state/memory:/data
           │                 └── llmman or Ollama
           │
-          └── ~/.pix/state/{sandboxes,sessions,tasks,trust}
+          └── ~/.pix/.state/{sandboxes,sessions,tasks,trust}
 ```
 
 The agent sandbox cannot connect directly to the host-published memory port.
@@ -172,19 +172,15 @@ The surviving responsibilities are:
   .git/
   .gitignore
   README.md
-  AGENTS.md
-  skills/
-  agents/
-  output-styles/
-  envs/<name>/
-  pi/
-    settings.json
-    keybindings.json
-    themes/
   config.toml
   secrets.env
+  envs/<name>/
+  context/
+    AGENTS.md
+    skills/
+    output-styles/
   runtime/<pix-version>/
-  state/
+  .state/
     effective/<sandbox>/effective.sbxenv.yaml
     memory/
       memory.db
@@ -209,11 +205,11 @@ Files containing machine state are mode `0600`; their parent directories are
 `0700`. Durable writes use a same-directory temporary file, fsync where loss
 changes authority or ownership, then atomic rename or no-replace link.
 
-`config.toml` contains only the default environment (written by `pix env
-default NAME`, and once, atomically, by `pix setup` itself the moment it
-scaffolds a fresh host's first environment), the allocated pix-memory
-loopback port (`memory_port`, written once by `pix setup` — see §9.1), and
-installed release manifest identity. `secrets.env` contains only
+`config.toml` is sparse and contains only explicit machine choices, primarily
+the default environment (written by `pix env default NAME`, and once,
+atomically, by `pix setup` when it scaffolds a fresh host's first environment).
+The pix-memory loopback port and installed release identity are machine state
+under `.state/`, not user configuration. `secrets.env` contains only
 `NAME=op://...` references. Neither is tracked by the initialized Git
 repository. Local inference is never a machine-wide `config.toml` field: it
 is authored per environment in that environment's own `pix.toml`
@@ -263,7 +259,7 @@ Preview omits only facts that cannot exist before launch, such as a newly
 observed sbx instance ID. There is no second renderer for create.
 
 The exact bytes handed to sbx are persisted at
-`state/effective/<sandbox>/effective.sbxenv.yaml` before creation. Removal uses
+`.state/effective/<sandbox>/effective.sbxenv.yaml` before creation. Removal uses
 that same file and positive instance identity.
 
 ### 6.3 Create and attach
@@ -383,7 +379,7 @@ Keep the current host-side `git clone --local` design. It creates a self-contain
 checkout whose `.git` directory works inside a direct-mounted sandbox and whose
 commits survive sandbox removal.
 
-Task state moves to `~/.pix/state/tasks`. A task record binds name, repository,
+Task state moves to `~/.pix/.state/tasks`. A task record binds name, repository,
 checkout, branch, base commit, environment, sandbox, and creation time.
 
 - `task new` resolves the source commit, clones, creates `pix/<name>`, writes
@@ -414,7 +410,7 @@ name:        pix-memory-<stack-id>
 image:       immutable digest from the release manifest
 restart:     unless-stopped
 publish:     127.0.0.1:<allocated-or-fixed-port>:8080
-mount:       ~/.pix/state/memory:/data
+mount:       ~/.pix/.state/memory:/data
 network:     only the selected llmman/Ollama endpoint when semantic features run
 ```
 
@@ -428,11 +424,10 @@ checks).
 The port is **per-`PIX_HOME` state, allocated once and persisted**, not a
 process-wide constant: `container.EnsureMemoryPort` (called only by `pix
 setup`, under `container.SetupLockPath`'s advisory lock held through the
-whole allocate-then-reconcile sequence) reads `config.toml`'s `memory_port`
-field if already set, otherwise adopts the historical default (18080) when it
-is actually free right now, or otherwise draws a genuinely free loopback port
-from the OS (bind `127.0.0.1:0`, read back the assignment, close) and persists
-it. This is what lets two independent `PIX_HOME` installs on the same host
+whole allocate-then-reconcile sequence) reads `.state/memory/port` first,
+otherwise adopts the historical default (18080) when it is actually free,
+or draws a genuinely free loopback port from the OS (bind `127.0.0.1:0`, read
+back the assignment, close) and persists it there. This is what lets two independent `PIX_HOME` installs on the same host
 both run `pix setup` without forcing a collision on one fixed port. Every
 other reader — the container spec, the registered MCP URL, `pix run`'s
 effective built-in, `pix env --effective` preview, doctor, reset — reads the
@@ -545,7 +540,7 @@ Pix doctor probes it; Pix does not supervise it.
 
 ## 11. Trust and secrets
 
-Environment trust is an HMAC-bound record under `~/.pix/state/trust`, owned by
+Environment trust is an HMAC-bound record under `~/.pix/.state/trust`, owned by
 the launcher rather than the approved environment. The canonical bill of
 materials includes every host-affecting fact:
 
@@ -787,9 +782,9 @@ The PR is ready to merge only after one supported host proves:
 3. `pix-memory` starts, survives Docker restart, retains its database, and is
    reachable through the sbx Gateway but not directly from the sandbox;
    **auth (security re-review round 1 blocker #1), exact steps:**
-   `pix setup` generates `~/.pix/state/memory/auth.token` (mode 0600, the
+   `pix setup` generates `~/.pix/.state/memory/auth.token` (mode 0600, the
    RAW `<64 hex chars>`, no `KEY=value` wrapping) and `docker inspect
-   pix-memory` shows `-v ~/.pix/state/memory/auth.token:/run/secrets/
+   pix-memory` shows `-v ~/.pix/.state/memory/auth.token:/run/secrets/
    pix-memory-auth:ro` in its create config — never `--env-file`/a literal
    `-e MEMORY_AUTH_TOKEN=...` argument, and never a
    `MEMORY_AUTH_TOKEN=<value>` entry in `docker inspect`'s `Config.Env`
@@ -798,7 +793,7 @@ The PR is ready to merge only after one supported host proves:
    avoids) or in `ps aux` while `docker create`/`docker run` executed. Then:
    `curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:<port>/mcp`
    (no credential) must print `401`; the same curl with
-   `-H "Authorization: Bearer $(cat ~/.pix/state/memory/auth.token)"`
+   `-H "Authorization: Bearer $(cat ~/.pix/.state/memory/auth.token)"`
    must reach the MCP handshake instead of `401`; and
    `curl -s http://127.0.0.1:<port>/healthz` must succeed with NO credential
    at all (§9.1's stated exception). `sbx mcp ls` (or the registered

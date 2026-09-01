@@ -15,6 +15,7 @@ import (
 	"pix/host/config"
 	"pix/host/container"
 	"pix/host/hostenv"
+	"pix/host/pixhome"
 	"pix/host/sys/systest"
 	"pix/host/workflow/launch"
 )
@@ -387,14 +388,22 @@ func TestInjectTrustedHostState_IgnoresStaleWorkspaceFile(t *testing.T) {
 
 // TestBuildHostState_MemoryPortIsPerHome pins Wave D's per-home port fix: the
 // trusted host-state payload must report the port THIS PIX_HOME's pix-memory
-// container is actually published on (config.toml's memory_port, allocated by
+// container is actually published on (.state/memory/port, allocated by
 // `pix setup`), not a compiled-in literal that belonged to whichever stack
 // happened to get the default. Two coexisting PIX_HOMEs have two ports; a
 // payload naming the wrong one tells the in-VM agent memory is up when it is
 // another stack's memory that is up.
 func TestBuildHostState_MemoryPortIsPerHome(t *testing.T) {
 	const configured = 41234
-	cfg := &config.Config{MemoryPort: configured}
+	home := pixhome.New(t.TempDir())
+	t.Setenv("PIX_HOME", home.Home)
+	if err := os.MkdirAll(home.StateMemory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home.StateMemory, "port"), []byte("41234\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
 	var dialed []int
 	hs := launch.BuildHostState(cfg, "", false, func(p int) bool {
 		dialed = append(dialed, p)

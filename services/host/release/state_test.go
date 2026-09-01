@@ -10,7 +10,7 @@ import (
 
 func TestInstallStatePath(t *testing.T) {
 	got := InstallStatePath(filepath.FromSlash("/home/u/.pix"))
-	want := filepath.FromSlash("/home/u/.pix/state/release.json")
+	want := filepath.FromSlash("/home/u/.pix/.state/release.json")
 	if got != want {
 		t.Errorf("InstallStatePath = %q, want %q", got, want)
 	}

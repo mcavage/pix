@@ -204,6 +204,28 @@ func TestSetupInstallsTheReleaseBundleAndRecordsANonzeroManifest(t *testing.T) {
 	if !strings.Contains(out.String(), "runtime installed") {
 		t.Fatalf("setup must report what it installed; got:\n%s", out.String())
 	}
+
+	// 5. Fresh PIX_HOME exposes only the coherent user/runtime roots. Legacy
+	// duplicate content trees and visible state are never scaffolded.
+	for _, dead := range []string{"skills", "agents", "output-styles", "pi", "state", "creation-hmac.key"} {
+		if _, err := os.Stat(filepath.Join(home, dead)); !os.IsNotExist(err) {
+			t.Errorf("fresh setup created dead root %q: %v", dead, err)
+		}
+	}
+	for _, live := range []string{"context", "envs", "runtime", ".state"} {
+		if _, err := os.Stat(filepath.Join(home, live)); err != nil {
+			t.Errorf("fresh setup is missing root %q: %v", live, err)
+		}
+	}
+	cfgBytes, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, noise := range []string{"memory_port", "memory_watcher_model", "memory_embed_model", "[plugins]", "[kits]", "[skills]"} {
+		if strings.Contains(string(cfgBytes), noise) {
+			t.Errorf("fresh sparse config contains %q:\n%s", noise, cfgBytes)
+		}
+	}
 }
 
 func TestSetupRefusesAnIncompleteInstallationBeforeTouchingDocker(t *testing.T) {

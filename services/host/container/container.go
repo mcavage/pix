@@ -1,7 +1,7 @@
 // Package container is the Docker adapter and reconciliation logic for the
 // one named `pix-memory` container docs/design/pix-v2-architecture.md §9.1
 // describes: an immutable image digest, `--restart unless-stopped`, a
-// loopback-only published port, and exactly `~/.pix/state/memory:/data`
+// loopback-only published port, and exactly `~/.pix/.state/memory:/data`
 // mounted writable. It is an L1 capability — pure docker-CLI mechanism, no
 // setup/doctor/reset orchestration of its own, and no import of a sibling
 // capability.

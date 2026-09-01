@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -190,6 +191,18 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 		return nil
 	}
 	trusted, fp, bomErr := trustAccepted(home, sel)
+	loaded, loadErr := nativeenv.LoadHome(sel, nil, nil)
+	var model, modelSource string
+	var modelErr error
+	var agentModels map[string]string
+	if loadErr == nil {
+		model, modelSource, modelErr = resolveRunModel("", loaded.Sidecar, defaultShellEnv())
+		if loaded.Sidecar != nil {
+			agentModels = loaded.Sidecar.Agents
+		}
+	} else {
+		modelErr = loadErr
+	}
 	if c.JSON {
 		fields := map[string]any{
 			"name": sel.Name, "root": sel.Root, "symlinked": sel.Symlinked,
@@ -197,6 +210,14 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 		}
 		if bomErr != nil {
 			fields["trust_error"] = bomErr.Error()
+		}
+		if model != "" {
+			fields["model"] = model
+			fields["model_source"] = modelSource
+			fields["agents"] = agentModels
+		}
+		if modelErr != nil {
+			fields["model_error"] = modelErr.Error()
 		}
 		b, _ := json.MarshalIndent(fields, "", "  ")
 		fmt.Fprintln(d.Out, string(b))
@@ -208,6 +229,24 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 	fmt.Fprintf(d.Out, "sbxenv:      %s\n", presentIfExists(sel.SbxEnvPath()))
 	fmt.Fprintf(d.Out, "sidecar:     %s\n", presentIfExists(sel.SidecarPath()))
 	fmt.Fprintf(d.Out, "trusted:     %v\n", trusted)
+	if modelErr != nil {
+		fmt.Fprintf(d.Out, "model:       unresolved (%s)\n", modelErr)
+	} else {
+		fmt.Fprintf(d.Out, "model:       %s (%s)\n", model, modelSource)
+		if len(agentModels) == 0 {
+			fmt.Fprintln(d.Out, "agents:      inherit main model")
+		} else {
+			names := make([]string, 0, len(agentModels))
+			for name := range agentModels {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			fmt.Fprintln(d.Out, "agents:")
+			for _, name := range names {
+				fmt.Fprintf(d.Out, "  %s -> %s\n", name, agentModels[name])
+			}
+		}
+	}
 	if trusted {
 		fmt.Fprintf(d.Out, "fingerprint: %s\n", fp)
 	}

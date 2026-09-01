@@ -3,11 +3,11 @@ package container
 import (
 	"errors"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 
-	"pix/host/config"
 	"pix/host/pixhome"
 )
 
@@ -30,12 +30,8 @@ func TestEnsureMemoryPort_RerunStable(t *testing.T) {
 	if p2 != p1 {
 		t.Fatalf("port changed across a rerun: %d != %d", p1, p2)
 	}
-	c, err := config.LoadFrom(config.PathAt(home.Home))
-	if err != nil {
-		t.Fatalf("LoadFrom: %v", err)
-	}
-	if c.MemoryPort != p1 {
-		t.Errorf("persisted MemoryPort = %d, want %d", c.MemoryPort, p1)
+	if got, ok, err := readPersistedMemoryPort(home); err != nil || !ok || got != p1 {
+		t.Errorf("persisted memory port = (%d, %v, %v), want (%d, true, nil)", got, ok, err, p1)
 	}
 }
 
@@ -73,7 +69,7 @@ func TestEnsureMemoryPort_TwoHomesDistinctPortsWhileFirstListenerHeld(t *testing
 	// Home #1 "already has" the held port recorded (as if `pix setup` ran
 	// earlier and its container is still bound to it).
 	home1 := pixhome.New(t.TempDir())
-	if err := config.SaveTo(config.PathAt(home1.Home), &config.Config{MemoryPort: held}); err != nil {
+	if err := persistMemoryPort(home1, held); err != nil {
 		t.Fatalf("seed home #1: %v", err)
 	}
 
@@ -139,12 +135,8 @@ func TestReadMemoryPort_PreSetupDefaultsWithoutAllocating(t *testing.T) {
 	if got != DefaultMemoryPort {
 		t.Errorf("ReadMemoryPort (pre-setup) = %d, want the display default %d", got, DefaultMemoryPort)
 	}
-	c, err := config.LoadFrom(config.PathAt(home.Home))
-	if err != nil {
-		t.Fatalf("LoadFrom: %v", err)
-	}
-	if c.MemoryPort != 0 {
-		t.Errorf("ReadMemoryPort must never allocate: MemoryPort = %d, want 0", c.MemoryPort)
+	if _, err := os.Stat(memoryPortPath(home)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("ReadMemoryPort mutated state: stat error = %v, want not-exist", err)
 	}
 }
 

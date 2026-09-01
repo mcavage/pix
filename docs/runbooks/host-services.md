@@ -10,7 +10,7 @@ there is no supervisor process left to page for, so nothing below names one.
 Each `PIX_HOME` stack owns one resident Docker container,
 `pix-memory-<stack-id>` (`docs/design/pix-v2-architecture.md` section 9): a
 Go MCP server published on host loopback only, with `unless-stopped` restart
-and `$PIX_HOME/state/memory` mounted writable. `pix setup` creates and
+and `$PIX_HOME/.state/memory` mounted writable. `pix setup` creates and
 reconciles the active stack's container; nothing else supervises it.
 
 The load-bearing property: Docker's restart policy recovers a **dead**
@@ -43,11 +43,11 @@ docker logs pix-memory-<stack-id> --since 15m
    restart never loses history.
 4. If restart does not clear it: `docker logs pix-memory-<stack-id>` for the reason
    (a locked SQLite file, a local-inference backend that stopped answering,
-   a full disk under `~/.pix/state/memory`).
+   a full disk under `~/.pix/.state/memory`).
 
 ### Container will not start at all
 
-Check the mount (`~/.pix/state/memory` must exist and be writable by the
+Check the mount (`~/.pix/.state/memory` must exist and be writable by the
 container's user) and the image digest doctor expects versus what is
 present (`docker inspect pix-memory-<stack-id>` versus the release manifest doctor
 reads). A mismatched digest means setup has not reconciled the container
@@ -61,7 +61,7 @@ docker restart pix-memory-<stack-id>    # 2. restart only this stack's container
 pix setup                               # 3. reconcile this stack from its manifest
 ```
 
-Memory data lives in `~/.pix/state/memory`, never in the launcher's own
+Memory data lives in `~/.pix/.state/memory`, never in the launcher's own
 state directory: restarting or reconciling the container never touches it.
 `memory_snapshot`/`memory_restore` (called through MCP; see `docs/memory.md`)
 are the supported backup path if you need one before a risky operation.

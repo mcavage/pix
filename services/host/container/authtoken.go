@@ -44,7 +44,7 @@ const MemoryAuthTokenEnvKey = "MEMORY_AUTH_TOKEN"
 // of that mount.
 const memoryAuthTokenFileName = "auth.token"
 
-// MemoryAuthTokenPath is <home>/state/memory/auth.token: the one file both
+// MemoryAuthTokenPath is <home>/.state/memory/auth.token: the one file both
 // the token generator (EnsureMemoryAuthToken) and the container's read-only
 // bind mount (homeContainerSpec's AuthTokenFile) agree names the same
 // secret.

@@ -125,7 +125,7 @@ const DefaultEnvironmentName = "default"
 // `none` and never touch the very environment this call just wrote. The
 // write goes through config.SetDefaultEnvironmentAt: load-modify-save the
 // WHOLE schema under the config lock, so a concurrent writer's own field
-// (MemoryPort, Inference, VersionPin — every sibling this function has no
+// (Inference, VersionPin — every sibling this function has no
 // business knowing about) is never lost to a stale-load race. It is set
 // ONLY when this call is the one that actually created the directory, and
 // ONLY when config.toml does not already name a default: a host that
