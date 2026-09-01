@@ -133,7 +133,7 @@ func TestEffectiveEnvironment_TwoRepositoriesOneEnvironment(t *testing.T) {
 // selectable create shape, no `--prune-bindings`, no name-based create.
 func TestEnvCreateArgs_IsTheOnlyCreateShape(t *testing.T) {
 	got := EnvCreateArgs("/state/environments/pix-x/effective.sbxenv.yaml")
-	want := []string{"env", "create", "/state/environments/pix-x/effective.sbxenv.yaml"}
+	want := []string{"env", "create", "--auto-approve", "/state/environments/pix-x/effective.sbxenv.yaml"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("EnvCreateArgs = %v, want %v", got, want)
 	}

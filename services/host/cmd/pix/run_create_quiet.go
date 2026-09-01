@@ -9,23 +9,13 @@
 // string, which must never reach a terminal, a diagnostic, or a log (the
 // same rule container.RedactMemoryURLToken exists for).
 //
-// So the create child, and ONLY the create child, gets:
-//   - the approval on stdin, written by this launcher, after its own gate
-//     said yes;
-//   - stdout/stderr captured into a bounded buffer instead of the user's
-//     terminal; on success nothing is printed at all.
+// So the create argv carries sbx's explicit --auto-approve flag only after
+// Pix's own gate said yes, and the create child's stdout/stderr is captured
+// instead of sent to the user's terminal. On success nothing is printed.
 //
 // On failure the captured text is still the best diagnostic there is, so it
 // is printed — bounded, terminal-safe, and with the memory token and every
 // configured secret value redacted. The raw plan is never displayed.
-//
-// One thing this file cannot prove on its own: if a future sbx reads its
-// approval from /dev/tty rather than from stdin, the bytes written here
-// never reach it and the create fails visibly (the captured, redacted
-// diagnostic is what the user then sees) instead of silently proceeding.
-// That is a host fact, so the proof is the host UAT row U5b in
-// scripts/host-uat.sh, run against a real sbx; there is deliberately no
-// shell/pty wrapper here to paper over it.
 //
 // The interactive `sbx exec` session keeps ordinary inherited stdio: it IS
 // the user's session. The two children are told apart by the SessionDeps
@@ -44,12 +34,6 @@ import (
 	"pix/host/secret"
 	"pix/host/sys"
 )
-
-// sbxCreateApproval is what this launcher writes to the create child's
-// stdin. It is deliberately more than one "y": sbx may ask nothing at all
-// (an older build, or a non-TTY default), and a prompt-free create must
-// simply ignore the bytes rather than block on a reader that closed.
-const sbxCreateApproval = "y\ny\n"
 
 // createCaptureLimit bounds what a failed create may print. Enough for a
 // real sbx error, small enough that a runaway plan cannot flood a terminal.
@@ -88,13 +72,13 @@ func (c *createCapture) text() (string, bool) {
 	return string(c.buf), c.overflow
 }
 
-// quietCreateSpawn builds the create child: the approval on stdin, output
-// into cap, and this process's environment. bin is the sbx binary name (the
+// quietCreateSpawn builds the create child with captured output and this
+// process's environment. The argv itself carries --auto-approve. bin is the sbx binary name (the
 // production caller always passes "sbx"; a test points it at a fixture).
 func quietCreateSpawn(bin string, cap *createCapture) func(argv []string) *exec.Cmd {
 	return func(argv []string) *exec.Cmd {
 		cmd := exec.Command(bin, argv...)
-		cmd.Stdin = strings.NewReader(sbxCreateApproval)
+		cmd.Stdin = nil
 		cmd.Stdout, cmd.Stderr = cap, cap
 		cmd.Env = os.Environ()
 		return cmd

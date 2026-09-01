@@ -416,11 +416,15 @@ func resolveInterpolation(lookupEnv func(string) (string, bool), varName string,
 }
 
 // EnvCreateArgs is the ONE create argv this launcher composes:
-// `sbx env create <effective>`. There is deliberately no second,
+// `sbx env create --auto-approve <effective>`. Pix has already compiled and
+// trust-checked the exact document, so sbx's second host-change approval is
+// redundant. Without this flag sbx 0.41 refuses a captured/non-TTY create even
+// when approval bytes are available on stdin.
+// There is deliberately no second,
 // selectable create shape (PRD §8) — every create goes through the stable
 // effective document, so create and remove name the same file.
 func EnvCreateArgs(effectivePath string) []string {
-	return []string{"env", "create", effectivePath}
+	return []string{"env", "create", "--auto-approve", effectivePath}
 }
 
 // EnvRecreateGuidance is the ONE recovery command for an environment

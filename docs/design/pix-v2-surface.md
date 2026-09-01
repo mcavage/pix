@@ -94,9 +94,11 @@ pix version
 
 ### 3.1 `pix` and `pix run`
 
-Bare `pix` is the normal command. On an interactive terminal it behaves like
-`pix run .`. With non-interactive stdin, bare `pix` prints `pix ls` and never
-launches as a side effect of a script or pipe.
+Bare `pix` is the normal command. On an interactive terminal with existing
+config it behaves like `pix run .`; on the first run for a new `PIX_HOME`, it
+runs setup and launches only after setup succeeds. Explicit `pix run` skips that
+first-run setup. With non-interactive stdin, bare `pix` prints `pix ls` and never
+mutates or launches as a side effect of a script or pipe.
 
 A **holder** is one live node in a Pix session tree that still depends on a
 sandbox. The interactive root process is one holder. A running child agent is

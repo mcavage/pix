@@ -261,8 +261,9 @@ credential, never accepts environment trust, and never executes a
 `[[setup]]` hook; the `pix-memory` replace confirmation is auto-answered
 only for a container already proven to carry this stack's ownership label,
 and a failure after the release record is written restores the previous
-record so the next run retries. A home with no installed manifest is a
-first run and still requires `pix setup` explicitly. It:
+record so the next run retries. On a bare interactive first run with no config,
+Pix runs this setup flow and launches only after it succeeds. Explicit `pix
+run` remains the setup opt-out; non-interactive bare `pix` stays read-only. It:
 
 1. checks Docker and the supported `sbx` version;
 2. initializes `PIX_HOME` and `git init -b main`, without staging or

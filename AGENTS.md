@@ -189,9 +189,10 @@ you touch the surface it names.
 2. **`config.toml` and `secrets.env` each have one named writer.** There is
    no generic config mutation command in v2; a field changes only through
    the verb that owns it (`pix env default`, `pix setup`, `pix secret set`).
-3. **An implicit launch requires a TTY.** Bare `pix` is `pix run .` only on
-   an interactive terminal; non-interactive stdin never creates or attaches
-   a sandbox as a side effect of a script or pipe.
+3. **An implicit launch requires a TTY.** Bare interactive `pix` runs setup
+   first when this `PIX_HOME` has no config, then behaves as `pix run .` only
+   after setup succeeds. Non-interactive stdin never creates or attaches a
+   sandbox and never mutates host state as a side effect of a script or pipe.
 4. **An existing sandbox is never force-removed or replayed into.** `pix rm`
    verifies the current sbx instance ID before removal; unknown sbx state
    fails closed. `--force` is a named-sandbox override only, and it never

@@ -31,39 +31,41 @@ func init() { launcher.Version = version }
 
 func main() {
 	args := os.Args[1:]
+	deps := newRootDeps()
+	exitCode := 0
 
 	if len(args) == 0 {
-		// On a fresh host with no config, onboarding comes before anything else.
-		if provision.MaybeFirstRun(os.Stdout) {
-			return
+		interactive := cli.IsTTY(os.Stdin)
+		var stop bool
+		args, exitCode, stop = planBareInvocation(interactive, provision.FirstRunNeeded(), func() int {
+			fmt.Fprintln(os.Stdout, "pix: first run; setting up this PIX_HOME before launch")
+			return dispatch([]string{"setup"}, deps)
+		})
+		if !stop {
+			exitCode = dispatch(args, deps)
 		}
-		args = bareArgs(cli.IsTTY(os.Stdin))
+	} else {
+		exitCode = dispatch(args, deps)
 	}
 
-	// Everything else is the root's: one parser, one dispatch, one exit map.
-	if code := dispatch(args, newRootDeps()); code != 0 {
-		os.Exit(code)
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }
 
-// bareArgs decides what plain `pix` means. At a terminal it is the thing you
-// almost always wanted: `run` here, which attaches to this directory's sandbox if
-// one is already up and creates it otherwise. Typing the tool's name to be told
-// what is up, and then having to type a second command to actually work, is a
-// toll on every single session.
-//
-// It stays the read-only `ls` when stdin is not a terminal, and that half is
-// load-bearing: an implicit launch is only ever safe when a human is sitting
-// there to have meant it. `pix` in a script, a pipe, a CI step, or an editor
-// task must never create or attach a sandbox as a side effect of someone
-// asking what is up, so the non-interactive answer stays read-only. This
-// mirrors the identical rule on a bare positional (`pix DIR`, see dispatch):
-// bare launches need a TTY, the explicit `pix run` never does.
-func bareArgs(interactive bool) []string {
-	if interactive {
-		return []string{"run"}
+// planBareInvocation preserves the implicit-launch safety boundary while making
+// the interactive first run real: setup must succeed before the ordinary run.
+// Explicit `pix run` never passes through here and remains the setup opt-out.
+func planBareInvocation(interactive, firstRun bool, setup func() int) (args []string, code int, stop bool) {
+	if !interactive {
+		return []string{"ls"}, 0, false
 	}
-	return []string{"ls"}
+	if firstRun {
+		if code := setup(); code != 0 {
+			return nil, code, true
+		}
+	}
+	return []string{"run"}, 0, false
 }
 
 // looksLikePath reports whether a non-flag token is meant as a filesystem path (so

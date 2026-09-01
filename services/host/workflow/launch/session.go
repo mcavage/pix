@@ -396,12 +396,11 @@ type SessionDeps struct {
 	// environment wiring; this package owns only WHEN it starts and its argv.
 	Spawn func(argv []string) *exec.Cmd
 	// SpawnCreate is Spawn's counterpart for the ONE non-interactive child
-	// this lifecycle runs: `sbx env create <effective>`. It exists as its own
-	// seam because that child needs the opposite stdio from a session — sbx
-	// 0.41 prints its own plan and asks its own "Approve this plan?" on a
-	// create, which is a SECOND approval for a document Pix already rendered
-	// and trust-gated, and whose text includes the token-bearing pix-memory
-	// URL. The command layer answers it internally and captures its output;
+	// this lifecycle runs: `sbx env create --auto-approve <effective>`. It
+	// exists as its own seam because that child needs the opposite stdio from
+	// a session: sbx 0.41 otherwise prints a second plan/approval for a document
+	// Pix already rendered and trust-gated, including the token-bearing memory
+	// URL. The command layer supplies the explicit flag and captures its output;
 	// this package still owns WHEN it starts, its argv, and the receipt/poll
 	// ordering around it. nil falls back to Spawn, so a caller (or a test)
 	// that wants one stdio wiring for both children keeps it.

@@ -379,7 +379,7 @@
     },
     "pix/host/workflow/launch": {
       "_prod_loc_note": "Review round 1 blocker #2 fix: FindPositivelyIdentified (the running-or-stopped identity check DecideEnvAttach's reattach gate now uses) and DecideEnvAttach's relaxed running-or-stopped gate. Real new logic (a stopped sandbox used to be refused outright by this gate), not accumulation. Round-7 adds EffectiveInferenceConfig: the production merge of a selected environment's pix.toml [inference.*] over machine config into an ephemeral, never-persisted snapshot for SynthesizeInferenceKit/CallableRuntimeModels/roster validation. Coexistence review fix (INFO): RemoveScopedPixSandbox, now the ONLY exported forced-removal seam, validates a RECORDED sandbox name against this stack's id before any argv is composed; the unscoped form is unexported, so no package outside launch can reach it.",
-      "prod_loc": 5172,
+      "prod_loc": 5175,
       "test_loc": 7337,
       "exports": 193,
       "exports_used_externally": 62,
@@ -393,7 +393,7 @@
         "test": 27
       },
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
-      "_launch_ux_note": "Launch UX wave: SessionDeps.SpawnCreate, the dedicated create-child seam (and spawnCreate's fallback to Spawn). The create is the ONE non-interactive child of a launch and needs the opposite stdio from a session; telling the two apart by seam rather than by sniffing argv is what keeps a future create-argv change from silently re-routing the user's terminal. Rebaselined ONCE to the EXACT current value, no slack."
+      "_launch_ux_note": "Launch UX wave: SessionDeps.SpawnCreate, the dedicated create-child seam (and spawnCreate's fallback to Spawn). The create is the ONE non-interactive child of a launch and needs the opposite stdio from a session; telling the two apart by seam rather than by sniffing argv is what keeps a future create-argv change from silently re-routing the user's terminal. sbx 0.41 follow-up: EnvCreateArgs now carries --auto-approve because captured stdin is non-TTY and sbx refuses the already trust-gated plan without the explicit flag. Rebaselined ONCE to the EXACT current value, no slack."
     },
     "pix/host/workflow/models": {
       "prod_loc": 845,

@@ -105,8 +105,8 @@ func TestEnvironmentAuthoredOllamaInference_ProducesAMaterializedKitInCreateArgv
 		t.Fatalf("RenderEffectiveEnvironment: %v", err)
 	}
 	args := EnvCreateArgs(eff2.Path)
-	if len(args) != 3 || args[0] != "env" || args[1] != "create" || args[2] != eff2.Path {
-		t.Fatalf("create argv = %v, want [env create %s]", args, eff2.Path)
+	if len(args) != 4 || args[0] != "env" || args[1] != "create" || args[2] != "--auto-approve" || args[3] != eff2.Path {
+		t.Fatalf("create argv = %v, want [env create --auto-approve %s]", args, eff2.Path)
 	}
 	onDisk, err := os.ReadFile(eff2.Path)
 	if err != nil {

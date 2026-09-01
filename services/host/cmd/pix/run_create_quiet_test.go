@@ -23,17 +23,15 @@ import (
 // already rendered and trust-gated, and whose text carries the pix-memory
 // URL with its bearer token in the query string.
 //
-// Everything here runs a REAL subprocess (a fixture that genuinely prompts
-// on stdin and genuinely prints a token in its plan), because what is being
-// proven is stdio wiring: a mocked spawn would prove nothing about which
-// file descriptor the plan came out of.
+// Everything here runs a REAL subprocess that refuses without
+// --auto-approve and prints a token-bearing plan. A mocked spawn would prove
+// nothing about the argv or which file descriptor the plan came out of.
 
 const fakeCreateToken = "d34db33fd34db33fd34db33fd34db33f"
 
 // quietCreateFixture is a real `sbx`: it prints a plan naming the
-// token-bearing memory URL, asks for approval on stdin, and refuses to
-// create unless it reads a "y". `ls` reports the sandbox once created, so
-// the ordinary create receipt/poll ordering runs unchanged.
+// token-bearing memory URL and refuses unless argv carries --auto-approve.
+// `ls` reports the sandbox once created, so receipt ordering stays unchanged.
 const quietCreateFixture = `
 d="$(dirname "$0")"
 echo "$@" >> "$d/argv.log"
@@ -51,12 +49,10 @@ ls)
 env)
 	echo "Plan: create pix-demo"
 	echo "  mcp pix-memory http://127.0.0.1:9123/mcp?token=` + fakeCreateToken + `"
-	printf 'Approve this plan? [y/N] '
-	read answer
-	if [ "$answer" != "y" ]; then
-		echo "aborted" >&2
-		exit 1
-	fi
+	case " $* " in
+	  *" --auto-approve "*) ;;
+	  *) echo "Approve them with --auto-approve" >&2; exit 1 ;;
+	esac
 	touch "$d/created"
 	exit 0
 	;;
@@ -102,8 +98,8 @@ func installQuietFixture(t *testing.T, script string) string {
 
 // TestQuietCreate_NoPromptPlanOrTokenReachesUserOutput is the whole point:
 // the create is approved internally (the fixture refuses to create without
-// a "y" on stdin, so a successful create IS the proof the approval was
-// delivered), and none of its plan, its prompt, or its token appears on any
+// --auto-approve, so success proves the flag arrived), and none of its plan,
+// its approval copy, or its token appears on any
 // stream the user sees. The session exec still gets ordinary stdio.
 func TestQuietCreate_NoPromptPlanOrTokenReachesUserOutput(t *testing.T) {
 	bin := installQuietFixture(t, quietCreateFixture)
@@ -113,7 +109,7 @@ func TestQuietCreate_NoPromptPlanOrTokenReachesUserOutput(t *testing.T) {
 
 	err := launch.RunSession(launch.SessionSpec{
 		Key: launch.SessionName(t.TempDir()), Name: "pix-demo", Creating: true,
-		EnvCreateArgs: []string{"env", "create", "/state/effective.sbxenv.yaml"},
+		EnvCreateArgs: launch.EnvCreateArgs("/state/effective.sbxenv.yaml"),
 		Invocation:    []string{"--model", "m"},
 	}, launch.SessionDeps{
 		Env: hostenv.Env{System: sys.Real{}},
@@ -144,7 +140,7 @@ func TestQuietCreate_NoPromptPlanOrTokenReachesUserOutput(t *testing.T) {
 	}
 	// It WAS captured, not merely discarded: a failed create still has to
 	// be able to say what happened.
-	if got := firstOf(capture); !strings.Contains(got, "Approve this plan?") {
+	if got := firstOf(capture); !strings.Contains(got, "Plan: create") {
 		t.Fatalf("create output = %q, want the suppressed plan captured for diagnostics", got)
 	}
 	// And the session exec kept ordinary inherited stdin.
