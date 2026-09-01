@@ -70,7 +70,7 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 			Exec:               execChecker{},
 			ContainerRunner:    container.DefaultRunner,
 			ContainerSpec:      spec,
-			Prober:             httpProber{},
+			Prober:             container.HTTPProber{},
 			DefaultEnvironment: defaultEnv,
 			MCPServerName:      mcpServerName,
 			// MCPLister is deliberately unset: sbx has no machine-readable MCP

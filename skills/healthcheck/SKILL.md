@@ -27,7 +27,9 @@ false signal.
 ### A1. Inference availability
 The active session model answering a real turn is the primary evidence. A
 runtime `inference.json` may exist when Pix synthesized custom providers, but
-its absence is normal for a native provider and must not be called degraded.
+its absence is normal for a native provider. **NEVER mark a missing
+`inference.json` degraded and NEVER recommend configuring an inference roster
+for a native provider.**
 `models-store.json` is Pi state, not proof that every listed provider is callable.
 One working model is sufficient; every vendor is not required. `proxy-managed`
 is a sentinel, not secret evidence. Exercise the current session plus the agent
@@ -98,7 +100,10 @@ enterprise-admin). Smoke-test three representative agents in parallel through
 the `subagent` tool with trivial tasks. Report each role, resolved model, and
 ok/slow/fail. Do not claim fixed model tiers: v2 resolves an explicit agent
 model, then the environment's agent mapping, then the selected main model.
-Do not launch the whole roster.
+Agents resolving to the same vendor or model as the parent is the documented
+fallback, not degraded. Call routing degraded only when an authored explicit
+agent model or environment `[agents]` mapping fails to resolve. Do not launch
+the whole roster.
 
 ### A6. Skills + tool routing
 ```bash

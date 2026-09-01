@@ -56,6 +56,7 @@ import (
 	"pix/host/lease"
 	"pix/host/sandbox"
 	"pix/host/stack"
+	"pix/host/sys"
 )
 
 // The teardown budget, as three bounds that compose to one ceiling:
@@ -342,7 +343,7 @@ func removeAndConfirm(env hostenv.Env, dir, name string, plan EnvRemovalPlan, o 
 	case timedOut:
 		return withPlanReport(TeardownResult{Verdict: TeardownFailed, Detail: fmt.Sprintf("`sbx %s` did not finish within %s; %q may still exist and its state is retained", strings.Join(rmArgv, " "), rmBudget, name)}, plan)
 	case err != nil:
-		return withPlanReport(TeardownResult{Verdict: TeardownFailed, Detail: fmt.Sprintf("`sbx %s` failed: %v: %s", strings.Join(rmArgv, " "), err, firstLine(out))}, plan)
+		return withPlanReport(TeardownResult{Verdict: TeardownFailed, Detail: fmt.Sprintf("`sbx %s` failed: %v: %s", strings.Join(rmArgv, " "), err, sys.TerminalSafe(firstLine(out)))}, plan)
 	}
 
 	for attempt := 0; attempt <= o.ProbeRetries; attempt++ {

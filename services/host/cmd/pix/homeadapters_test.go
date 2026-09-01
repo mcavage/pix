@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"pix/host/cli"
 	"pix/host/container"
@@ -89,6 +91,57 @@ func installSbxRegistrarFixture(t *testing.T, body string) string {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return dir
+}
+
+type sequenceProber struct {
+	calls int
+	fails int
+}
+
+func (p *sequenceProber) Probe(string) error {
+	p.calls++
+	if p.calls <= p.fails {
+		return fmt.Errorf("not ready")
+	}
+	return nil
+}
+
+func TestProductionSetupUsesFullMCPStartupProbe(t *testing.T) {
+	p, ok := productionSetupSeams().Prober.(startupProber)
+	if !ok {
+		t.Fatalf("setup prober = %T, want startupProber", productionSetupSeams().Prober)
+	}
+	if _, ok := p.Inner.(container.HTTPProber); !ok {
+		t.Fatalf("startup inner prober = %T, want container.HTTPProber", p.Inner)
+	}
+}
+
+func TestStartupProberRefusesNilInner(t *testing.T) {
+	if err := (startupProber{}).Probe("http://127.0.0.1:18080"); err == nil {
+		t.Fatal("expected nil inner prober to return an error")
+	}
+}
+
+func TestStartupProberRetriesUntilMemoryIsReady(t *testing.T) {
+	inner := &sequenceProber{fails: 2}
+	p := startupProber{Inner: inner, Timeout: time.Second, Interval: time.Millisecond}
+	if err := p.Probe("http://127.0.0.1:18080"); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if inner.calls != 3 {
+		t.Fatalf("calls = %d, want 3", inner.calls)
+	}
+}
+
+func TestStartupProberStopsAtDeadline(t *testing.T) {
+	inner := &sequenceProber{fails: 100}
+	p := startupProber{Inner: inner, Timeout: 10 * time.Millisecond, Interval: time.Millisecond}
+	if err := p.Probe("http://127.0.0.1:18080"); err == nil {
+		t.Fatal("expected readiness timeout")
+	}
+	if inner.calls < 2 || inner.calls > 20 {
+		t.Fatalf("calls = %d, want bounded retries", inner.calls)
+	}
 }
 
 func TestSbxMemoryRegistrarExplicitlyAllowsOwnedLoopbackEndpoint(t *testing.T) {

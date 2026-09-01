@@ -47,7 +47,7 @@ func productionSetupSeams() setupSeams {
 		DiscoverBundle:  func() (*release.Bundle, error) { return release.DiscoverBundle(release.DefaultLocator) },
 		Prereqs:         execChecker{},
 		ContainerRunner: container.DefaultRunner,
-		Prober:          httpProber{},
+		Prober:          startupProber{Inner: container.HTTPProber{}},
 		MCP:             sbxMemoryRegistrar{},
 	}
 }

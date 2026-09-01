@@ -12,7 +12,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"net/http"
 	"os/exec"
 	"strings"
 	"time"
@@ -88,39 +87,43 @@ func (execChecker) Check(name string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// httpProber is the production container.Prober: a bounded GET against
-// baseURL+"/healthz", the non-MCP liveness endpoint architecture §9.1
-// reserves for exactly this check. It never attempts an MCP
-// initialize/tools-list handshake itself — that needs a real MCP client,
-// which is the Gateway's job, not doctor's or setup's.
-type httpProber struct{ Client *http.Client }
-
-func (p httpProber) client() *http.Client {
-	if p.Client != nil {
-		return p.Client
-	}
-	return &http.Client{Timeout: 3 * time.Second}
+// startupProber absorbs the normal gap between `docker start` returning and
+// pix-memory accepting health requests. It is used only by setup/upgrade;
+// doctor keeps the same full probe one-shot so diagnostics stay fast.
+type startupProber struct {
+	Inner    container.Prober
+	Timeout  time.Duration
+	Interval time.Duration
 }
 
-func (p httpProber) Probe(baseURL string) error {
-	resp, err := p.client().Get(baseURL + "/healthz")
-	if err != nil {
-		return err
+func (p startupProber) Probe(baseURL string) error {
+	if p.Inner == nil {
+		return fmt.Errorf("startup readiness probe is not configured")
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &httpStatusError{URL: baseURL + "/healthz", Code: resp.StatusCode}
+	timeout, interval := p.Timeout, p.Interval
+	if timeout <= 0 {
+		timeout = 15 * time.Second
 	}
-	return nil
-}
-
-type httpStatusError struct {
-	URL  string
-	Code int
-}
-
-func (e *httpStatusError) Error() string {
-	return "GET " + e.URL + ": unexpected status " + http.StatusText(e.Code)
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
+	deadline := time.Now().Add(timeout)
+	var last error
+	for {
+		last = p.Inner.Probe(baseURL)
+		if last == nil {
+			return nil
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("pix-memory did not become ready within %s: %w", timeout, last)
+		}
+		if remaining < interval {
+			time.Sleep(remaining)
+		} else {
+			time.Sleep(interval)
+		}
+	}
 }
 
 // sbxMemoryRegistrar is the production workflow/provision.MCPRegistrar for

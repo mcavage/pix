@@ -88,7 +88,6 @@ func autoReconcileRelease(d *cli.Deps, s setupSeams) error {
 	}
 
 	previous := *installed
-	fmt.Fprintf(d.Err, "pix: upgrading this home's stack artifacts %s -> %s (memory container, images, runtime)\n", previous.Version, bundle.Manifest.Version)
 	res, serr := machineSetup(home, s, *bundle, autoConfirmOwnedReplace)
 	if serr != nil {
 		restoreInstalledManifest(d, home, previous)

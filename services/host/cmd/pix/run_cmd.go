@@ -389,9 +389,13 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	o.Model = model
 	switch modelSource {
 	case "[models].main":
-		fmt.Fprintf(d.Err, "pix: environment %q -> model %s\n", selection.Name, model)
+		if !o.Recreated {
+			fmt.Fprintf(d.Err, "pix: environment %q -> model %s\n", selection.Name, model)
+		}
 	case "configured provider default":
-		fmt.Fprintf(d.Err, "pix: no model selected; using %s\n", model)
+		if !o.Recreated {
+			fmt.Fprintf(d.Err, "pix: no model selected; using %s\n", model)
+		}
 	}
 
 	// There is no onboarding-proposal reconcile step here any more: an
@@ -612,7 +616,6 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 				fmt.Fprintf(d.Err, "pix run: recreate it yourself: %s\n", launch.EnvRecreateGuidance(o.Name, rec.Name))
 				return cli.SilentError{Code: 1}
 			}
-			fmt.Fprintf(d.Err, "pix run: removed %q; recreating it\n", o.Name)
 			retry.Recreated = true
 			return runLaunchAttempt(d, cloneRunOpts(retry), cloneRunOpts(retry))
 		}
