@@ -3,10 +3,10 @@
 // an os/exec-backed health.ExecChecker, an HTTP-backed container.Prober, and
 // an `sbx mcp`-backed registrar/lister for the reserved pix-memory remote.
 //
-// `sbx mcp ls` has no machine-readable endpoint output. The registrar can
-// prove a name absent, but an existing same-name registration is left alone;
-// it cannot honestly claim the URL matches. Doctor therefore reports that
-// registration as unverifiable rather than inventing a drift signal.
+// `sbx mcp ls` has no machine-readable endpoint output. Setup verifies an
+// existing endpoint when inspect/get supports it; otherwise it reconciles this
+// stack's exact scoped name with remove-then-add instead of treating presence
+// as readiness.
 package main
 
 import (
@@ -131,19 +131,10 @@ func (e *httpStatusError) Error() string {
 // keeps this a register-once-if-absent adapter rather than a drift check.
 type sbxMemoryRegistrar struct{}
 
-// EnsureMemoryRemote registers name at url with the sbx Gateway if it is not
-// already present in `sbx mcp ls`'s listing. An existing registration under
-// name is left untouched — the one unconditional rule architecture §10
-// states regardless of what this host can observe: and classified by what
-// an endpoint read-back actually proved:
-//
-//   - read back and EQUAL to url: MCPRegistrationPresentVerified.
-//   - read back and DIFFERENT: an error, naming the manual removal. Never an
-//     overwrite.
-//   - not readable at all (`sbx mcp ls` does not print endpoints, and both
-//     inspect and get failed): MCPRegistrationPresentUnverified, which the
-//     caller reports as not-ready. Presence is not a match, and calling it
-//     one would be a success word no probe earned.
+// EnsureMemoryRemote registers name at url with the sbx Gateway. A matching
+// readable endpoint is retained. A mismatched or unreadable endpoint under
+// this stack-derived name is removed and re-added, which is the only way sbx
+// 0.41 can earn current endpoint readiness without machine-readable listing.
 func (sbxMemoryRegistrar) EnsureMemoryRemote(name, url string) (provision.MCPRegistrationState, error) {
 	lsOut, _, lsErr := runSbxCapturedOut("mcp", "ls")
 	if lsErr == nil {
@@ -156,24 +147,30 @@ func (sbxMemoryRegistrar) EnsureMemoryRemote(name, url string) (provision.MCPReg
 				// never a silent "present" (round-4 review's own standard,
 				// applied here too — never a success word nothing probed).
 				matches, verified := mcp.VerifyExistingEndpoint(name, url)
-				switch {
-				case verified && !matches:
-					return provision.MCPRegistrationNone, fmt.Errorf(
-						"%s is already registered with the sbx Gateway at a different endpoint than %s; refusing to overwrite it (remove it manually first if you want pix to re-register it: sbx mcp rm %s)",
-						name, container.RedactMemoryURLToken(url), name)
-				case verified:
+				if verified && matches {
 					return provision.MCPRegistrationPresentVerified, nil
-				default:
-					return provision.MCPRegistrationPresentUnverified, nil
 				}
+				return replaceMemoryRemote(name, url)
 			}
 		}
 	}
+	return addMemoryRemote(name, url)
+}
+
+func replaceMemoryRemote(name, url string) (provision.MCPRegistrationState, error) {
+	_, stderr, err := runSbxCapturedOut("mcp", "rm", name)
+	if err != nil {
+		return provision.MCPRegistrationNone, fmt.Errorf("remove stale %s registration: %w: %s", name, err, strings.TrimSpace(stderr))
+	}
+	return addMemoryRemote(name, url)
+}
+
+func addMemoryRemote(name, url string) (provision.MCPRegistrationState, error) {
 	// This reserved endpoint is intentionally loopback and token-authenticated,
 	// so opt out of sbx's SSRF guard and hosted OAuth flow for this add only.
-	_, stderr, addErr := runSbxCapturedOut("mcp", "add", name, "--url", url, "--skip-ssrf-check", "--skip_auth")
-	if addErr != nil {
-		return provision.MCPRegistrationNone, fmt.Errorf("%w: %s", addErr, container.RedactMemoryURLToken(strings.TrimSpace(stderr)))
+	_, stderr, err := runSbxCapturedOut("mcp", "add", name, "--url", url, "--skip-ssrf-check", "--skip_auth")
+	if err != nil {
+		return provision.MCPRegistrationNone, fmt.Errorf("%w: %s", err, container.RedactMemoryURLToken(strings.TrimSpace(stderr)))
 	}
 	return provision.MCPRegistrationAdded, nil
 }

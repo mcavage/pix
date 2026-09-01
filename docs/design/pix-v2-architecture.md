@@ -521,15 +521,13 @@ Pix does not provide `mcp add`, `mcp auth`, a catalog, or a registration
 database. Setup may invoke the exact native `sbx mcp` command required by a
 selected built-in environment; errors name the native command.
 
-For each declaration Pix verifies that host-global registration matches the
-reviewed URL or local command. A same-name mismatch refuses launch and is never
-overwritten automatically. A registration already sitting under one of Pix's
-own reserved scoped names whose endpoint this host cannot read back (both
-`sbx mcp inspect` and `sbx mcp get` fail) is neither a match nor a mismatch:
-`pix setup` reports it as present and unverified, leaves it exactly as it is,
-names the two commands to inspect or remove it, and does NOT report ready.
-Presence alone is not evidence that the sandbox would reach this home's
-memory. The registry itself is one list per host, not one
+For an authored declaration, Pix verifies that the host-global registration
+matches the reviewed URL or local command; a same-name mismatch refuses. Pix's
+own `pix-memory-<stack-id>` name is different: it is derived from this
+`PIX_HOME`, so setup owns that exact entry and reconciles a mismatched or
+unreadable endpoint with `sbx mcp rm` followed by `sbx mcp add`. A matching
+readable endpoint is retained. No authored or foreign-stack name is touched.
+The registry itself is one list per host, not one
 per `PIX_HOME`: a second `PIX_HOME`'s two built-ins register under their own
 stack-scoped names in that SAME list, so the registrations sit side by side
 instead of colliding.

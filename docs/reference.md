@@ -507,9 +507,11 @@ doctor probe.
 
 `mcp.servers` performs host-global registration and attachment to that
 environment's sandbox; Pix neither defines a second MCP registry nor spawns
-those processes. A registration mismatch (same name, different command, URL,
-or credential identity) refuses launch and is never silently overwritten.
-OAuth is performed with native `sbx mcp auth`. The registry itself stays one
+those processes. An authored registration mismatch (same name, different
+command, URL, or credential identity) refuses launch. OAuth is performed with
+native `sbx mcp auth`. Pix setup may remove and re-add only this stack's derived
+`pix-memory-<stack-id>` entry when its endpoint is stale or unreadable; it never
+does that to an authored or foreign-stack name. The registry itself stays one
 host-global list (the sbx Gateway's, not Pix's), but Pix's own two
 built-ins (memory and session control) register under this stack's scoped
 names (`pix-memory-<stack-id>`, `pix-session-<stack-id>`), so a second

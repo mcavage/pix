@@ -117,22 +117,23 @@ printf '%s\n' "$@" > "$d/argv"
 	}
 }
 
-// TestSbxMemoryRegistrarRefusesMismatchedEndpointForSameScopedName proves
-// the Wave B U4 requirement: a same scoped name already registered at a
-// DIFFERENT endpoint refuses rather than being reported as present.
-func TestSbxMemoryRegistrarRefusesMismatchedEndpointForSameScopedName(t *testing.T) {
+func TestSbxMemoryRegistrarReplacesMismatchedOwnedScopedEndpoint(t *testing.T) {
 	const scopedName = "pix-memory-0123456789abcdef"
-	installSbxRegistrarFixture(t, `
+	dir := installSbxRegistrarFixture(t, `
 if [ "$1 $2" = "mcp ls" ]; then echo "`+scopedName+` remote"; exit 0; fi
 if [ "$1 $2" = "mcp inspect" ]; then echo '{"url":"http://127.0.0.1:9999/mcp"}'; exit 0; fi
+if [ "$1 $2" = "mcp rm" ]; then printf '%s\n' "$@" > "$d/rmargv"; exit 0; fi
+if [ "$1 $2" = "mcp add" ]; then printf '%s\n' "$@" > "$d/addargv"; exit 0; fi
 exit 1
 `)
-	_, err := (sbxMemoryRegistrar{}).EnsureMemoryRemote(scopedName, "http://127.0.0.1:18080/mcp")
-	if err == nil {
-		t.Fatal("expected a refusal for a mismatched endpoint under the same scoped name")
+	state, err := (sbxMemoryRegistrar{}).EnsureMemoryRemote(scopedName, "http://127.0.0.1:18080/mcp")
+	if err != nil || state != provision.MCPRegistrationAdded {
+		t.Fatalf("EnsureMemoryRemote = (%v, %v), want re-added", state, err)
 	}
-	if !strings.Contains(err.Error(), scopedName) || !strings.Contains(err.Error(), "different endpoint") {
-		t.Fatalf("error = %q, want it to name the scoped name and the mismatch", err.Error())
+	for _, f := range []string{"rmargv", "addargv"} {
+		if _, statErr := os.Stat(filepath.Join(dir, f)); statErr != nil {
+			t.Errorf("expected sbx %s during owned registration reconcile: %v", strings.TrimSuffix(f, "argv"), statErr)
+		}
 	}
 }
 
@@ -155,12 +156,9 @@ exit 1
 	}
 }
 
-// TestSbxMemoryRegistrarUnverifiedWhenEndpointCannotBeRead is the finding: a
-// pre-existing registration under this stack's scoped name that neither
-// `sbx mcp inspect` nor `sbx mcp get` can describe is present-UNVERIFIED. It
-// must not be re-added over, must not be removed, and must not be reported as
-// a match.
-func TestSbxMemoryRegistrarUnverifiedWhenEndpointCannotBeRead(t *testing.T) {
+// A scoped name is owned by this PIX_HOME. When sbx cannot read its endpoint,
+// remove and re-add that exact name so setup can earn a current registration.
+func TestSbxMemoryRegistrarReplacesUnverifiedOwnedRegistration(t *testing.T) {
 	const scopedName = "pix-memory-0123456789abcdef"
 	dir := installSbxRegistrarFixture(t, `
 if [ "$1 $2" = "mcp ls" ]; then echo "`+scopedName+` remote"; exit 0; fi
@@ -172,12 +170,12 @@ exit 1
 	if err != nil {
 		t.Fatalf("EnsureMemoryRemote: %v", err)
 	}
-	if state != provision.MCPRegistrationPresentUnverified {
-		t.Fatalf("state = %v, want present-unverified", state)
+	if state != provision.MCPRegistrationAdded {
+		t.Fatalf("state = %v, want re-added", state)
 	}
 	for _, f := range []string{"addargv", "rmargv"} {
-		if _, statErr := os.Stat(filepath.Join(dir, f)); statErr == nil {
-			t.Errorf("an unverifiable registration must be left alone, but sbx %s ran", strings.TrimSuffix(f, "argv"))
+		if _, statErr := os.Stat(filepath.Join(dir, f)); statErr != nil {
+			t.Errorf("expected sbx %s during owned registration reconcile: %v", strings.TrimSuffix(f, "argv"), statErr)
 		}
 	}
 }

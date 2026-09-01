@@ -19,19 +19,14 @@ import (
 // same package, and mutates nothing `Setup` was not explicitly asked to.
 
 // MCPRegistrar is the injectable "register this with the sbx Gateway" seam
-// for the reserved pix-memory remote MCP server (architecture §10: "Pix
-// verifies that host-global registration matches the reviewed URL or local
-// command... never overwritten automatically"). A production caller wires
-// it to `sbx mcp add`/`sbx mcp ls`; a test wires it to a fake registry.
+// for this stack's reserved pix-memory remote MCP server. A production caller
+// verifies a matching endpoint or reconciles that exact stack-derived name with
+// `sbx mcp rm` plus `sbx mcp add`; a test wires it to a fake registry.
 type MCPRegistrar interface {
-	// EnsureMemoryRemote registers name at url if unregistered and reports
-	// which honest outcome happened. An already-registered name is NEVER
-	// overwritten and NEVER reported as verified unless the endpoint was
-	// actually read back and matched: a host that cannot read it says so
-	// (MCPRegistrationPresentUnverified), and a host that reads back a
-	// DIFFERENT endpoint returns an error rather than touching it. Neither
-	// launders "there is something under this name" into "it points where we
-	// want".
+	// EnsureMemoryRemote leaves a readable matching endpoint alone and otherwise
+	// reconciles the exact stack-derived name or returns an honest failure. The
+	// state type retains PresentUnverified for injected implementations that
+	// cannot safely reconcile; Ready never treats that state as success.
 	EnsureMemoryRemote(name, url string) (state MCPRegistrationState, err error)
 }
 

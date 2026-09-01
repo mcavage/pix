@@ -518,9 +518,10 @@ semantics. It declares:
 
 According to the sbx environment contract, `mcp.servers` performs host-global
 registration and attachment to that environment's sandbox. Pix neither defines
-a second MCP registry nor spawns those processes. A registration mismatch
-refuses launch. Pix never overwrites a different host-global registration with
-the same name.
+a second MCP registry nor spawns those processes. An authored registration
+mismatch refuses launch. Setup may reconcile only this stack's derived
+`pix-memory-<stack-id>` registration with remove-then-add; it never overwrites
+an authored or foreign-stack name.
 
 Pix adds these restrictions before use:
 
