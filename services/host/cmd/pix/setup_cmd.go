@@ -306,9 +306,18 @@ func runSetupHooks(d *cli.Deps, name, root string, bom nativeenv.BillOfMaterials
 	return nil
 }
 
-// renderSetupResult prints what Setup actually did. Always shown, not only
-// under --verbose: setup is a rerunnable idempotent step and a silent
-// success gives the user nothing to confirm against.
+// renderSetupResult prints what Setup did. The normal report is exactly two
+// lines: the PIX_HOME line, and one concise outcome line — "ready" only
+// after the same Ready() a probe actually earned, never a narration of
+// every artifact touched along the way. --verbose restores the full
+// per-artifact detail (runtime, default env, container action, MCP
+// registration) for anyone who wants to see it; a converged, idempotent
+// rerun is exactly as quiet as a fresh success, because nothing changed is
+// exactly as uninteresting either way. A FAILED outcome is never gated
+// behind --verbose: renderSetupNotReady always prints the real
+// container/MCP reason and the exact remedy, not a bare "run pix doctor"
+// deflection (a full host report is still offered, alongside the reason,
+// never instead of it).
 func renderSetupResult(d *cli.Deps, home pixhome.Paths, res provision.Result, verbose bool) {
 	switch {
 	case res.Init.CreatedHome:
@@ -316,6 +325,22 @@ func renderSetupResult(d *cli.Deps, home pixhome.Paths, res provision.Result, ve
 	default:
 		fmt.Fprintf(d.Out, "pix setup: PIX_HOME already initialized at %s\n", home.Home)
 	}
+	if verbose {
+		renderSetupArtifactDetail(d, home, res)
+	}
+	if res.Ready() {
+		fmt.Fprintln(d.Out, "pix setup: ready. For the full host report: pix doctor")
+		return
+	}
+	renderSetupNotReady(d, res)
+}
+
+// renderSetupArtifactDetail is the per-artifact narration --verbose
+// restores: runtime install, default-env creation, container reconcile
+// action, and MCP registration outcome. It is never the only place a
+// FAILURE reason is printed — see renderSetupNotReady, which always runs on
+// an unready result regardless of this flag.
+func renderSetupArtifactDetail(d *cli.Deps, home pixhome.Paths, res provision.Result) {
 	if res.ReleaseInstalled {
 		verb := "already installed"
 		if res.Runtime.Extracted {
@@ -336,6 +361,34 @@ func renderSetupResult(d *cli.Deps, home pixhome.Paths, res provision.Result, ve
 	case res.MCPState == provision.MCPRegistrationPresentVerified:
 		fmt.Fprintln(d.Out, "pix setup: pix-memory MCP registration: already registered at this home's endpoint (read back and matched); left untouched")
 	case res.MCPState == provision.MCPRegistrationPresentUnverified:
+		// The unverified reason is printed unconditionally by
+		// renderSetupNotReady (it is a failure reason, not artifact color),
+		// so there is nothing additional to add here under --verbose.
+	default:
+		fmt.Fprintln(d.Out, "pix setup: pix-memory MCP registration: not attempted")
+	}
+	fmt.Fprintf(d.Err, "pix setup: pix home %s: container %s\n", home.Home, res.Container.Action)
+}
+
+// renderSetupNotReady prints the ACTUAL reason Setup left the host not
+// ready and the EXACT next action — a failed readiness probe's own error, a
+// declined container replace and its drift, a foreign-stack name collision,
+// or an unverifiable MCP registration — never a bare "run pix doctor"
+// deflection. It always runs when res.Ready() is false, independent of
+// --verbose: a failure is not narration to suppress.
+func renderSetupNotReady(d *cli.Deps, res provision.Result) {
+	fmt.Fprintln(d.Out, "pix setup: not ready.")
+	switch {
+	case res.Container.ProbeErr != nil:
+		fmt.Fprintf(d.Out, "  pix-memory did not pass its readiness probe: %v\n", res.Container.ProbeErr)
+		fmt.Fprintf(d.Out, "  Check what's wrong, then rerun: docker logs %s ; pix setup\n", res.Container.ID)
+	case res.Container.Action == container.ActionRefusedReplace:
+		fmt.Fprintf(d.Out, "  the running pix-memory container (%s, fingerprint %s) does not match this release's pinned image, and the replace was declined.\n", res.Container.PreviousImage, res.Container.PreviousFingerprint)
+		fmt.Fprintf(d.Out, "  Rerun `pix setup` and accept the replace, or remove it yourself: docker rm -f %s ; pix setup\n", res.Container.ID)
+	case res.Container.Action == container.ActionRefusedForeignStack:
+		fmt.Fprintf(d.Out, "  a container already exists under this name but is owned by a different Pix stack (%s); it was not adopted, started, or replaced.\n", res.Container.ForeignStackID)
+		fmt.Fprintf(d.Out, "  If it is stale, remove it yourself: docker rm -f %s ; pix setup\n", res.Container.ID)
+	case res.MCPRegistered && res.MCPState == provision.MCPRegistrationPresentUnverified:
 		// NOT "ok", and NOT "verified": nothing could read the existing
 		// entry's URL, so this run proved nothing about what the sandbox
 		// would reach through that name (safety invariant 12). Nothing was
@@ -344,19 +397,11 @@ func renderSetupResult(d *cli.Deps, home pixhome.Paths, res provision.Result, ve
 		if name == "" {
 			name = "this home's pix-memory MCP name"
 		}
-		fmt.Fprintf(d.Out, "pix setup: pix-memory MCP registration: %s is already registered, and its endpoint could not be read on this host (`sbx mcp inspect %s` and `sbx mcp get %s` both failed); left untouched, nothing overwritten or removed\n", name, name, name)
+		fmt.Fprintf(d.Out, "  %s is already registered, and its endpoint could not be read on this host (`sbx mcp inspect %s` and `sbx mcp get %s` both failed); left untouched, nothing overwritten or removed\n", name, name, name)
 		fmt.Fprintf(d.Out, "  Check it yourself, and if it is not this home's memory endpoint, remove it and rerun setup:\n    sbx mcp inspect %s\n    sbx mcp rm %s\n    pix setup\n", name, name)
 	default:
-		fmt.Fprintln(d.Out, "pix setup: pix-memory MCP registration: not attempted")
+		fmt.Fprintln(d.Out, "  pix-memory did not reach a ready state. For the full host report: pix doctor")
 	}
-	if verbose {
-		fmt.Fprintf(d.Err, "pix setup: pix home %s: container %s\n", home.Home, res.Container.Action)
-	}
-	if res.Ready() {
-		fmt.Fprintln(d.Out, "pix setup: ready. For the full host report: pix doctor")
-		return
-	}
-	fmt.Fprintln(d.Out, "pix setup: not ready. Run `pix doctor` for the exact fix.")
 }
 
 // confirmContainerReplace is the exact prompt architecture §9.1 requires

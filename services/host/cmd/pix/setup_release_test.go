@@ -160,7 +160,10 @@ func TestSetupInstallsTheReleaseBundleAndRecordsANonzeroManifest(t *testing.T) {
 
 	var out, errb bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &errb}
-	if err := (&setupCmd{}).run(d, setupSeamsFor(t, dir, docker, mcp)); err != nil {
+	// Verbose: true — this run's own assertion below is on the per-artifact
+	// narration, which a quiet default run intentionally suppresses (see
+	// setup_render_test.go for the default-quiet contract).
+	if err := (&setupCmd{Verbose: true}).run(d, setupSeamsFor(t, dir, docker, mcp)); err != nil {
 		t.Fatalf("pix setup: %v\n%s%s", err, out.String(), errb.String())
 	}
 
