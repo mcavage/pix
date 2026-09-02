@@ -97,6 +97,25 @@ func TestOfferOnePasswordKeys_Gating(t *testing.T) {
 	}
 }
 
+// TestOfferOnePasswordKeys_PromptIsConcise proves the exact, tightened
+// prompt text a real setup run shows: no wall of "raw sbx secrets" jargon,
+// just what it does and the default-No answer.
+func TestOfferOnePasswordKeys_PromptIsConcise(t *testing.T) {
+	opEnv := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "op" && len(args) >= 1 && args[0] == "--version" {
+			return "2.0", nil
+		}
+		return "", nil
+	}, ReadFileFn: func(string) (string, error) { return "", nil }}}
+	var out bytes.Buffer
+	// Decline (default No): stops right after the prompt, so the captured
+	// output is exactly that one line.
+	OfferOnePasswordKeys(opEnv, strings.NewReader("\n"), &out, true)
+	if !strings.Contains(out.String(), "Set up model providers from 1Password? [y/N]: ") {
+		t.Errorf("want the concise prompt, got %q", out.String())
+	}
+}
+
 func TestNormalizeOpRef(t *testing.T) {
 	cases := map[string]string{
 		`"op://Docker/ANTHROPIC_API_KEY/credential"`: "op://Docker/ANTHROPIC_API_KEY/credential",

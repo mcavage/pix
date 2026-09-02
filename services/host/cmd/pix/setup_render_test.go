@@ -1,8 +1,9 @@
-// setup_render_test.go proves `pix setup`'s reported UX: a quiet, two-line
-// normal report (PIX_HOME line + one concise verified outcome line), full
-// per-artifact narration gated behind --verbose, and — when readiness
-// fails — the actual container/MCP reason and exact remedy printed
-// unconditionally, never a bare "run pix doctor" deflection.
+// setup_render_test.go proves `pix setup`'s reported UX: a quiet, one-line
+// normal report on success (just the PIX_HOME line — no separate "ready"
+// narration, since a zero exit already says that), full per-artifact
+// narration gated behind --verbose, and — when readiness fails — the actual
+// container/MCP reason and exact remedy printed unconditionally, never a
+// bare "run pix doctor" deflection.
 package main
 
 import (
@@ -31,9 +32,10 @@ func readyResult() provision.Result {
 }
 
 // TestRenderSetupResult_QuietOnSuccess proves the default (non-verbose)
-// report is exactly two substantive lines: the PIX_HOME line and one
-// concise verified outcome line. Every per-artifact narration (runtime,
-// default env, container action, MCP registration) is suppressed.
+// report is exactly one substantive line: the PIX_HOME line. There is no
+// separate "ready"/"For the full host report" line, and every per-artifact
+// narration (runtime, default env, container action, MCP registration) is
+// suppressed.
 func TestRenderSetupResult_QuietOnSuccess(t *testing.T) {
 	var out bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &out}
@@ -46,20 +48,20 @@ func TestRenderSetupResult_QuietOnSuccess(t *testing.T) {
 		"runtime installed",
 		"pix-memory container:",
 		"MCP registration:",
+		"pix setup: ready",
+		"For the full host report",
+		"pix setup:",
 	} {
 		if strings.Contains(got, forbidden) {
-			t.Errorf("quiet successful setup must not narrate artifacts, found %q:\n%s", forbidden, got)
+			t.Errorf("quiet successful setup must not narrate artifacts or say ready, found %q:\n%s", forbidden, got)
 		}
 	}
-	if !strings.Contains(got, "PIX_HOME") {
-		t.Errorf("want the PIX_HOME line, got:\n%s", got)
-	}
-	if !strings.Contains(got, "pix setup: ready.") {
-		t.Errorf("want the one concise verified outcome line, got:\n%s", got)
+	if !strings.HasPrefix(got, "PIX_HOME already initialized") {
+		t.Errorf("want the unprefixed PIX_HOME line, got:\n%s", got)
 	}
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-	if len(lines) != 2 {
-		t.Errorf("want exactly 2 lines on a quiet successful run, got %d:\n%s", len(lines), got)
+	if len(lines) != 1 {
+		t.Errorf("want exactly 1 line on a quiet successful run, got %d:\n%s", len(lines), got)
 	}
 }
 
@@ -77,11 +79,13 @@ func TestRenderSetupResult_VerboseShowsArtifacts(t *testing.T) {
 		"runtime installed",
 		"pix-memory container: created",
 		"MCP registration: registered",
-		"pix setup: ready.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("verbose setup is missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "pix setup: ready") {
+		t.Errorf("a successful run must not narrate a separate ready line, even under --verbose:\n%s", got)
 	}
 }
 
@@ -191,10 +195,13 @@ func TestRenderSetupResult_QuietOnRerunNoOp(t *testing.T) {
 
 	got := out.String()
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-	if len(lines) != 2 {
-		t.Errorf("want exactly 2 lines on a quiet no-op rerun, got %d:\n%s", len(lines), got)
+	if len(lines) != 1 {
+		t.Errorf("want exactly 1 line on a quiet no-op rerun, got %d:\n%s", len(lines), got)
 	}
-	if !strings.Contains(got, "pix setup: ready.") {
-		t.Errorf("a converged rerun must still report ready:\n%s", got)
+	if !res.Ready() {
+		t.Fatal("an adopted container with a verified MCP registration must be Ready")
+	}
+	if strings.Contains(got, "pix setup: ready") || strings.Contains(got, "For the full host report") {
+		t.Errorf("a converged rerun's own zero exit already says ready; no separate line is printed:\n%s", got)
 	}
 }

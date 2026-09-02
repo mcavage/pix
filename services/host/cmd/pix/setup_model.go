@@ -63,7 +63,7 @@ func setupModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, defau
 		// R9: setup did not create the default environment this run, so its
 		// pix.toml is user-owned and untouched. Display only.
 		fmt.Fprintln(d.Out, "")
-		fmt.Fprintf(d.Out, "pix setup: the default environment already exists; it will use %s (%s).\n", fallbackModel, fallbackSource)
+		fmt.Fprintf(d.Out, "the default environment already exists; it will use %s (%s).\n", fallbackModel, fallbackSource)
 		fmt.Fprintf(d.Out, "  To change it, edit %s and set [models].main.\n", sidecarPath)
 		return
 	}
@@ -89,7 +89,7 @@ func setupModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, defau
 	}
 
 	fmt.Fprintln(d.Out, "")
-	fmt.Fprintln(d.Out, "pix setup: current models for the providers this home configures:")
+	fmt.Fprintln(d.Out, "current models for the providers this home configures:")
 	for i, m := range choices {
 		fmt.Fprintf(d.Out, "  %d) %-32s %s, context %d tokens\n", i+1, m.ID, m.Label, m.ContextWindow)
 	}
@@ -101,24 +101,24 @@ func setupModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, defau
 	}
 	line := strings.TrimSpace(sc.Text())
 	if line == "" {
-		fmt.Fprintf(d.Out, "pix setup: keeping the fallback: %s (%s)\n", fallbackModel, fallbackSource)
+		fmt.Fprintf(d.Out, "keeping the fallback: %s (%s)\n", fallbackModel, fallbackSource)
 		return
 	}
 	idx, err := strconv.Atoi(line)
 	if err != nil || idx < 1 || idx > len(choices) {
-		fmt.Fprintf(d.Out, "pix setup: %q is not one of the listed choices; keeping the fallback: %s (%s)\n", line, fallbackModel, fallbackSource)
+		fmt.Fprintf(d.Out, "%q is not one of the listed choices; keeping the fallback: %s (%s)\n", line, fallbackModel, fallbackSource)
 		return
 	}
 	chosen := choices[idx-1].ID
 	if chosen == fallbackModel {
-		fmt.Fprintf(d.Out, "pix setup: %s is already the fallback; nothing to record.\n", chosen)
+		fmt.Fprintf(d.Out, "%s is already the fallback; nothing to record.\n", chosen)
 		return
 	}
 	if err := writeScaffoldedModelMain(env, sidecarPath, chosen); err != nil {
 		fmt.Fprintf(d.Out, "pix setup: could not record the model choice: %v\n", err)
 		return
 	}
-	fmt.Fprintf(d.Out, "pix setup: recorded [models].main = %q in %s\n", chosen, sidecarPath)
+	fmt.Fprintf(d.Out, "recorded [models].main = %q in %s\n", chosen, sidecarPath)
 }
 
 // writeScaffoldedModelMain inserts `main = "<id>"` right after the

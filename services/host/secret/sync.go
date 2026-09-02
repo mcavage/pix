@@ -90,7 +90,7 @@ func OfferOnePasswordKeys(env hostenv.Env, in io.Reader, out io.Writer, tty bool
 		return
 	}
 	fmt.Fprintln(out, "")
-	if !cli.ConfirmYN(in, out, "Manage model keys in 1Password (op:// refs) instead of raw sbx secrets? [y/N]: ", false) {
+	if !cli.ConfirmYN(in, out, "Set up model providers from 1Password? [y/N]: ", false) {
 		return
 	}
 	fmt.Fprintln(out, "Paste an op:// ref per provider (op://Vault/Item/field), or Enter to skip each.")

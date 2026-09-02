@@ -178,15 +178,10 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 // It claims nothing about a model being ready. Nothing here resolved a ref,
 // so the honest close is the command that configures one.
 func setupCredentials(d *cli.Deps) {
-	path, created, err := config.SeedOpRefs()
+	path, _, err := config.SeedOpRefs()
 	if err != nil {
 		fmt.Fprintf(d.Err, "pix setup: could not create the secrets file (%s): %v\n", path, err)
 		return
-	}
-	if created {
-		fmt.Fprintf(d.Out, "pix setup: created %s (op:// references only; no secret is ever stored there)\n", path)
-	} else {
-		fmt.Fprintf(d.Out, "pix setup: secrets file present at %s\n", path)
 	}
 	env := defaultShellEnv()
 	if d.Interactive {
@@ -195,9 +190,9 @@ func setupCredentials(d *cli.Deps) {
 		secret.OfferOnePasswordKeys(env, d.In, d.Out, true)
 	}
 	if secret.ProviderKeyRefsPresent(env) {
-		fmt.Fprintln(d.Out, "pix setup: model keys are configured as 1Password refs; each run resolves them into that run's own sandbox.")
+		fmt.Fprintln(d.Out, "model keys are configured as 1Password refs; each run resolves them into that run's own sandbox.")
 	} else {
-		fmt.Fprintln(d.Out, "pix setup: no model provider key is configured yet. Next:")
+		fmt.Fprintln(d.Out, "no model provider key is configured yet. Next:")
 		fmt.Fprintln(d.Out, "  pix secret set ANTHROPIC_API_KEY op://vault/item/field   (repeat per provider)")
 		fmt.Fprintln(d.Out, "  pix secret check                                          (resolve every ref through op; no values printed)")
 	}
@@ -215,10 +210,10 @@ func setupParallelSearch(d *cli.Deps, env hostenv.Env) {
 		secret.OfferParallelSearchKey(env, d.In, d.Out, true)
 	}
 	if secret.ConfiguredParallelSearchRef(env) {
-		fmt.Fprintln(d.Out, "pix setup: Parallel web search is configured (PARALLEL_API_KEY ref present); pi-web-access uses it for that backend.")
+		fmt.Fprintln(d.Out, "Parallel web search is configured (PARALLEL_API_KEY ref present); pi-web-access uses it for that backend.")
 		return
 	}
-	fmt.Fprintln(d.Out, "pix setup: Parallel web search is optional and not configured; search falls back to other backends. To enable: pix secret set PARALLEL_API_KEY op://vault/item/field")
+	fmt.Fprintln(d.Out, "Parallel web search is optional and not configured; search falls back to other backends. To enable: pix secret set PARALLEL_API_KEY op://vault/item/field")
 }
 
 // setupSelectedEnvironment is `--env NAME`'s whole job (surface §3.6): sets
@@ -272,7 +267,7 @@ func setupSelectedEnvironment(d *cli.Deps, home pixhome.Paths, name string) erro
 	if verr := validateRunRoster(cfg, launch.EnvSelection{Name: loaded.Name, Root: loaded.Root, Sidecar: loaded.Sidecar}, shipped); verr != nil {
 		return fmt.Errorf("pix setup --env %s: %v", name, verr)
 	}
-	fmt.Fprintf(d.Out, "pix setup: environment %q declared requirements check passed.\n", name)
+	fmt.Fprintf(d.Out, "environment %q declared requirements check passed.\n", name)
 	return runSetupHooks(d, name, loaded.Root, bom)
 }
 
@@ -296,43 +291,39 @@ func runSetupHooks(d *cli.Deps, name, root string, bom nativeenv.BillOfMaterials
 	})
 	for _, o := range res.Outcomes {
 		if o.State == envsetup.StateSkipped {
-			fmt.Fprintf(d.Out, "pix setup: setup hook %s: skipped (%s)\n", o.ID, o.Detail)
+			fmt.Fprintf(d.Out, "setup hook %s: skipped (%s)\n", o.ID, o.Detail)
 		}
 	}
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(d.Out, "pix setup: environment %q setup hooks: %d checked, all required hooks ready.\n", name, len(res.Outcomes))
+	fmt.Fprintf(d.Out, "environment %q setup hooks: %d checked, all required hooks ready.\n", name, len(res.Outcomes))
 	return nil
 }
 
-// renderSetupResult prints what Setup did. The normal report is exactly two
-// lines: the PIX_HOME line, and one concise outcome line — "ready" only
-// after the same Ready() a probe actually earned, never a narration of
-// every artifact touched along the way. --verbose restores the full
-// per-artifact detail (runtime, default env, container action, MCP
-// registration) for anyone who wants to see it; a converged, idempotent
-// rerun is exactly as quiet as a fresh success, because nothing changed is
-// exactly as uninteresting either way. A FAILED outcome is never gated
-// behind --verbose: renderSetupNotReady always prints the real
-// container/MCP reason and the exact remedy, not a bare "run pix doctor"
-// deflection (a full host report is still offered, alongside the reason,
-// never instead of it).
+// renderSetupResult prints what Setup did. The normal report on success is
+// exactly one line: the PIX_HOME line — no separate "ready" narration,
+// because a successful run's own zero exit status already says that.
+// --verbose restores the full per-artifact detail (runtime, default env,
+// container action, MCP registration) for anyone who wants to see it; a
+// converged, idempotent rerun is exactly as quiet as a fresh success,
+// because nothing changed is exactly as uninteresting either way. A FAILED
+// outcome is never gated behind --verbose: renderSetupNotReady always
+// prints the real container/MCP reason and the exact remedy, not a bare
+// "run pix doctor" deflection.
 func renderSetupResult(d *cli.Deps, home pixhome.Paths, res provision.Result, verbose bool) {
 	switch {
 	case res.Init.CreatedHome:
-		fmt.Fprintf(d.Out, "pix setup: initialized PIX_HOME at %s\n", home.Home)
+		fmt.Fprintf(d.Out, "initialized PIX_HOME at %s\n", home.Home)
 	default:
-		fmt.Fprintf(d.Out, "pix setup: PIX_HOME already initialized at %s\n", home.Home)
+		fmt.Fprintf(d.Out, "PIX_HOME already initialized at %s\n", home.Home)
 	}
 	if verbose {
 		renderSetupArtifactDetail(d, home, res)
 	}
-	if res.Ready() {
-		fmt.Fprintln(d.Out, "pix setup: ready. For the full host report: pix doctor")
-		return
+	if !res.Ready() {
+		renderSetupNotReady(d, res)
 	}
-	renderSetupNotReady(d, res)
 }
 
 // renderSetupArtifactDetail is the per-artifact narration --verbose

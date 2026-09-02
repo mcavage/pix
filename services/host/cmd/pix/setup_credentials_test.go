@@ -179,3 +179,47 @@ func TestSetupCredentials_ReportsConfiguredRefsWithoutResolving(t *testing.T) {
 		t.Errorf("setup resolved or pushed a credential: %s", b)
 	}
 }
+
+// TestSetupCredentials_NormalStatusHasNoPixSetupPrefix proves the tightened
+// copy rule: normal, non-error status lines ("no model provider key is
+// configured yet", the Parallel web-search state) drop the `pix setup:`
+// prefix entirely. Only an actual failure (the secrets-file create error)
+// keeps it.
+func TestSetupCredentials_NormalStatusHasNoPixSetupPrefix(t *testing.T) {
+	_, _ = setupHome(t)
+	var out, errb bytes.Buffer
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false})
+
+	if strings.Contains(out.String(), "pix setup:") {
+		t.Errorf("normal setup status must not carry the pix setup: prefix:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "no model provider key is configured yet") {
+		t.Errorf("want the unprefixed status line, got:\n%s", out.String())
+	}
+}
+
+// TestSetupCredentials_NeverNarratesSecretsFileCreationOrPresence proves the
+// tightened copy: setup establishes secrets.env silently, on both a fresh
+// home (created) and a rerun (already present) — no "created ..." or
+// "secrets file present at ..." line either way. Only an actual failure to
+// create it still speaks, and keeps the `pix setup:` prefix.
+func TestSetupCredentials_NeverNarratesSecretsFileCreationOrPresence(t *testing.T) {
+	home, _ := setupHome(t)
+	var out, errb bytes.Buffer
+	// First run: secrets.env does not exist yet, so this call creates it.
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false})
+	for _, forbidden := range []string{"created " + filepath.Join(home, "secrets.env"), "secrets file present"} {
+		if strings.Contains(out.String(), forbidden) {
+			t.Errorf("setup must not narrate secrets.env creation, found %q:\n%s", forbidden, out.String())
+		}
+	}
+
+	// Second run: secrets.env already exists, so this call finds it present.
+	out.Reset()
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false})
+	for _, forbidden := range []string{"created " + filepath.Join(home, "secrets.env"), "secrets file present"} {
+		if strings.Contains(out.String(), forbidden) {
+			t.Errorf("setup must not narrate secrets.env presence on a rerun, found %q:\n%s", forbidden, out.String())
+		}
+	}
+}
