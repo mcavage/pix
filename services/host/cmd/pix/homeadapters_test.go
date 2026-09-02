@@ -124,12 +124,16 @@ func TestStartupProberRefusesNilInner(t *testing.T) {
 
 func TestStartupProberRetriesUntilMemoryIsReady(t *testing.T) {
 	inner := &sequenceProber{fails: 2}
-	p := startupProber{Inner: inner, Timeout: time.Second, Interval: time.Millisecond}
+	notices := 0
+	p := startupProber{Inner: inner, Timeout: time.Second, Interval: time.Millisecond, OnRetry: func(time.Duration) { notices++ }}
 	if err := p.Probe("http://127.0.0.1:18080"); err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
 	if inner.calls != 3 {
 		t.Fatalf("calls = %d, want 3", inner.calls)
+	}
+	if notices != 1 {
+		t.Fatalf("retry notices = %d, want exactly 1", notices)
 	}
 }
 

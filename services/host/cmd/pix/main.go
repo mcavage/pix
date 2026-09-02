@@ -36,14 +36,13 @@ func main() {
 
 	if len(args) == 0 {
 		interactive := cli.IsTTY(os.Stdin)
-		var stop bool
-		args, exitCode, stop = planBareInvocation(interactive, provision.FirstRunNeeded(), func() int {
+		firstRun := provision.FirstRunNeeded()
+		if interactive && firstRun {
 			fmt.Fprintln(os.Stdout, "pix: first run; setting up this PIX_HOME before launch")
-			return dispatch([]string{"setup"}, deps)
-		})
-		if !stop {
-			exitCode = dispatch(args, deps)
 		}
+		exitCode = runBareInvocation(interactive, firstRun, func(args []string) int {
+			return dispatch(args, deps)
+		})
 	} else {
 		exitCode = dispatch(args, deps)
 	}
@@ -51,6 +50,21 @@ func main() {
 	if exitCode != 0 {
 		os.Exit(exitCode)
 	}
+}
+
+// runBareInvocation executes the complete bare-pix sequence. Keeping setup and
+// run in this one function makes a successful first-run setup structurally
+// unable to return to the shell before the launch dispatch occurs.
+func runBareInvocation(interactive, firstRun bool, run func([]string) int) int {
+	if !interactive {
+		return run([]string{"ls"})
+	}
+	if firstRun {
+		if code := run([]string{"setup"}); code != 0 {
+			return code
+		}
+	}
+	return run([]string{"run"})
 }
 
 // planBareInvocation preserves the implicit-launch safety boundary while making

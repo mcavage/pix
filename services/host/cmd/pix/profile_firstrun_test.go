@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+func TestRunBareInvocation_FirstRunDispatchesSetupThenRun(t *testing.T) {
+	var calls [][]string
+	code := runBareInvocation(true, true, func(args []string) int {
+		calls = append(calls, append([]string(nil), args...))
+		return 0
+	})
+	want := [][]string{{"setup"}, {"run"}}
+	if code != 0 || !reflect.DeepEqual(calls, want) {
+		t.Fatalf("runBareInvocation = code %d calls %v, want 0 and %v", code, calls, want)
+	}
+}
+
 func TestPlanBareInvocation_FirstRunSetsUpThenRuns(t *testing.T) {
 	calls := 0
 	args, code, stop := planBareInvocation(true, true, func() int {

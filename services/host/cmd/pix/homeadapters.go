@@ -94,6 +94,7 @@ type startupProber struct {
 	Inner    container.Prober
 	Timeout  time.Duration
 	Interval time.Duration
+	OnRetry  func(time.Duration)
 }
 
 func (p startupProber) Probe(baseURL string) error {
@@ -109,10 +110,15 @@ func (p startupProber) Probe(baseURL string) error {
 	}
 	deadline := time.Now().Add(timeout)
 	var last error
+	notified := false
 	for {
 		last = p.Inner.Probe(baseURL)
 		if last == nil {
 			return nil
+		}
+		if !notified && p.OnRetry != nil {
+			p.OnRetry(timeout)
+			notified = true
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
