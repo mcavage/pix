@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Builds the Pix runtime archive: shipped skills + agent definitions + Pi UX
-# defaults (docs/design/pix-v2-architecture.md §3 / §4.2), staged into the
-# canonical ~/.pix/runtime/<version>/ layout:
+# defaults + the model catalog snapshot (docs/design/pix-v2-architecture.md
+# §3 / §4.2; Explicit Inference Setup item 1: "eliminate magic model
+# fallback visibility" by materializing the catalog the binary embeds as an
+# on-disk, inspectable release artifact), staged into the canonical
+# ~/.pix/runtime/<version>/ layout:
 #
 #   runtime/<version>/
 #     skills/
 #     agents/
+#     models.json
 #     pi/
 #       settings.json
 #       keybindings.json
@@ -42,6 +46,12 @@ cp "$ROOT/settings.json" "$RUNTIME_DIR/pi/settings.json"
 cp "$ROOT/keybindings.json" "$RUNTIME_DIR/pi/keybindings.json"
 cp -R "$ROOT/themes" "$RUNTIME_DIR/pi/themes"
 
+# The shipped model catalog (services/host/inference/catalog.go's
+# //go:embed'd default), byte-identical to what the binary embeds: a release
+# artifact a user can `cat`, not only something baked into the binary. `pix
+# env show` points at this exact path (inference.RuntimeCatalogPath).
+cp "$ROOT/services/host/inference/catalog/models.json" "$RUNTIME_DIR/models.json"
+
 # manifest.json (per docs/design/pix-v2-surface.md §4.2) names what this
 # runtime directory carries and at what version, so doctor can verify the
 # installed runtime and the pinned image agree without re-deriving it.
@@ -50,7 +60,7 @@ const fs = require("fs");
 const [version, dir] = process.argv.slice(1);
 fs.writeFileSync(
   dir + "/manifest.json",
-  JSON.stringify({ schemaVersion: 1, version, contents: ["skills", "agents", "pi/settings.json", "pi/keybindings.json", "pi/themes"] }, null, 2) + "\n",
+  JSON.stringify({ schemaVersion: 1, version, contents: ["skills", "agents", "models.json", "pi/settings.json", "pi/keybindings.json", "pi/themes"] }, null, 2) + "\n",
 );
 ' -- "$VERSION" "$RUNTIME_DIR"
 

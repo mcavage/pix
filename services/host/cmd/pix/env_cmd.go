@@ -27,7 +27,9 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/inference"
 	"pix/host/pixhome"
+	"pix/host/secret"
 	"pix/host/sys"
 	nativeenv "pix/host/workflow/env"
 )
@@ -203,6 +205,13 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 	} else {
 		modelErr = loadErr
 	}
+	// providers/catalog are the rest of R2's inspection surface: the
+	// provider REFS this home configures (names only — ConfiguredModelRefs
+	// never reads a value, only which env-var refs are filled) and where the
+	// catalog resolveRunModel consulted actually lives on disk, so the
+	// selection rule above stops being the only visible half of the story.
+	providers, refsState := secret.ConfiguredModelRefs(defaultShellEnv())
+	catalogInfo := inference.DescribeCatalogSource(home.Home, version)
 	if c.JSON {
 		fields := map[string]any{
 			"name": sel.Name, "root": sel.Root, "symlinked": sel.Symlinked,
@@ -219,6 +228,23 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 		if modelErr != nil {
 			fields["model_error"] = modelErr.Error()
 		}
+		if refsState == secret.RefsAnswered {
+			out := providers
+			if out == nil {
+				out = []string{}
+			}
+			fields["providers"] = out
+		} else {
+			fields["providers_error"] = "secrets.env unreadable"
+		}
+		catalog := map[string]any{
+			"source": catalogInfo.Source, "runtime_path": catalogInfo.RuntimePath,
+			"runtime_installed": catalogInfo.RuntimePathExists,
+		}
+		if catalogInfo.OverridePath != "" {
+			catalog["override_path"] = catalogInfo.OverridePath
+		}
+		fields["catalog"] = catalog
 		b, _ := json.MarshalIndent(fields, "", "  ")
 		fmt.Fprintln(d.Out, string(b))
 		return nil
@@ -247,6 +273,8 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 			}
 		}
 	}
+	fmt.Fprintf(d.Out, "providers:   %s\n", renderConfiguredProviders(providers, refsState))
+	fmt.Fprintf(d.Out, "catalog:     %s\n", renderCatalogSource(catalogInfo))
 	if trusted {
 		fmt.Fprintf(d.Out, "fingerprint: %s\n", fp)
 	}
@@ -262,6 +290,37 @@ func presentIfExists(path string) string {
 		return path
 	}
 	return "(absent)"
+}
+
+// renderConfiguredProviders is `pix env show`'s provider-refs line: NAMES
+// only (never a value, never a resolved secret), and always a line even
+// when nothing is configured or secrets.env could not be read — an omitted
+// line reads as "nothing to report", which is exactly the invisible-input
+// failure this surface exists to end.
+func renderConfiguredProviders(providers []string, state secret.RefsProbeState) string {
+	if state != secret.RefsAnswered {
+		return "unknown (secrets.env unreadable)"
+	}
+	if len(providers) == 0 {
+		return "(none configured)"
+	}
+	return strings.Join(providers, ", ") + " (from secrets.env; names only)"
+}
+
+// renderCatalogSource is `pix env show`'s catalog-provenance line: which
+// catalog resolveRunModel actually consulted (an override on disk, else the
+// embedded default) plus the release-materialized, on-disk copy of that
+// embedded default — so "the shipped catalog" is something a user can `cat`,
+// not only something baked into the binary.
+func renderCatalogSource(info inference.CatalogSourceInfo) string {
+	if info.Source == "override" {
+		return "override " + info.OverridePath
+	}
+	installed := "not yet installed; run `pix setup`"
+	if info.RuntimePathExists {
+		installed = "installed"
+	}
+	return fmt.Sprintf("embedded default; materialized snapshot: %s (%s)", info.RuntimePath, installed)
 }
 
 // ── default ──────────────────────────────────────────────────────────────

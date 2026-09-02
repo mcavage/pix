@@ -204,17 +204,23 @@ agent: pix
 // pins) and nothing that native sbx already owns.
 //
 // It deliberately selects NO model and NO local inference backend. Model
-// choice is by name from this file's [models].main, Pi's default otherwise
-// (safety invariant 10), and a local inference backend is authored here per
-// environment — setup does not interview for either, and `pix doctor`
-// reports what an environment actually declares.
+// choice is by name from this file's [models].main; an empty main selects
+// the shipped literal default for whichever provider this PIX_HOME actually
+// configures, never Pi's own stale native default (safety invariant 10;
+// cmd/pix's resolveRunModel is the one implementation of this rule). A local
+// inference backend is authored here per environment — setup does not
+// interview for either, and `pix env show` / `pix doctor` report what an
+// environment actually declares and which rule won.
 func defaultSidecar() string {
 	return `# Created by ` + "`pix setup`" + `. Thin on purpose: it declares only what native
 # sbx does not own. Pix never rewrites this file.
 schema = 1
 
 [models]
-# main = "claude-sonnet-4-5"   # a model NAME; empty means Pi's own default
+# main = "anthropic/claude-sonnet-5"  # a model NAME (provider/id); empty
+# means the shipped default for whichever provider this home configures
+# (never Pi's own native default). Run 'pix env show' to see the model
+# that will answer and the rule that chose it.
 
 [memory]
 scope = "shared"

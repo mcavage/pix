@@ -191,6 +191,55 @@ func CatalogPath() string {
 	return filepath.Join(dir, "models.json")
 }
 
+// CatalogSourceInfo is what the inspection surface (`pix env show`) reports
+// about the catalog: which one LoadCatalog will actually read on this host,
+// and where the release-materialized, on-disk copy of the embedded default
+// lives — so "the embedded catalog" stops being something only readable by
+// disassembling the binary.
+type CatalogSourceInfo struct {
+	// Source is "override" when a catalog override exists ON DISK (an env
+	// var or hand-authored PIX_HOME/models.json that LoadCatalog will read),
+	// else "embedded".
+	Source string
+	// OverridePath is set only when Source == "override".
+	OverridePath string
+	// RuntimePath is the release-materialized copy of the embedded default
+	// catalog: <homeDir>/runtime/<version>/models.json, staged there by
+	// scripts/release/build-runtime-archive.sh. LoadCatalog never reads this
+	// path — it exists purely so the shipped default is something a user can
+	// `cat`, not only something baked into the binary.
+	RuntimePath string
+	// RuntimePathExists reports whether RuntimePath is actually installed.
+	RuntimePathExists bool
+}
+
+// RuntimeCatalogPath is the release-materialized catalog snapshot's path
+// under a Pix home: <homeDir>/runtime/<version>/models.json. A pure path
+// builder; it does not check existence.
+func RuntimeCatalogPath(homeDir, version string) string {
+	return filepath.Join(homeDir, "runtime", version, "models.json")
+}
+
+// DescribeCatalogSource answers, for the inspection surface, "which catalog
+// would LoadCatalog read right now, and where is the inspectable copy" —
+// without becoming a second selection input itself: it reports the same
+// override CatalogPath/LoadCatalog would read (only when that path actually
+// exists on disk; a stale $PIX_MODEL_CATALOG pointed at nothing is not an
+// active override), and separately whether the release-materialized runtime
+// snapshot is installed.
+func DescribeCatalogSource(homeDir, version string) CatalogSourceInfo {
+	info := CatalogSourceInfo{Source: "embedded", RuntimePath: RuntimeCatalogPath(homeDir, version)}
+	if p := CatalogPath(); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			info.Source, info.OverridePath = "override", p
+		}
+	}
+	if _, err := os.Stat(info.RuntimePath); err == nil {
+		info.RuntimePathExists = true
+	}
+	return info
+}
+
 // LoadCatalog reads the catalog: the on-disk override if one exists, else the
 // shipped default embedded in this binary. Either way it is validated, so a
 // hand-edited override fails loudly instead of silently describing a model

@@ -21,8 +21,9 @@
     },
     "pix/host/cmd/pix": {
       "_prod_loc_note": "Environment [[setup]] hooks (the v2 replacement for pack-authored install/auth hooks): a real capability addition, not accumulation. setup_cmd.go's runSetupHooks wires `pix setup --env NAME` to the envsetup runner (+1 edge for pix/host/envsetup) and env_cmd.go's renderTrustBill now prints each hook's id/kind/required/check argv/apply argv/sha256 in the DEFAULT consent screen, since a count is not consent. Setup-hook TOCTOU/inputs hardening: env_cmd.go now renders each hook's declared `inputs` (path + sha256) and quotes every argv element individually (safeArgv) instead of a bare space-Join, so a reviewer sees the real argument boundaries os/exec will use. Coexistence review fixes: pix task rm resolves this stack's id and routes teardown through launch.RemoveScopedPixSandbox, so it can never force-remove another PIX_HOME's sandbox, and pix setup renders the new present-but-UNVERIFIED memory MCP registration state with its exact manual remedy (inspect, rm, rerun) instead of one line that called an unprobed registration present.",
-      "prod_loc": 4680,
-      "test_loc": 6667,
+      "_inference_setup_note": "Explicit Inference Setup item 1/2: `pix env show` now reports the provider REFS this home configures (names only, secret.ConfiguredModelRefs) and the catalog source/materialized-snapshot path (inference.DescribeCatalogSource), plus their two renderers (renderConfiguredProviders/renderCatalogSource) \u2014 the rest of the selection-rule inspection surface, real capability, not accumulation.",
+      "prod_loc": 4767,
+      "test_loc": 7806,
       "exports": 5,
       "exports_used_externally": 0,
       "exits": 1,
@@ -153,9 +154,10 @@
       "_prod_loc_note": "ReadVerifiedFile added: HashFile's byte-returning twin (O_NOFOLLOW open, fstat-regular on the already-open descriptor, then read) so envsetup's setup-hook TOCTOU snapshot can hash AND copy the exact bytes it trusts in one read, never a second independent open of the same path. +1 export."
     },
     "pix/host/inference": {
-      "prod_loc": 1291,
-      "test_loc": 1284,
-      "exports": 44,
+      "_inference_setup_note": "Explicit Inference Setup item 1: CatalogSourceInfo/RuntimeCatalogPath/DescribeCatalogSource \u2014 which catalog LoadCatalog reads, and where the release-materialized runtime/<version>/models.json snapshot lives \u2014 for `pix env show`'s inspection surface. +3 exports (the struct and its two functions), no new edges.",
+      "prod_loc": 1340,
+      "test_loc": 1424,
+      "exports": 47,
       "exports_used_externally": 16,
       "exits": 0,
       "streams": 0,
