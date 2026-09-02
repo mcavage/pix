@@ -708,6 +708,14 @@ func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, ve
 	for _, s := range b.HostServices {
 		line := safeArgv(append([]string{s.Command}, s.Args...))
 		fmt.Fprintf(out, "  argv %-20s %s\n", safe(s.Name), line)
+		// Target is the command's resolved PHYSICAL path (a symlink chain
+		// resolved to its real executable, per ResolveSymlinkedReference) —
+		// rendered only when it actually differs from the authored Command,
+		// so an unremarkable non-symlinked command still renders exactly as
+		// it always has.
+		if s.Target != "" && s.Target != s.Command {
+			fmt.Fprintf(out, "       %-20s resolved: %s\n", "", safe(s.Target))
+		}
 		if s.SHA != "" {
 			fmt.Fprintf(out, "       %-20s sha256:%s\n", "", safe(s.SHA))
 		}
@@ -717,6 +725,28 @@ func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, ve
 			continue
 		}
 		fmt.Fprintf(out, "  kit  %-20s %s\n", safe(k.Raw), safe(k.Resolved))
+		if k.Target != "" && k.Target != k.Resolved {
+			fmt.Fprintf(out, "       %-20s resolved: %s\n", "", safe(k.Target))
+		}
 		fmt.Fprintf(out, "       %-20s sha256:%s\n", "", safe(k.SHA))
+	}
+	// MCP servers with a local command render the SAME authored/resolved/
+	// sha256 shape as a kit or host service above: the authored Command is
+	// what the environment wrote, Target is where a symlink chain (an
+	// ordinary Homebrew-style install, e.g. `gog`) actually led, and SHA is
+	// always the hash of THAT resolved target — never of an unresolved
+	// symlink path.
+	for _, m := range b.MCPServers {
+		if m.Command == "" {
+			continue
+		}
+		line := safeArgv(append([]string{m.Command}, m.Args...))
+		fmt.Fprintf(out, "  mcp  %-20s %s\n", safe(m.Name), line)
+		if m.Target != "" && m.Target != m.Command {
+			fmt.Fprintf(out, "       %-20s resolved: %s\n", "", safe(m.Target))
+		}
+		if m.SHA != "" {
+			fmt.Fprintf(out, "       %-20s sha256:%s\n", "", safe(m.SHA))
+		}
 	}
 }

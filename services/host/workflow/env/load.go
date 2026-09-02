@@ -180,11 +180,16 @@ func writableWorkspacePaths(mounts EffectiveMounts) []string {
 	return out
 }
 
-// refuseLocalReferenceSymlinks refuses a symlink on every referenced local
-// filesystem path Load's own parse produced: each local `kits:` entry
-// (doc.Kits[i].Local), each native `mcp.servers[]` local command
-// (tree.MCPServers[i].Command), and each pix.toml `[[host.services]]`
-// command. A kit's own local-vs-remote classification was already decided,
+// refuseLocalReferenceSymlinks resolves (never blindly refuses) a symlink
+// on every referenced local filesystem path Load's own parse produced:
+// each local `kits:` entry (doc.Kits[i].Local), each native `mcp.servers[]`
+// local command (tree.MCPServers[i].Command), and each pix.toml
+// `[[host.services]]` command — ResolveSymlinkedReference resolves an
+// ordinary symlink chain to its physical target and refuses only a broken,
+// escaping, or wrong-shaped result; a kit path may resolve to a directory
+// (requireExecutable=false), while an MCP/host-service command must
+// resolve to an executable file (requireExecutable=true). A kit's own
+// local-vs-remote classification was already decided,
 // ambiguity refused, by envinfo.Parse (classifyKit / ErrAmbiguousKitReference)
 // before this function ever runs; RequiresSymlinkCheck gives the MCP-server
 // and host-service commands that SAME fail-closed treatment here, since
@@ -203,7 +208,7 @@ func refuseLocalReferenceSymlinks(doc *envinfo.Document, sidecar *envinfo.Sideca
 		if !k.Local {
 			continue
 		}
-		if err := RefuseSymlinkedReference(fmt.Sprintf("kit path kits[%d]", i), k.Resolved); err != nil {
+		if _, err := ResolveSymlinkedReference(fmt.Sprintf("kit path kits[%d]", i), k.Resolved, false, nil); err != nil {
 			return err
 		}
 	}
@@ -215,7 +220,7 @@ func refuseLocalReferenceSymlinks(doc *envinfo.Document, sidecar *envinfo.Sideca
 		if !ok {
 			continue
 		}
-		if err := RefuseSymlinkedReference(fmt.Sprintf("MCP server command %s", srv.KeyPath), resolved); err != nil {
+		if _, err := ResolveSymlinkedReference(fmt.Sprintf("MCP server command %s", srv.KeyPath), resolved, true, nil); err != nil {
 			return err
 		}
 	}
@@ -228,7 +233,7 @@ func refuseLocalReferenceSymlinks(doc *envinfo.Document, sidecar *envinfo.Sideca
 			if !ok {
 				continue
 			}
-			if err := RefuseSymlinkedReference(fmt.Sprintf("host service command %s", svc.Name), resolved); err != nil {
+			if _, err := ResolveSymlinkedReference(fmt.Sprintf("host service command %s", svc.Name), resolved, true, nil); err != nil {
 				return err
 			}
 		}

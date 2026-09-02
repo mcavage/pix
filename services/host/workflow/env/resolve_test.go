@@ -189,10 +189,12 @@ func containsAll(s string, substrs ...string) bool {
 
 // ── AC-12: a symlinked root or referenced executable is refused ─────────
 
-// TestRefuseSymlinkedRootAndReference is the red_first_tests case verbatim:
-// "symlinked root and symlinked referenced executable: two refusals, exit
-// 2." One test, two independently-checked surfaces.
-func TestRefuseSymlinkedRootAndReference(t *testing.T) {
+// TestRefuseSymlinkedRoot is AC-12's root half of the original
+// red_first_tests case: a symlinked environment root is refused, a real
+// one is not. The reference half moved to the ResolveSymlinkedReference
+// tests below: a referenced executable's symlink is now RESOLVED to its
+// physical target rather than blindly refused (the gog/Homebrew fix).
+func TestRefuseSymlinkedRoot(t *testing.T) {
 	dir := t.TempDir()
 	realRoot := filepath.Join(dir, "real-root")
 	if err := os.MkdirAll(realRoot, 0o755); err != nil {
@@ -203,16 +205,6 @@ func TestRefuseSymlinkedRootAndReference(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	realExec := filepath.Join(dir, "warehouse-proxy")
-	if err := writeFile(t, realExec, "#!/bin/sh\n"); err != nil {
-		t.Fatal(err)
-	}
-	linkedExec := filepath.Join(dir, "warehouse-proxy-link")
-	if err := os.Symlink(realExec, linkedExec); err != nil {
-		t.Fatal(err)
-	}
-
-	// Refusal 1: the symlinked root.
 	err := RefuseSymlinkedRoot(linkedRoot)
 	if err == nil {
 		t.Fatal("RefuseSymlinkedRoot must refuse a symlinked root")
@@ -227,21 +219,210 @@ func TestRefuseSymlinkedRootAndReference(t *testing.T) {
 	if err := RefuseSymlinkedRoot(realRoot); err != nil {
 		t.Errorf("RefuseSymlinkedRoot on a real directory = %v, want nil", err)
 	}
+}
 
-	// Refusal 2: the symlinked referenced executable.
-	err = RefuseSymlinkedReference("local MCP command", linkedExec)
+// ── ResolveSymlinkedReference: the gog/Homebrew fix ──────────────────────
+//
+// `/opt/homebrew/bin/gog` (or any Homebrew-installed command) is an
+// ORDINARY symlink into the package's own Cellar keg. The prior
+// RefuseSymlinkedReference refused ANY symlink outright, so an
+// environment naming a Homebrew tool as an MCP server command made
+// `pix env show`/`--effective` refuse to load at all. These tests pin the
+// fixed contract: a symlink chain that resolves to a real, executable
+// (or, for a non-command reference, directory) target is now TRUSTED AT
+// ITS RESOLVED TARGET; only a broken, escaping, or wrong-shaped result is
+// still refused.
+
+// TestResolveSymlinkedReferenceNotASymlinkPassesThrough: the common case
+// (a real file, never a symlink at all) returns path unchanged.
+func TestResolveSymlinkedReferenceNotASymlinkPassesThrough(t *testing.T) {
+	dir := t.TempDir()
+	realExec := filepath.Join(dir, "warehouse-proxy")
+	if err := writeFile(t, realExec, "#!/bin/sh\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(realExec, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveSymlinkedReference("local MCP command", realExec, true, nil)
+	if err != nil {
+		t.Fatalf("ResolveSymlinkedReference on a real file = %v, want nil", err)
+	}
+	if got != realExec {
+		t.Errorf("got %q, want unchanged %q", got, realExec)
+	}
+}
+
+// TestResolveSymlinkedReferenceResolvesHomebrewStyleSymlink is the literal
+// reported blocker: a symlink (gog) pointing at a real executable (its own
+// Cellar keg) resolves to that executable's PHYSICAL path rather than
+// being refused.
+func TestResolveSymlinkedReferenceResolvesHomebrewStyleSymlink(t *testing.T) {
+	dir := t.TempDir()
+	realExec := filepath.Join(dir, "Cellar", "gog", "1.0", "bin", "gog")
+	if err := writeFile(t, realExec, "#!/bin/sh\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(realExec, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkedExec := filepath.Join(dir, "bin", "gog")
+	if err := os.MkdirAll(filepath.Dir(linkedExec), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realExec, linkedExec); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveSymlinkedReference("local MCP command", linkedExec, true, nil)
+	if err != nil {
+		t.Fatalf("ResolveSymlinkedReference on a valid symlink chain = %v, want nil", err)
+	}
+	want, err := filepath.EvalSymlinks(realExec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("got %q, want the resolved physical target %q", got, want)
+	}
+}
+
+// TestResolveSymlinkedReferenceRefusesBrokenSymlink: a symlink whose target
+// does not exist is refused with ReferenceBroken, never silently passed
+// through as "nothing to check" the way a directly-missing path is.
+func TestResolveSymlinkedReferenceRefusesBrokenSymlink(t *testing.T) {
+	dir := t.TempDir()
+	broken := filepath.Join(dir, "broken-link")
+	if err := os.Symlink(filepath.Join(dir, "does-not-exist"), broken); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ResolveSymlinkedReference("local MCP command", broken, true, nil)
 	if err == nil {
-		t.Fatal("RefuseSymlinkedReference must refuse a symlinked referenced executable")
+		t.Fatal("ResolveSymlinkedReference must refuse a broken symlink")
 	}
 	if got := cli.ExitCode(err); got != 2 {
-		t.Errorf("cli.ExitCode(reference refusal) = %d, want 2", got)
+		t.Errorf("cli.ExitCode(broken) = %d, want 2", got)
 	}
-	var refSym *SymlinkError
-	if !errors.As(err, &refSym) || refSym.Path != linkedExec {
-		t.Fatalf("reference refusal = %#v, want *SymlinkError{Path: %q}", err, linkedExec)
+	var refErr *ReferenceTargetError
+	if !errors.As(err, &refErr) || refErr.Reason != ReferenceBroken {
+		t.Fatalf("broken refusal = %#v, want ReferenceTargetError{Reason: broken}", err)
 	}
-	if err := RefuseSymlinkedReference("local MCP command", realExec); err != nil {
-		t.Errorf("RefuseSymlinkedReference on a real file = %v, want nil", err)
+}
+
+// TestResolveSymlinkedReferenceRefusesNonExecutableTargetWhenRequired: a
+// symlink to a real, REGULAR but non-executable file is refused for a
+// command reference (requireExecutable=true) with ReferenceNotExecutable.
+func TestResolveSymlinkedReferenceRefusesNonExecutableTargetWhenRequired(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "data.txt")
+	if err := writeFile(t, target, "not a program\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ResolveSymlinkedReference("MCP server command foo", link, true, nil)
+	if err == nil {
+		t.Fatal("ResolveSymlinkedReference must refuse a non-executable target when requireExecutable is true")
+	}
+	var refErr *ReferenceTargetError
+	if !errors.As(err, &refErr) || refErr.Reason != ReferenceNotExecutable {
+		t.Fatalf("non-executable refusal = %#v, want ReferenceTargetError{Reason: not-executable}", err)
+	}
+
+	// The identical non-executable target is FINE when the caller does not
+	// require one (a local kit path resolving through a symlink, for
+	// example) — requireExecutable is the caller's own declared need, not a
+	// universal rule.
+	if _, err := ResolveSymlinkedReference("kit path kits[0]", link, false, nil); err != nil {
+		t.Errorf("ResolveSymlinkedReference(requireExecutable=false) on a non-executable target = %v, want nil", err)
+	}
+}
+
+// TestResolveSymlinkedReferenceAllowsDirectoryTargetForKits: a local kit
+// path resolving, through a symlink, to a real DIRECTORY is accepted when
+// requireExecutable is false, but refused as ReferenceNotRegular when a
+// command reference (requireExecutable=true) resolves to one — a command
+// must be a file, never a directory.
+func TestResolveSymlinkedReferenceAllowsDirectoryTargetForKits(t *testing.T) {
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "kit-real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "kit-link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveSymlinkedReference("kit path kits[0]", link, false, nil)
+	if err != nil {
+		t.Fatalf("ResolveSymlinkedReference(requireExecutable=false) on a directory target = %v, want nil", err)
+	}
+	want, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+
+	if _, err := ResolveSymlinkedReference("MCP server command foo", link, true, nil); err == nil {
+		t.Fatal("ResolveSymlinkedReference(requireExecutable=true) must refuse a directory target")
+	} else {
+		var refErr *ReferenceTargetError
+		if !errors.As(err, &refErr) || refErr.Reason != ReferenceNotRegular {
+			t.Fatalf("directory-as-command refusal = %#v, want ReferenceTargetError{Reason: not-regular}", err)
+		}
+	}
+}
+
+// TestResolveSymlinkedReferenceRefusesNonRegularTarget: a symlink resolving
+// to neither a regular file nor a directory (a device node) is refused as
+// ReferenceNotRegular.
+func TestResolveSymlinkedReferenceRefusesNonRegularTarget(t *testing.T) {
+	if _, err := os.Stat("/dev/null"); err != nil {
+		t.Skip("/dev/null unavailable on this platform")
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, "link-to-device")
+	if err := os.Symlink("/dev/null", link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ResolveSymlinkedReference("local MCP command", link, false, nil)
+	if err == nil {
+		t.Fatal("ResolveSymlinkedReference must refuse a symlink resolving to a non-regular, non-directory target")
+	}
+	var refErr *ReferenceTargetError
+	if !errors.As(err, &refErr) || refErr.Reason != ReferenceNotRegular {
+		t.Fatalf("device refusal = %#v, want ReferenceTargetError{Reason: not-regular}", err)
+	}
+}
+
+// TestResolveSymlinkedReferenceRefusesEscapingResolver: an injected
+// resolver that returns a non-absolute or non-clean path (something the
+// real filepath.EvalSymlinks never does) is refused as ReferenceEscape
+// rather than trusted — defense in depth proven with the SAME fakeable-seam
+// discipline ResolveLocalCommand's own tests already use for lookPath.
+func TestResolveSymlinkedReferenceRefusesEscapingResolver(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(filepath.Join(dir, "whatever"), link); err != nil {
+		t.Fatal(err)
+	}
+	escaping := func(string) (string, error) { return "../etc/passwd", nil }
+	_, err := ResolveSymlinkedReference("local MCP command", link, true, escaping)
+	if err == nil {
+		t.Fatal("ResolveSymlinkedReference must refuse a resolver answer that is not an absolute, clean path")
+	}
+	var refErr *ReferenceTargetError
+	if !errors.As(err, &refErr) || refErr.Reason != ReferenceEscape {
+		t.Fatalf("escape refusal = %#v, want ReferenceTargetError{Reason: escape}", err)
 	}
 }
 

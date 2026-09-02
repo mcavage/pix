@@ -13,9 +13,11 @@
 //     resolved Root. refuseUnsafeMode refuses a group- or world-writable
 //     root.
 //   - resolve.go — RefuseContainment (an environment root must not resolve
-//     inside any writable workspace it mounts), RefuseSymlinkedRoot /
-//     RefuseSymlinkedReference (a symlinked root or referenced local
-//     executable is refused), RequiresSymlinkCheck (fail-closed local-vs-
+//     inside any writable workspace it mounts), RefuseSymlinkedRoot (a
+//     symlinked root is refused) / ResolveSymlinkedReference (a referenced
+//     local executable's symlink chain is resolved to its physical target,
+//     refusing only a broken, escaping, or wrong-shaped result — never
+//     every symlink outright), RequiresSymlinkCheck (fail-closed local-vs-
 //     remote classification), ResolveLocalCommand (bare/relative/absolute
 //     command resolution that never touches the calling process's cwd),
 //     and the Subject/IsAccepted pair a future trust rewrite may key

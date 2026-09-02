@@ -128,10 +128,10 @@ func withinDir(path, dir string) bool {
 	return strings.HasPrefix(path, dir+string(filepath.Separator))
 }
 
-// SymlinkError is RefuseSymlinkedRoot/RefuseSymlinkedReference's structured
-// refusal (AC-12). Kind names what Path is ("environment root", "local MCP
-// command", "kit path", ...) so the rendered text is self-describing without
-// a caller having to remember which refusal function produced it.
+// SymlinkError is RefuseSymlinkedRoot's structured refusal (AC-12, root
+// half). Kind is always "environment root" — the rendered text still
+// names it explicitly so it reads the same as ReferenceTargetError's Kind
+// field below, which a referenced executable's refusal uses instead.
 type SymlinkError struct {
 	Kind string
 	Path string
@@ -156,23 +156,141 @@ func RefuseSymlinkedRoot(root string) error {
 	return nil
 }
 
-// RefuseSymlinkedReference refuses when a referenced host-execution surface
-// — a local MCP command, a local kit path, or any other referenced
-// executable a caller names via kind — is itself a symlink. It is the other
-// half of AC-12: "a symlinked environment root or referenced executable [is]
-// refused." kind becomes the SymlinkError's Kind, so the refusal text says
-// exactly what was checked ("local MCP command warehouse-proxy", "kit path
-// kits[0]", ...).
-//
-// It is the caller's job (E1.8's bill of materials, built from envinfo's
-// pre-composition Tree) to decide WHICH tree nodes are referenced local
-// paths worth this check in the first place; see RequiresSymlinkCheck for
-// the local-vs-remote classification that decision should fail closed on.
-func RefuseSymlinkedReference(kind, path string) error {
-	if hosttrust.IsSymlink(path) {
-		return cli.UsageError{Err: &SymlinkError{Kind: kind, Path: path}}
+// ReferenceRefusalReason names why ResolveSymlinkedReference refused a
+// referenced host-execution surface's symlink chain rather than resolving
+// it.
+type ReferenceRefusalReason string
+
+const (
+	// ReferenceBroken: the chain does not resolve at all (a missing target,
+	// an ELOOP cycle), or the resolved target no longer exists by the time
+	// this function stats it.
+	ReferenceBroken ReferenceRefusalReason = "broken"
+	// ReferenceNotRegular: the resolved target is neither a regular file
+	// nor a directory (a device, socket, or pipe at the far end of the
+	// chain), or requireExecutable asked for a command and the chain led to
+	// a directory instead of a file.
+	ReferenceNotRegular ReferenceRefusalReason = "not-regular"
+	// ReferenceNotExecutable: requireExecutable was true and the resolved
+	// regular file carries no executable bit for anyone.
+	ReferenceNotExecutable ReferenceRefusalReason = "not-executable"
+	// ReferenceEscape: the resolver's own answer was not already an
+	// absolute, clean path — the one shape the real filepath.EvalSymlinks
+	// never produces. Defense in depth against a substituted resolver
+	// (real or test-injected) that does, since nothing past this point
+	// re-derives the target's shape before it is trusted.
+	ReferenceEscape ReferenceRefusalReason = "escape"
+)
+
+// ReferenceTargetError is ResolveSymlinkedReference's structured refusal.
+// Kind names the referenced surface exactly as SymlinkError's Kind does
+// ("local MCP command NAME", "kit path kits[N]", "host service command
+// NAME"); Path is the authored symlink Load/ComputeBoM was asked to trust;
+// Target is the physical file the chain actually led to (empty when Reason
+// is ReferenceBroken — there is nothing to name); Reason names which check
+// failed.
+type ReferenceTargetError struct {
+	Kind   string
+	Path   string
+	Target string
+	Reason ReferenceRefusalReason
+}
+
+func (e *ReferenceTargetError) Error() string {
+	switch e.Reason {
+	case ReferenceBroken:
+		return fmt.Sprintf(
+			"pix: %s %s is a broken symlink; refusing.\n     path: %s\n     inspect it: ls -ld %s",
+			e.Kind, e.Path, e.Path, sys.ShellQuote(e.Path),
+		)
+	case ReferenceNotExecutable:
+		return fmt.Sprintf(
+			"pix: %s %s resolves to %s, which is not executable; refusing.\n     inspect it: ls -l %s",
+			e.Kind, e.Path, e.Target, sys.ShellQuote(e.Target),
+		)
+	case ReferenceEscape:
+		return fmt.Sprintf(
+			"pix: %s %s resolves outside a safe symlink chain; refusing.\n     path: %s\n     inspect it: ls -ld %s",
+			e.Kind, e.Path, e.Path, sys.ShellQuote(e.Path),
+		)
+	default: // ReferenceNotRegular
+		return fmt.Sprintf(
+			"pix: %s %s resolves to %s, which is not a regular file or directory; refusing.\n     inspect it: ls -ld %s",
+			e.Kind, e.Path, e.Target, sys.ShellQuote(e.Target),
+		)
 	}
-	return nil
+}
+
+// ResolveSymlinkedReference resolves path — a referenced host-execution
+// surface Load/ComputeBoM was asked to trust (kind names it: "local MCP
+// command NAME", "kit path kits[N]", "host service command NAME") —
+// through its full symlink chain and returns the concrete file a caller
+// may safely fingerprint and, when requireExecutable is true, execute.
+//
+// A path that is not itself a symlink (hosttrust.IsSymlink false — a real
+// file/directory, or nothing there at all) is returned unchanged, nil:
+// that is not this function's concern, exactly as before this check
+// existed — a missing path is a `pix doctor`-shaped gap the downstream
+// content-hashing step already reports, never a symlink refusal.
+//
+// A path that IS a symlink resolves through evalSymlinks (nil defaults to
+// the real filepath.EvalSymlinks; a test overrides it to pin a broken
+// chain or a fabricated escape without touching a real filesystem
+// symlink), and is refused — never followed further — when:
+//
+//   - the chain does not resolve at all, or the resolved target no longer
+//     exists (ReferenceBroken);
+//   - the resolver's own answer is not already an absolute, clean path
+//     (ReferenceEscape);
+//   - the resolved target is a regular file and requireExecutable is true
+//     but it carries no executable bit for anyone (ReferenceNotExecutable);
+//   - the resolved target is neither a regular file nor a directory
+//     (ReferenceNotRegular) — a device, socket, or pipe at the far end of
+//     the chain — or requireExecutable is true and the target is a
+//     directory (a command must be a file, never a directory; a LOCAL kit
+//     path legitimately resolves to one instead, which is why kit callers
+//     pass requireExecutable=false).
+//
+// A symlink that clears every applicable check resolves to its physical
+// TARGET, not the original symlink path — the actual fix for an ordinary
+// package-manager symlink (Homebrew's `/opt/homebrew/bin/<tool>` pointing
+// into its own Cellar keg): the prior all-symlinks-refused rule blocked
+// every such tool outright (`pix env show`/`--effective` refusing an
+// environment that names, say, `gog` as an MCP server command — the
+// reported blocker this function fixes). A broken, escaping, wrong-shaped,
+// or non-executable target is still refused; a normal chain ending at a
+// real file is now trusted at its resolved target instead.
+func ResolveSymlinkedReference(kind, path string, requireExecutable bool, evalSymlinks func(string) (string, error)) (string, error) {
+	if !hosttrust.IsSymlink(path) {
+		return path, nil
+	}
+	if evalSymlinks == nil {
+		evalSymlinks = filepath.EvalSymlinks
+	}
+	target, err := evalSymlinks(path)
+	if err != nil {
+		return "", cli.UsageError{Err: &ReferenceTargetError{Kind: kind, Path: path, Reason: ReferenceBroken}}
+	}
+	if !filepath.IsAbs(target) || target != filepath.Clean(target) {
+		return "", cli.UsageError{Err: &ReferenceTargetError{Kind: kind, Path: path, Target: target, Reason: ReferenceEscape}}
+	}
+	fi, statErr := os.Stat(target)
+	if statErr != nil {
+		return "", cli.UsageError{Err: &ReferenceTargetError{Kind: kind, Path: path, Target: target, Reason: ReferenceBroken}}
+	}
+	switch {
+	case fi.Mode().IsRegular():
+		if requireExecutable && fi.Mode()&0111 == 0 {
+			return "", cli.UsageError{Err: &ReferenceTargetError{Kind: kind, Path: path, Target: target, Reason: ReferenceNotExecutable}}
+		}
+	case fi.IsDir():
+		if requireExecutable {
+			return "", cli.UsageError{Err: &ReferenceTargetError{Kind: kind, Path: path, Target: target, Reason: ReferenceNotRegular}}
+		}
+	default:
+		return "", cli.UsageError{Err: &ReferenceTargetError{Kind: kind, Path: path, Target: target, Reason: ReferenceNotRegular}}
+	}
+	return target, nil
 }
 
 // remoteSchemeRE recognizes an unambiguous remote reference the same way
@@ -181,7 +299,7 @@ func RefuseSymlinkedReference(kind, path string) error {
 var remoteSchemeRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
 
 // RequiresSymlinkCheck reports whether raw names a reference this package
-// must symlink-check (RefuseSymlinkedReference) before a caller trusts it:
+// must symlink-check (ResolveSymlinkedReference) before a caller trusts it:
 // true for everything except an unambiguous remote URL-shaped reference.
 // "unknown local-vs-remote fails closed" is this function's whole contract:
 // it never returns false because a shape could not be positively classified

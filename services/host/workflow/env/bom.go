@@ -104,7 +104,14 @@ type HostServiceItem struct {
 	Args    []string
 	Port    int64
 	Probe   string
-	SHA     string
+	// Target is Command's resolved physical executable after resolving any
+	// symlink chain (ResolveSymlinkedReference) — empty when Command could
+	// not be resolved to a concrete local path at all (see ResolveLocalCommand's
+	// own doc comment), equal to the resolved command path when it is not
+	// itself a symlink. SHA is always the hash of Target, never of an
+	// un-resolved symlink path.
+	Target string
+	SHA    string
 }
 
 // SetupHookFact is one pix.toml `[[setup]]` entry, resolved to the exact
@@ -172,6 +179,17 @@ type MCPServerFact struct {
 	URL     string
 	Command string
 	Args    []string
+	// Target is Command's resolved physical executable after resolving any
+	// symlink chain (ResolveSymlinkedReference) — empty for a remote server
+	// (URL set, no local Command) or when Command could not be resolved to
+	// a concrete local path at all; equal to the resolved command path when
+	// it is not itself a symlink. SHA is always the hash of Target, never
+	// of an un-resolved symlink path — this is what lets an environment
+	// naming a Homebrew-style symlinked tool (e.g. `gog`) as an MCP server
+	// command still fingerprint (and render, see cmd/pix's renderTrustBill)
+	// the real executable it would actually run.
+	Target string
+	SHA    string
 }
 
 // PortFact is one `ports[]` entry.
@@ -189,8 +207,14 @@ type PortFact struct {
 type KitFact struct {
 	Raw      string
 	Resolved string
-	Local    bool
-	SHA      string
+	// Target is Resolved's physical location after resolving any symlink
+	// chain (ResolveSymlinkedReference) — equal to Resolved when Resolved
+	// is not itself a symlink. SHA is always the hash of Target, never of
+	// an un-resolved symlink path, so a package-manager-style symlinked
+	// kit still fingerprints the real content it would actually mount.
+	Target string
+	Local  bool
+	SHA    string
 }
 
 // HostMCPFact is one pix.toml `[host.mcp.<name>]` sidecar annotation: env
@@ -313,7 +337,9 @@ func ComputeBoM(env *Environment, effective EffectiveMounts, lookPath func(strin
 			return BillOfMaterials{}, err
 		}
 		computeRegistries(env.Document, &b)
-		computeMCP(env.Document, &b)
+		if err := computeMCP(env.Root, env.Document, &b, lookPath); err != nil {
+			return BillOfMaterials{}, err
+		}
 		computePorts(env.Document, &b)
 		if err := computeKits(env.Document, &b); err != nil {
 			return BillOfMaterials{}, err
@@ -418,17 +444,43 @@ func computeRegistries(doc *envinfo.Document, b *BillOfMaterials) {
 	}
 }
 
-func computeMCP(doc *envinfo.Document, b *BillOfMaterials) {
+// computeMCP resolves and content-hashes every local `mcp.servers[].command`
+// exactly as computeHostServices does for a pix.toml `[[host.services]]`
+// command: ResolveLocalCommand (bare-via-PATH, relative-via-root, or
+// absolute) followed by ResolveSymlinkedReference(requireExecutable=true)
+// so an ordinary symlink (Homebrew's `/opt/homebrew/bin/gog`, for example)
+// fingerprints its PHYSICAL target rather than refusing outright — the
+// same fix load.go's refuseLocalReferenceSymlinks applies at Load time,
+// applied again here (independently, the same duplication
+// computeHostServices already accepts) so the reviewed bill actually shows
+// what was resolved. A remote reference (RequiresSymlinkCheck false) or an
+// unresolvable bare command (ResolveLocalCommand ok=false, a `pix
+// doctor`-shaped gap) leaves Target/SHA empty, same as computeHostServices.
+func computeMCP(root string, doc *envinfo.Document, b *BillOfMaterials, lookPath func(string) (string, error)) error {
 	for _, srv := range doc.MCP.Servers {
-		b.MCPServers = append(b.MCPServers, MCPServerFact{
-			Name: srv.Name, URL: srv.URL, Command: srv.Command, Args: append([]string(nil), srv.Args...),
-		})
+		fact := MCPServerFact{Name: srv.Name, URL: srv.URL, Command: srv.Command, Args: append([]string(nil), srv.Args...)}
 		if srv.Command != "" {
 			b.HostCommands = append(b.HostCommands, HostCommand{
 				Name: srv.Name, Argv: append([]string{srv.Command}, srv.Args...),
 			})
+			if RequiresSymlinkCheck(srv.Command) {
+				if resolved, ok := ResolveLocalCommand(root, srv.Command, lookPath); ok {
+					target, err := ResolveSymlinkedReference(fmt.Sprintf("MCP server command %s", srv.Name), resolved, true, nil)
+					if err != nil {
+						return fmt.Errorf("mcp server %q: %w (cannot fingerprint the host-exec surface; fail closed)", srv.Name, err)
+					}
+					sha, err := hashPath(target)
+					if err != nil {
+						return fmt.Errorf("mcp server %q: %w (cannot fingerprint the host-exec surface; fail closed)", srv.Name, err)
+					}
+					fact.Target = target
+					fact.SHA = sha
+				}
+			}
 		}
+		b.MCPServers = append(b.MCPServers, fact)
 	}
+	return nil
 }
 
 func computePorts(doc *envinfo.Document, b *BillOfMaterials) {
@@ -437,14 +489,24 @@ func computePorts(doc *envinfo.Document, b *BillOfMaterials) {
 	}
 }
 
+// computeKits resolves each local kit's symlink chain
+// (ResolveSymlinkedReference, requireExecutable=false — a kit legitimately
+// resolves to a DIRECTORY of content, not a single executable) before
+// content-hashing it, so a symlinked local kit fingerprints its physical
+// target rather than refusing outright.
 func computeKits(doc *envinfo.Document, b *BillOfMaterials) error {
 	for _, k := range doc.Kits {
 		fact := KitFact{Raw: k.Raw, Resolved: k.Resolved, Local: k.Local}
 		if k.Local {
-			sha, err := hashPath(k.Resolved)
+			target, err := ResolveSymlinkedReference(fmt.Sprintf("kit path %s", k.Raw), k.Resolved, false, nil)
 			if err != nil {
 				return fmt.Errorf("kit %q: %w (cannot fingerprint the host-exec surface; fail closed)", k.Raw, err)
 			}
+			sha, err := hashPath(target)
+			if err != nil {
+				return fmt.Errorf("kit %q: %w (cannot fingerprint the host-exec surface; fail closed)", k.Raw, err)
+			}
+			fact.Target = target
 			fact.SHA = sha
 		}
 		b.Kits = append(b.Kits, fact)
@@ -452,14 +514,24 @@ func computeKits(doc *envinfo.Document, b *BillOfMaterials) error {
 	return nil
 }
 
+// computeHostServices resolves each `[[host.services]]` command's symlink
+// chain (ResolveSymlinkedReference, requireExecutable=true — a host
+// service command must be an executable file) before content-hashing it,
+// so a symlinked host service command (an ordinary package-manager
+// install) fingerprints its physical target rather than refusing outright.
 func computeHostServices(root string, s *envinfo.Sidecar, b *BillOfMaterials, lookPath func(string) (string, error)) error {
 	for _, svc := range s.Host.Services {
 		item := HostServiceItem{Name: svc.Name, Command: svc.Command, Args: append([]string(nil), svc.Args...), Port: svc.Port, Probe: svc.Probe}
 		if resolved, ok := ResolveLocalCommand(root, svc.Command, lookPath); ok {
-			sha, err := hashPath(resolved)
+			target, err := ResolveSymlinkedReference(fmt.Sprintf("host service command %s", svc.Name), resolved, true, nil)
 			if err != nil {
 				return fmt.Errorf("host service %q: %w (cannot fingerprint the host-exec surface; fail closed)", svc.Name, err)
 			}
+			sha, err := hashPath(target)
+			if err != nil {
+				return fmt.Errorf("host service %q: %w (cannot fingerprint the host-exec surface; fail closed)", svc.Name, err)
+			}
+			item.Target = target
 			item.SHA = sha
 		}
 		b.HostServices = append(b.HostServices, item)
@@ -701,9 +773,12 @@ type fpDoc struct {
 // comment promises is both fingerprinted and (where §5.8 names it)
 // rendered. Every list is sorted canonically before hashing so a pure
 // authoring reorder never re-gates; HostCommands/HostServices/Ports/etc.
-// V bumped 2 -> 3 when SetupHooks joined the surface: an already-accepted
-// environment is re-gated once, which is the correct outcome for a schema
-// that can now carry host execution it could not express before.
+// V bumped 2 -> 3 when SetupHooks joined the surface, and 3 -> 4 when
+// KitFact/HostServiceItem/MCPServerFact grew Target (the physical path a
+// resolved symlink chain led to, alongside each existing SHA): an
+// already-accepted environment is re-gated once, which is the correct
+// outcome for a schema that can now carry host-exec facts it could not
+// express before.
 // HostCommands/HostServices/Ports/etc. are already produced in a stable
 // (sorted-key or identity) order by
 // ComputeBoM, so this function only imposes the ordering ComputeBoM does
@@ -712,7 +787,7 @@ type fpDoc struct {
 // fingerprint boundary rather than trusting an upstream producer's order).
 func Fingerprint(b BillOfMaterials) (string, error) {
 	doc := fpDoc{
-		V:                 3,
+		V:                 4,
 		HostCommands:      sortedByField(b.HostCommands, func(v HostCommand) string { return v.Name }),
 		HostServices:      sortedByField(b.HostServices, func(v HostServiceItem) string { return v.Name }),
 		SetupHooks:        sortedByField(b.SetupHooks, func(v SetupHookFact) string { return v.ID }),
