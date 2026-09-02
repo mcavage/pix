@@ -146,6 +146,7 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 	}
 	renderSetupResult(d, home, res, c.Verbose)
 	setupCredentials(d)
+	setupModelSelection(d, home, defaultShellEnv(), res.DefaultEnvCreated)
 	if c.Env != "" {
 		if eerr := setupSelectedEnvironment(d, home, c.Env); eerr != nil {
 			return eerr
