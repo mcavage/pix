@@ -275,3 +275,39 @@ func currentCreationFingerprint(cfg *config.Config, o launch.RunOpts, sel launch
 // unregister verb at all). Both were already unreachable dead code (no call
 // site) before this comment; they named nativeenv.HolderProbe, a v1
 // registry-era type that has itself been deleted along with forget.go.
+
+// envSkillDirs is the selected environment's own [pi].skills, resolved to
+// absolute host paths in authored order.
+//
+// envinfo.ValidateSkillWorkspaces has always PROVEN each of these resolves
+// inside a workspace the environment mounts (its own root counts), and then
+// nothing read the result: the `--skill` list was built only from machine
+// [skills].paths, the personal context dir, and `--skills` run options
+// (workflow/launch/sbxargs.go). An environment repository's own skills/
+// therefore validated and loaded nothing, which made the documented
+// "an environment's own skills directory" false.
+//
+// These join o.Skills, the SAME channel `--skills DIR` uses, so they are both
+// mounted (MountDirs) and passed as `--skill` (LiveSkillDirs) by the existing
+// producers rather than a second, divergent path. They are fingerprinted
+// already: [pi].skills is part of pix.toml, so an added skill tree re-gates
+// the environment exactly like any other host-affecting fact.
+func envSkillDirs(sel launch.EnvSelection) []string {
+	if !sel.Selected() || sel.Sidecar == nil || sel.Root == "" {
+		return nil
+	}
+	dir := sel.Root
+	out := make([]string, 0, len(sel.Sidecar.Pi.Skills))
+	for _, rel := range sel.Sidecar.Pi.Skills {
+		rel = strings.TrimSpace(rel)
+		if rel == "" {
+			continue
+		}
+		abs := rel
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(dir, rel)
+		}
+		out = append(out, filepath.Clean(abs))
+	}
+	return out
+}

@@ -701,12 +701,32 @@ func EffectiveInferenceConfig(cfg *config.Config, sc *envinfo.Sidecar) (*config.
 		if !validInferenceDriver(driver) {
 			return nil, fmt.Errorf("pix.toml: [inference.backends.%s].driver %q is not one of native, openai-compatible, ollama", name, b.Driver)
 		}
+		auth := strings.TrimSpace(b.Auth)
+		keyEnv := strings.TrimSpace(b.KeyEnv)
+		credService := strings.TrimSpace(b.CredentialService)
+		// An sbx-session backend that names no credential identity has
+		// nowhere legitimate to inject, and inference/live.go refuses it
+		// later anyway — with a message naming machine config.toml, which is
+		// the wrong file to send an environment author to. Refuse it HERE,
+		// against the key the author actually wrote, so the environment that
+		// declared it is the one named in the error.
+		if auth == "sbx-session" && (credService == "" || keyEnv == "") {
+			return nil, fmt.Errorf("pix.toml: [inference.backends.%s] uses auth = \"sbx-session\" but declares no credential_service/key_env; set both, or switch auth to 1password or none", name)
+		}
 		eff.Inference.Backends[name] = config.InferenceBackend{
 			Driver:   driver,
 			Protocol: strings.TrimSpace(b.Protocol),
 			BaseURL:  strings.TrimSpace(b.BaseURL),
-			Auth:     strings.TrimSpace(b.Auth),
-			KeyEnv:   strings.TrimSpace(b.KeyEnv),
+			Auth:     auth,
+			KeyEnv:   keyEnv,
+			// The environment is the SOURCE of this backend, which is what
+			// makes an exclusive_source boundary and `pix env show`'s
+			// attribution able to tell an env-authored gateway apart from a
+			// machine-wide one of the same name.
+			Source:            envInferenceSource,
+			CredentialService: credService,
+			CredentialHeader:  strings.TrimSpace(b.CredentialHeader),
+			CredentialFormat:  strings.TrimSpace(b.CredentialFormat),
 		}
 	}
 
@@ -720,6 +740,7 @@ func EffectiveInferenceConfig(cfg *config.Config, sc *envinfo.Sidecar) (*config.
 		}
 		binding := config.InferenceModelBinding{
 			Model: id, Backend: m.Backend, Upstream: m.UpstreamID,
+			Source:    envInferenceSource,
 			Available: true, Verified: true,
 		}
 		replaced := false
@@ -734,8 +755,38 @@ func EffectiveInferenceConfig(cfg *config.Config, sc *envinfo.Sidecar) (*config.
 			eff.Inference.Models = append(eff.Inference.Models, binding)
 		}
 	}
+
+	// [models].exclusive is the environment's compliance boundary ("all of
+	// this environment's inference goes through the endpoints it declares").
+	// Until now it narrowed only ROSTER REFERENCE VALIDATION
+	// (workflow/models/inference.go), which is a documentation-shaped check:
+	// a machine-wide public-vendor binding stayed callable underneath it. The
+	// runtime narrowing already exists in inference.TopologyAllowed /
+	// BackendAllowed, keyed on ExclusiveSource, and had no writer left after
+	// the pack loader was deleted. The selected environment is the only
+	// honest writer for it: one environment is selected per run, so the
+	// constant source tag is unambiguous, and this is a per-run in-memory
+	// snapshot — nothing is written to config.toml.
+	//
+	// It is set ONLY when the environment declares at least one backend of
+	// its own: an `exclusive = true` with nothing to be exclusive TO would
+	// leave zero callable models and refuse every launch, which is a
+	// configuration mistake to name, not a boundary to enforce.
+	if sc.Models.Exclusive {
+		if len(sc.Inference.Backends) == 0 {
+			return nil, fmt.Errorf("pix.toml: [models].exclusive is set but this environment declares no [inference.backends.*]; exclusive narrows inference to the environment's OWN backends, so this would leave no callable model")
+		}
+		eff.Inference.ExclusiveSource = envInferenceSource
+	}
 	return &eff, nil
 }
+
+// envInferenceSource tags every backend and binding the SELECTED environment
+// contributed to a run's effective inference config. Exactly one environment
+// is selected per run, so a constant is a complete identity here: it never
+// has to distinguish two environments, only "this run's environment" from
+// "machine-wide config" (source "").
+const envInferenceSource = "environment"
 
 // sessionEnvironmentFileName records WHICH environment a live sandbox was
 // created from, beside its lease record. It is what makes a later

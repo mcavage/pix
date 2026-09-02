@@ -242,6 +242,30 @@ transports, sandbox resources or ports, Pi extensions, settings, keybindings,
 or themes: anything native sbx or global Pi settings already own stays out.
 Unknown keys are errors.
 
+**An environment's own inference gateway.** `[inference.backends.<name>]`
+takes `driver`, `protocol`, `base_url`, `auth`, `key_env`, plus (for
+`auth = "sbx-session"`) `credential_service`, `credential_header`, and
+`credential_format`. That is how an environment describes a *credentialed*
+gateway: the sandbox never holds the long-lived token, it sends a sentinel in
+`key_env` and the sbx proxy swaps in the named host credential service's
+session value on the way out. All three are declarations of wiring, never of a
+secret value, and all three appear on the trust bill and in the fingerprint, so
+editing one re-gates the environment. An `sbx-session` backend that names no
+`credential_service`/`key_env` is refused at merge, before any sandbox is
+touched.
+
+`[models].exclusive = true` is the environment's compliance boundary: model
+resolution is narrowed to the backends this environment declares, so a
+machine-wide provider binding stays configured but is not callable in that
+environment's sessions. It is refused when the environment declares no
+backends of its own, because that would leave nothing callable at all.
+
+**An environment's own skills.** `[pi].skills` lists directories, relative to
+`pix.toml`, that this environment adds to the session. Each must resolve
+inside a workspace the environment mounts (its own root counts), and each is
+mounted and passed to Pi as `--skill` on launch, exactly as `pix run --skills
+DIR` does. A skill directory whose name matches a shipped skill shadows it.
+
 **Trust.** An environment that runs host code or handles a credential must be
 approved with `pix env trust NAME` before a launch will use it. The
 fingerprint is HMAC-bound and stored under `~/.pix/.state/trust`, outside the

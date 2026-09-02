@@ -167,12 +167,36 @@ type InferenceSection struct {
 }
 
 // InferenceBackend is one [inference.backends.<name>] entry.
+//
+// The three credential_* fields describe an `auth = "sbx-session"` backend:
+// the sandbox never holds the long-lived token, it sends a sentinel and the
+// sbx proxy swaps in the real value of the named host credential service on
+// the way out. They are declarations of WIRING, never of a secret value —
+// credential_service names an sbx credential service, key_env names the
+// environment variable the sentinel travels in, and the header/format pair
+// is the literal request shape. All three are host-affecting, so all three
+// are fingerprinted and rendered on the trust bill (workflow/env/bom.go's
+// InferenceFact); editing any of them re-gates the environment.
+//
+// Without these an environment could not describe a credentialed gateway at
+// all: the launcher's kit synthesis (inference/live.go) has always read them
+// from machine config.toml, and refuses an sbx-session backend that supplies
+// no identity. Carrying them here is what makes "the environment carries its
+// own auth" true for an environment repository rather than only for a
+// hand-edited machine file.
 type InferenceBackend struct {
 	Driver   string `toml:"driver"`
 	Protocol string `toml:"protocol"`
 	BaseURL  string `toml:"base_url"`
 	Auth     string `toml:"auth"`
 	KeyEnv   string `toml:"key_env"`
+	// CredentialService names the sbx credential service whose session token
+	// the proxy injects. Required (with KeyEnv) when Auth is "sbx-session".
+	CredentialService string `toml:"credential_service"`
+	// CredentialHeader defaults to "Authorization" when empty.
+	CredentialHeader string `toml:"credential_header"`
+	// CredentialFormat defaults to "Bearer %s" when empty.
+	CredentialFormat string `toml:"credential_format"`
 }
 
 // InferenceModel is one [[inference.models]] entry.

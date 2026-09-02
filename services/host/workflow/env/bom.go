@@ -212,6 +212,14 @@ type InferenceFact struct {
 	BaseURL  string
 	Auth     string
 	KeyEnv   string
+	// CredentialService/Header/Format are the sbx-session injection wiring
+	// (envinfo.InferenceBackend). They name a host credential service and
+	// the request shape its token is spent in, so they are host-affecting
+	// review facts in exactly the way base_url and key_env already are:
+	// fingerprinted here, rendered by renderBill, re-gated on edit.
+	CredentialService string
+	CredentialHeader  string
+	CredentialFormat  string
 }
 
 // BillOfMaterials is the environment's complete host-exec/security-relevant
@@ -556,7 +564,22 @@ func computeInference(s *envinfo.Sidecar, b *BillOfMaterials) {
 		be := s.Inference.Backends[name]
 		b.Inference = append(b.Inference, InferenceFact{
 			Name: name, Driver: be.Driver, Protocol: be.Protocol, BaseURL: be.BaseURL, Auth: be.Auth, KeyEnv: be.KeyEnv,
+			CredentialService: be.CredentialService,
+			CredentialHeader:  be.CredentialHeader,
+			CredentialFormat:  be.CredentialFormat,
 		})
+		// An sbx-session backend spends the named host credential SERVICE's
+		// token against the declared endpoint. That is a credential
+		// destination in the same sense key_env's is, and a reviewer who is
+		// not shown it cannot tell which host session an environment is
+		// about to spend.
+		if be.CredentialService != "" {
+			dest := be.BaseURL
+			if dest == "" {
+				dest = name + " (inference)"
+			}
+			b.CredentialTargets = append(b.CredentialTargets, CredentialTarget{Source: be.CredentialService + " (sbx credential service)", Destination: dest})
+		}
 		// Restriction 1: `key_env` names a host environment variable a
 		// launched Pi session hands this backend as a credential — a
 		// credential target exactly like a bound secret's, source is the

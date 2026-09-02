@@ -132,7 +132,7 @@ func TestEnvironmentAuthoredLlmmanOpenAICompatibleInference_WorksAndCarriesEgres
 				"llmman": {
 					Driver: "openai-compatible", Protocol: "openai-completions",
 					BaseURL: "https://llmman.internal.example/v1", Auth: "sbx-session",
-					KeyEnv: "LLMMAN_TOKEN",
+					KeyEnv: "LLMMAN_TOKEN", CredentialService: "llmman",
 				},
 			},
 			Models: []envinfo.InferenceModel{
@@ -145,12 +145,13 @@ func TestEnvironmentAuthoredLlmmanOpenAICompatibleInference_WorksAndCarriesEgres
 	if err != nil {
 		t.Fatalf("EffectiveInferenceConfig: %v", err)
 	}
-	// A bare sbx-session backend needs a credential_service too
-	// (InferenceKitSpec's own requirement) — set it on the merged snapshot
-	// the way a fuller pix.toml (or a future sidecar field) would.
-	b := eff.Inference.Backends["llmman"]
-	b.CredentialService = "llmman"
-	eff.Inference.Backends["llmman"] = b
+	// The credential identity now travels FROM the sidecar (it used to be
+	// patched onto the merged snapshot here, because pix.toml could not
+	// express it): an environment declares its own gateway auth, and an
+	// sbx-session backend that declares none is refused at the merge step.
+	if got := eff.Inference.Backends["llmman"].CredentialService; got != "llmman" {
+		t.Fatalf("credential_service = %q, want it carried through from pix.toml", got)
+	}
 
 	roster := RosterInputFor(sc, nil)
 	kitDir, err := inference.SynthesizeInferenceKit(eff, roster)

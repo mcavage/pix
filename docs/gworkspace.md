@@ -18,7 +18,7 @@ host-executed command over stdio:
 ```yaml
 mcp:
   servers:
-    google-workspace:
+    - name: google-workspace
       command: gog
       args:
         - --gmail-no-send
@@ -27,21 +27,28 @@ mcp:
         - mcp
         - --allow-tool
         - read
-      env:
-        GOG_KEYRING_PASSWORD: ${op://vault/item/field}
 ```
 
-`pix.toml` may add the annotations Pix itself needs, without touching the
-native declaration: a doctor probe and any extra non-secret env names.
+An `mcp.servers` entry is a **list** item carrying `name`, and either `url` or
+`command`/`args`. It has no `env` key: the decoder is strict, so a map-shaped
+entry or a per-server `env:` block is refused outright.
+
+Credentials reach a host-command server one way only — `pix.toml`'s `env_keys`.
+A non-empty list makes pix wrap that server's argv in `op run` against
+`$PIX_HOME/secrets.env`, so **every** name the server needs must be listed,
+secret or not, and each must have an `op://` reference recorded with
+`pix secret set NAME op://vault/item/field`.
 
 ```toml
 [host.mcp.google-workspace]
-env_keys = ["GOG_ACCOUNT"]
+env_keys = ["GOG_KEYRING_PASSWORD", "GOG_ACCOUNT"]
 probe = ["gog", "--readonly", "gmail", "labels", "list"]
 ```
 
-`.sbxenv.yaml` owns the command, argv, and credential binding; `pix.toml`
-only annotates what pix can check. A host command that runs on your machine
+`.sbxenv.yaml` owns the command and argv; `pix.toml` owns the credential
+wrapper and the annotations pix can check. A server that manages its own
+rotating grant declares no `env_keys` and is never wrapped, so it keeps
+working with a locked vault. A host command that runs on your machine
 must be approved once with `pix env trust NAME` before a launch will use it,
 the same gate that covers any other host-executing configuration.
 

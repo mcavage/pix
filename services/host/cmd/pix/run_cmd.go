@@ -361,6 +361,14 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		return terr
 	}
 
+	// AFTER the review gate, never before: an environment's own [pi].skills
+	// become mounts and `pi --skill` arguments, which is host-affecting, and
+	// a run that has not been approved must compose neither. They append to
+	// the same o.Skills channel `--skills DIR` uses, so MountDirs and
+	// LiveSkillDirs stay the only producers of both lists.
+	o.Skills = append(o.Skills, envSkillDirs(selection)...)
+	retry.Skills = append(retry.Skills, envSkillDirs(selection)...)
+
 	// A pi session needs at least one provider key, and the evidence is THIS
 	// PIX_HOME's configured op:// refs — never `sbx secret ls`, whose global
 	// entries belong to the host rather than to this stack. Offer to write a

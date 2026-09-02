@@ -628,6 +628,21 @@ func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, ve
 	for _, inf := range b.Inference {
 		fmt.Fprintf(out, "  inference:         %s  driver %s  base_url %s  auth %s\n",
 			safe(inf.Name), safe(inf.Driver), safe(inf.BaseURL), safe(inf.Auth))
+		// The sbx-session injection wiring is fingerprinted, so it has to be
+		// reachable from the review screen too (bom.go's own contract:
+		// nothing is fingerprinted that renderBill cannot reach). Only
+		// printed when the environment actually declares it.
+		if inf.CredentialService != "" {
+			header, format := inf.CredentialHeader, inf.CredentialFormat
+			if header == "" {
+				header = "Authorization"
+			}
+			if format == "" {
+				format = "Bearer %s"
+			}
+			fmt.Fprintf(out, "                     credential %s -> header %s (%s)\n",
+				safe(inf.CredentialService), safe(header), safe(format))
+		}
 	}
 	for _, it := range b.Interpolations {
 		src := fmt.Sprintf("${%s}", it.Var)
