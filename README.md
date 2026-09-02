@@ -197,11 +197,15 @@ override, and it never widens the `pix-*` namespace.
 
 An environment is a directory under `~/.pix/envs/<name>/`, declaring a
 native `.sbxenv.yaml` and an optional `pix.toml` sidecar. There is no
-registration database and no `add`/`edit`/`use`/`forget` verb: create,
-clone, edit, and remove one with ordinary filesystem and Git tools.
+registration database and no `edit`/`use`/`forget` verb: create, clone,
+edit, and remove one with ordinary filesystem and Git tools. `pix env add`
+is the one exception, adopting an existing source (a local directory or a
+git URL) as a new environment; it never overwrites one that is already
+there.
 
 ```bash
 pix env                 # list environments, the default, and trust state
+pix env add SOURCE [NAME] # adopt an existing local dir or git URL as a new one
 pix env NAME --effective # the exact sandbox declaration a new launch would use
 pix env trust NAME       # read and accept what NAME runs on your host
 ```

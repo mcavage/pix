@@ -24,7 +24,7 @@ type ContainmentError struct {
 
 func (e *ContainmentError) Error() string {
 	return fmt.Sprintf(
-		"pix: environment root %s resolves inside writable workspace %s it mounts; refusing.\n     workspace: %s\n     register a root outside it: pix env add <name> <path>",
+		"pix: environment root %s resolves inside writable workspace %s it mounts; refusing.\n     workspace: %s\n     register a root outside it: pix env add <path> [name]",
 		e.Root, e.Workspace, e.Workspace,
 	)
 }

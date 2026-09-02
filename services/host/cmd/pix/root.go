@@ -2,7 +2,7 @@
 // the only thing that parses argv, dispatches a verb, or answers a help
 // request. Every verb here is the v2 accepted surface
 // (docs/design/pix-v2-surface.md §3): run (implicit and explicit), ls, rm,
-// task new/ls/path/rm, env list/show/default/trust, secret
+// task new/ls/path/rm, env list/add/show/default/trust, secret
 // list/set/rm/check, setup, doctor, reset, help, version. Nothing else is
 // dispatchable: a removed verb (status, resume, config, mcp, models, agent,
 // pack, serve, uat, and every compatibility alias) gets kong's ordinary
@@ -57,7 +57,7 @@ type rootCmd struct {
 
 	Task taskCmd `cmd:"" group:"Parallel work" help:"Parallel task checkouts of one repo: new | ls | path | rm."`
 
-	Env    envCmd    `cmd:"" group:"Environments & credentials" help:"Named environments under ~/.pix/envs: list | show | default | trust."`
+	Env    envCmd    `cmd:"" group:"Environments & credentials" help:"Named environments under ~/.pix/envs: list | add | show | default | trust."`
 	Secret SecretCmd `cmd:"" group:"Environments & credentials" help:"1Password references: list | set | rm | check."`
 
 	Version versionCmd `cmd:"" group:"Meta" help:"Print the stamped launcher version."`
@@ -178,7 +178,7 @@ func normalizeArgv(argv []string) []string {
 // for a real `pix env` subcommand.
 func isEnvKnownVerb(v string) bool {
 	switch v {
-	case "list", "show", "default", "trust":
+	case "list", "add", "show", "default", "trust":
 		return true
 	}
 	return false

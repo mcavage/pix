@@ -199,14 +199,23 @@ the directory name is the environment name, and an environment stored
 elsewhere is represented by a symlink under `~/.pix/envs`.
 
 ```
-pix env [NAME] [--path|--effective|--json]   # detail includes resolved model + agent overrides
-pix env default [NAME]                        # print, or set, the machine default
-pix env trust NAME [--yes]                    # read and accept what NAME runs on your host
+pix env [NAME] [--path|--effective|--json]     # detail includes resolved model + agent overrides
+pix env add SOURCE [NAME]                      # adopt an existing local dir or git URL as a new one
+pix env default [NAME]                          # print, or set, the machine default
+pix env trust NAME [--yes]                      # read and accept what NAME runs on your host
 ```
 
-**There is no `add`/`edit`/`use`/`forget`.** Create, clone, edit, move, and
-remove an environment with ordinary filesystem and Git tools under
-`~/.pix/envs`. An environment whose bill of materials is empty (it runs
+**There is no `edit`/`use`/`forget`, and `add` never overwrites.** `pix env
+add` is the one narrow exception to "create it yourself": SOURCE is either
+an existing local directory (linked in with a symlink to its canonical
+absolute path) or a git URL (cloned). NAME defaults to one derived from
+SOURCE. `add` refuses a name that already exists under `~/.pix/envs` rather
+than overwrite, merge, or replace it, and refuses (rolling back only what
+this one call created) when the adopted directory has no valid
+`.sbxenv.yaml`. It never sets the default, trusts, runs setup, or launches
+anything; those stay separate commands. Beyond `add`, create, clone, edit,
+move, and remove an environment with ordinary filesystem and Git tools
+under `~/.pix/envs`. An environment whose bill of materials is empty (it runs
 nothing on this host, hands out no credential, and expands no mount) needs
 no acceptance at all: it is never prompted for, `pix env trust NAME` says
 there is nothing to accept and writes no record, and `pix env list`/`show`

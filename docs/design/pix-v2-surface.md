@@ -233,6 +233,18 @@ uses the current
 directory as the project workspace and prints the exact native sbx environment
 Pix would use for a new sandbox without creating one.
 
+`pix env add SOURCE [NAME]` adopts an EXISTING source as a new environment:
+SOURCE is either a local directory already on disk (linked in with a symlink
+to its canonical absolute path) or a git URL (cloned). NAME defaults to one
+derived from SOURCE. It never overwrites, merges, or replaces an existing
+`envs/<name>` entry; a missing or invalid `.sbxenv.yaml` after adoption rolls
+back only the symlink or clone this call itself created, never a pre-existing
+directory. It selects no default, trusts nothing, runs no setup, and launches
+nothing. This is the one narrow exception to "no general environment create,
+edit, add, forget, update, or delete commands" below: it can only ADOPT a
+source that already exists, never scaffold, edit, or register a bare name
+against config state the way v1's config-backed `pix env add` did.
+
 `pix env default` prints the machine default. `pix env default NAME` changes it.
 The command does not run setup, reconcile MCP, start a service, or mutate a
 sandbox.
@@ -246,10 +258,11 @@ An interactive `pix run` may present the same complete trust operation on first
 use, defaulting to No. This is the same operation as `pix env trust`, not a
 second authority path. A non-interactive run never grants trust.
 
-Pix does not provide general environment create, edit, add, forget, update, or
-delete commands. Users create, clone, edit, move, and remove directories with
-filesystem and Git tools. `pix setup` may scaffold the built-in default
-environment as a first-run convenience.
+Beyond `add`'s narrow adopt-an-existing-source case, Pix does not provide
+general environment create, edit, forget, update, or delete commands. Users
+create, clone, edit, move, and remove directories with filesystem and Git
+tools. `pix setup` may scaffold the built-in default environment as a
+first-run convenience.
 
 ### 3.5 `pix secret`
 

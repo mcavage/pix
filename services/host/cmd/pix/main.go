@@ -143,7 +143,7 @@ Setup & health
   reset            clean slate: remove sandboxes + memory container, back up ~/.pix
 
 Environments & credentials
-  env              named environments under ~/.pix/envs: list | show | default | trust
+  env              named environments under ~/.pix/envs: list | add | show | default | trust
   secret           1Password references: list | set | rm | check
 
 Learn a command:  pix help run     ·     pix <command> -h     ·     pix help --all

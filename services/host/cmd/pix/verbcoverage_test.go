@@ -59,7 +59,7 @@ func TestHelpListsEveryTopLevelVerb(t *testing.T) {
 func TestEveryDispatchedSubcommandAppearsInItsUsage(t *testing.T) {
 	for verb, subs := range map[string][]string{
 		"task":   {"new", "ls", "path", "rm"},
-		"env":    {"list", "show", "default", "trust"},
+		"env":    {"list", "add", "show", "default", "trust"},
 		"secret": {"ls", "set", "rm", "check"},
 	} {
 		d, out, _ := rootDeps()

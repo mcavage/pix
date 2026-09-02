@@ -1,7 +1,10 @@
-// env_cmd.go — `pix env`: list | show | default | trust (docs/design/
+// env_cmd.go — `pix env`: list | add | show | default | trust (docs/design/
 // pix-v2-surface.md §3.4). An environment IS a directory under
 // ~/.pix/envs/<name>/; there is no registration database and no
-// add/edit/use/forget mutation path — those verbs are gone in v2. Selection
+// edit/use/forget mutation path — those verbs are gone in v2. `add` (add.go)
+// is the one narrow exception: it adopts an EXISTING source (a local
+// directory or a git URL), never edits, registers by name alone, or
+// replaces one that is already there. Selection
 // and listing come from workflow/env's pixhome-based ResolveIn/List
 // (home.go). `default` reads/writes the one config.toml field config.Config
 // owns (DefaultEnvironment, the sole config.toml schema). `trust` is the
@@ -38,18 +41,22 @@ func (c *envCmd) Help() string {
 	return `A named environment: a directory under ~/.pix/envs/<name>/ declaring
 .sbxenv.yaml (native sbx grammar) and an optional pix.toml sidecar.
 
-Four verbs: list, show, default, trust. There is no add/edit/use/forget:
-create, edit, move, and remove an environment with ordinary filesystem and
-Git tools under ~/.pix/envs. 'pix setup' may scaffold a default one.
+Five verbs: list, show, add, default, trust. There is no edit/use/forget:
+edit, move, and remove an environment with ordinary filesystem and Git
+tools under ~/.pix/envs. 'add' is the one narrow exception — it ADOPTS an
+existing source (a local directory already on disk, or a git URL) as a
+new environment; it never overwrites, merges, or replaces one that is
+already there. 'pix setup' may scaffold a default one.
 
 An environment that runs host code or handles a credential must be
 approved with 'pix env trust NAME' before a launch will use it.`
 }
 
-// envCmd's field ORDER is the v2 four-verb surface; bare 'pix env' is
+// envCmd's field ORDER is the v2 verb surface; bare 'pix env' is
 // 'env list'.
 type envCmd struct {
 	List    envListCmd    `cmd:"" default:"1" help:"List environments under ~/.pix/envs, the default, and trust state."`
+	Add     envAddCmd     `cmd:"" help:"Adopt a git URL or local directory as a new environment."`
 	Show    envShowCmd    `cmd:"" help:"What NAME is: files, resolved root, trust state. --path/--effective/--json."`
 	Default envDefaultCmd `cmd:"" help:"Print, or set, the machine default environment."`
 	Trust   envTrustCmd   `cmd:"" help:"Read and accept what NAME runs on your host."`
@@ -122,6 +129,45 @@ func (c *envListCmd) Run(d *cli.Deps) error {
 		}
 		fmt.Fprintf(d.Out, "%s\t%s\t%s%s\n", r.Name, r.Root, trust, mark)
 	}
+	return nil
+}
+
+// ── add ──────────────────────────────────────────────────────────────────
+
+// envAddCmd is `pix env add <git-url|local-directory> [name]`: the one
+// narrow exception to "Pix does not provide general environment create,
+// edit, add, forget, update, or delete commands" (docs/design/
+// pix-v2-surface.md §3.4). It ADOPTS a source that already exists — a
+// local directory already on disk gets a symlink to its canonical
+// absolute path, a git URL gets cloned — as a new named environment. It is
+// add-only: no overwrite, no merge, no replace, and it never selects a
+// default, trusts, runs setup, or launches anything (workflow/env's Add
+// owns the full contract). Unlike 'pix env trust', naming a source is
+// itself the whole approval this command needs, so it never requires a
+// TTY and never prompts.
+type envAddCmd struct {
+	Source string `arg:"" help:"A git URL to clone, or an existing local directory to link in."`
+	Name   string `arg:"" optional:"" help:"Environment name (omit to derive one from Source)."`
+}
+
+func (c *envAddCmd) Run(d *cli.Deps) error {
+	home, err := envHome()
+	if err != nil {
+		return err
+	}
+	res, err := nativeenv.Add(nativeenv.AddOptions{Home: home, Source: c.Source, Name: c.Name})
+	if err != nil {
+		return envRun(d, err)
+	}
+	verb := "cloned"
+	if res.Kind == "local" {
+		verb = "linked"
+	}
+	fmt.Fprintf(d.Out, "pix: %s %q -> %s\n", verb, res.Name, res.Root)
+	fmt.Fprintln(d.Out, "next:")
+	fmt.Fprintf(d.Out, "  pix env show %s\n", sys.ShellQuote(res.Name))
+	fmt.Fprintf(d.Out, "  pix env trust %s\n", sys.ShellQuote(res.Name))
+	fmt.Fprintf(d.Out, "  pix env default %s\n", sys.ShellQuote(res.Name))
 	return nil
 }
 
