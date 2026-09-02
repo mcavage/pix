@@ -366,8 +366,12 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// a run that has not been approved must compose neither. They append to
 	// the same o.Skills channel `--skills DIR` uses, so MountDirs and
 	// LiveSkillDirs stay the only producers of both lists.
+	//
+	// `retry` is deliberately NOT touched: a recreate re-enters this same
+	// function with retry as its o, resolves the environment again, and
+	// appends again. Adding them here too would double every env skill dir
+	// in both the mount set and the pi argv on the second attempt.
 	o.Skills = append(o.Skills, envSkillDirs(selection)...)
-	retry.Skills = append(retry.Skills, envSkillDirs(selection)...)
 
 	// A pi session needs at least one provider key, and the evidence is THIS
 	// PIX_HOME's configured op:// refs — never `sbx secret ls`, whose global

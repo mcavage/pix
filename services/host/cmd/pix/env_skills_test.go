@@ -79,3 +79,24 @@ func TestEnvSkillDirs_ReachBothTheMountSetAndThePiSkillList(t *testing.T) {
 		t.Fatalf("pi invocation = %v, want --skill %s", piArgs, envSkills)
 	}
 }
+
+// A recreate re-enters runLaunchAttempt with the RETRY copy as its opts and
+// resolves the environment again, so the retry copy must not already carry
+// the environment's skill dirs: appending to both would double every entry in
+// the mount set and the pi argv on the second attempt.
+func TestEnvSkillDirs_RecreateDoesNotDoubleTheSkillDirs(t *testing.T) {
+	root := t.TempDir()
+	sel := envWithSkills(root, "skills")
+
+	// First attempt.
+	o := launch.RunOpts{}
+	o.Skills = append(o.Skills, envSkillDirs(sel)...)
+	// The recreate path re-enters with cloneRunOpts(retry), where retry was
+	// never appended to, and appends once more.
+	retry := cloneRunOpts(launch.RunOpts{})
+	retry.Skills = append(retry.Skills, envSkillDirs(sel)...)
+
+	if len(o.Skills) != 1 || len(retry.Skills) != 1 {
+		t.Fatalf("attempt=%v retry=%v, want exactly one env skill dir each", o.Skills, retry.Skills)
+	}
+}
