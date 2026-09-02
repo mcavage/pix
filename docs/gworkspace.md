@@ -42,7 +42,7 @@ secret or not, and each must have an `op://` reference recorded with
 ```toml
 [host.mcp.google-workspace]
 env_keys = ["GOG_KEYRING_PASSWORD", "GOG_ACCOUNT"]
-probe = ["gog", "--readonly", "gmail", "labels", "list"]
+probe_args = ["gog", "--readonly", "gmail", "labels", "list"]
 ```
 
 `.sbxenv.yaml` owns the command and argv; `pix.toml` owns the credential
@@ -64,12 +64,16 @@ pix rm BOX && pix run            # a declaration reaches a session at CREATE onl
 
 ## Verifying it
 
-`pix doctor` distinguishes **registered** from **working**. For a declared
-command it checks the binary resolves on PATH, then runs the declared
-`probe` through the same wrapper the Gateway uses to spawn the server, so a
-credential that only works because it happens to be exported in your shell
-fails here, which is the point. A server with no declared probe is reported
-as *unverified*, never as healthy.
+`probe_args` is **declared and reviewed, not yet run**. Pix collects it,
+fingerprints it, and shows it on the trust bill as a `NAME (probe)` argv row,
+so you can see exactly what an environment claims will prove the server works.
+No command runs it today, so an environment-declared MCP server is
+*registered*, never *verified*, and the registered-versus-working distinction
+is yours to make.
+
+Until that lands, put the check that has to mean something in a `[[setup]]`
+hook's `check_args`, where the exit code is the contract and
+`pix setup --env NAME` reports it.
 
 For `gog` itself the probe has to be a real READ: `gog --readonly gmail
 labels list`, which exits 0 when the keyring opens and a token is readable,
