@@ -25,11 +25,28 @@ type HTTPProber struct {
 	// Timeout bounds each of the two requests when Client is nil-defaulted.
 	// Zero uses DefaultProbeTimeout.
 	Timeout time.Duration
+	// Token is the pix-memory bearer token (container.ReadMemoryAuthToken),
+	// sent as "Authorization: Bearer <token>" on the /mcp initialize and
+	// tools/list requests — never as a "?token=" query parameter, so it can
+	// never be formatted into this package's own error strings (which only
+	// ever interpolate the bare baseURL/endpoint, never a full request URL).
+	// Empty leaves requests unauthenticated, matching pix-memory's own
+	// pre-`pix setup` posture (no token generated yet). /healthz never needs
+	// it: services/memory/server.NewMux serves /healthz unauthenticated by
+	// design.
+	Token string
 }
 
 // DefaultProbeTimeout bounds one HTTPProber request when neither Client nor
 // Timeout customizes it.
 const DefaultProbeTimeout = 5 * time.Second
+
+// WithToken implements TokenAuthenticated: it returns a copy of p carrying
+// token, never mutating the receiver.
+func (p HTTPProber) WithToken(token string) Prober {
+	p.Token = token
+	return p
+}
 
 func (p HTTPProber) client() *http.Client {
 	if p.Client != nil {
@@ -49,7 +66,7 @@ func (p HTTPProber) Probe(baseURL string) error {
 	if err := probeHealthz(client, baseURL); err != nil {
 		return err
 	}
-	tools, err := probeMCPTools(client, baseURL)
+	tools, err := probeMCPTools(client, baseURL, p.Token)
 	if err != nil {
 		return err
 	}
@@ -97,7 +114,7 @@ const mcpProtocolVersion = "2025-06-18"
 // probeMCPTools performs the minimal handshake needed to call tools/list:
 // initialize, then tools/list, carrying forward any session id the server
 // assigns. It returns the tool names reported.
-func probeMCPTools(client *http.Client, baseURL string) ([]string, error) {
+func probeMCPTools(client *http.Client, baseURL, token string) ([]string, error) {
 	endpoint := strings.TrimRight(baseURL, "/") + "/mcp"
 
 	initParams := map[string]any{
@@ -105,12 +122,12 @@ func probeMCPTools(client *http.Client, baseURL string) ([]string, error) {
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "pix-setup-probe", "version": "1"},
 	}
-	_, sessionID, err := mcpCall(client, endpoint, "", jsonRPCRequest{JSONRPC: "2.0", ID: 1, Method: "initialize", Params: initParams})
+	_, sessionID, err := mcpCall(client, endpoint, "", token, jsonRPCRequest{JSONRPC: "2.0", ID: 1, Method: "initialize", Params: initParams})
 	if err != nil {
 		return nil, fmt.Errorf("mcp initialize at %s: %w", endpoint, err)
 	}
 
-	raw, _, err := mcpCall(client, endpoint, sessionID, jsonRPCRequest{JSONRPC: "2.0", ID: 2, Method: "tools/list", Params: map[string]any{}})
+	raw, _, err := mcpCall(client, endpoint, sessionID, token, jsonRPCRequest{JSONRPC: "2.0", ID: 2, Method: "tools/list", Params: map[string]any{}})
 	if err != nil {
 		return nil, fmt.Errorf("mcp tools/list at %s: %w", endpoint, err)
 	}
@@ -136,7 +153,7 @@ func probeMCPTools(client *http.Client, baseURL string) ([]string, error) {
 // directly or `text/event-stream` (one or more `data: <json>` frames,
 // architecture §8.1: "the transport may return plain JSON responses and use
 // streams only when an operation needs them") — both are handled.
-func mcpCall(client *http.Client, endpoint, sessionID string, req jsonRPCRequest) (json.RawMessage, string, error) {
+func mcpCall(client *http.Client, endpoint, sessionID, token string, req jsonRPCRequest) (json.RawMessage, string, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, "", err
@@ -149,6 +166,15 @@ func mcpCall(client *http.Client, endpoint, sessionID string, req jsonRPCRequest
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	if sessionID != "" {
 		httpReq.Header.Set("Mcp-Session-Id", sessionID)
+	}
+	if token != "" {
+		// Header only, never a "?token=" query parameter on endpoint: the
+		// latter would land the secret in this function's own request URL,
+		// which a future caller could all too easily log or format into an
+		// error — exactly the leak this package's error strings (mcp
+		// initialize/tools/list above) are written to avoid by interpolating
+		// only the bare endpoint.
+		httpReq.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := client.Do(httpReq)

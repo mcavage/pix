@@ -420,6 +420,33 @@ type Prober interface {
 	Probe(baseURL string) error
 }
 
+// TokenAuthenticated is implemented by a Prober that can be handed the
+// pix-memory bearer token to authenticate its own /mcp requests, resolved
+// at a point LATER than the Prober's own construction. `pix setup`
+// (workflow/provision.Setup) generates or reads that token only under its
+// setup lock, well after its own seams (cmd/pix's productionSetupSeams)
+// already built a Prober with no token in hand — this lets Setup hand the
+// real token to whatever concrete Prober it was given, including one
+// wrapped by cmd/pix's startupProber, without needing to know its concrete
+// type. WithToken returns an equivalent, authenticated Prober; it never
+// mutates the receiver.
+type TokenAuthenticated interface {
+	WithToken(token string) Prober
+}
+
+// WithToken hands prober the pix-memory bearer token when prober supports
+// it (TokenAuthenticated), and returns prober unchanged otherwise — e.g. a
+// test double that never needed a token has no reason to implement the
+// interface. This is the ONE place Setup applies a resolved token to an
+// injected Prober, so every caller (today just provision.Setup) authenticates
+// identically.
+func WithToken(prober Prober, token string) Prober {
+	if ta, ok := prober.(TokenAuthenticated); ok {
+		return ta.WithToken(token)
+	}
+	return prober
+}
+
 // ReconcileOptions carries the one decision Reconcile cannot make for itself:
 // whether a mismatched container may be replaced. A nil ConfirmReplace always
 // proceeds (production default: setup shows the drift and asks before ever

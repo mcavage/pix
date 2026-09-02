@@ -58,6 +58,22 @@ type fakeProber struct{}
 
 func (fakeProber) Probe(string) error { return nil }
 
+// tokenCapturingProber implements both container.Prober and
+// container.TokenAuthenticated: it records the token Setup handed it via
+// WithToken (or "" if WithToken was never called), so a test can prove the
+// readiness probe actually authenticates with the SAME token Setup just
+// generated — not a false-unhealthy 401 against a tokenless prober.
+type tokenCapturingProber struct {
+	seenToken *string
+}
+
+func (p tokenCapturingProber) Probe(string) error { return nil }
+
+func (p tokenCapturingProber) WithToken(token string) container.Prober {
+	*p.seenToken = token
+	return p
+}
+
 type fakeMCP struct {
 	registered   map[string]string
 	calls        int
@@ -303,6 +319,34 @@ func TestSetup_SkipsReleaseWhenManifestEmpty(t *testing.T) {
 	}
 	if m != nil {
 		t.Fatal("no manifest should have been written")
+	}
+}
+
+// TestSetup_ProbesWithTheGeneratedToken is the wiring-level regression for
+// the reported false "pix-memory unhealthy" doctor/setup report: Setup
+// generates the bearer token itself, INSIDE the setup lock, strictly AFTER
+// its own Prober was constructed by the caller's seams — so the readiness
+// probe Reconcile runs must be handed that SAME token via
+// container.WithToken, never left authenticating with none at all (which
+// is exactly what produced "mcp initialize at http://127.0.0.1:<port>/mcp
+// returns 401" against a real, auth-requiring pix-memory container).
+func TestSetup_ProbesWithTheGeneratedToken(t *testing.T) {
+	home := pixhome.New(t.TempDir())
+	docker := &fakeDockerRunner{inspectErr: errors.New("exit 1"), inspectOut: "Error: No such object"}
+	spec := container.Spec{ContainerName: "pix-memory-test", Image: "img@sha256:" + strings.Repeat("b", 64), HostPort: 18080, DataDir: home.StateMemory}
+	var seenToken string
+	prober := tokenCapturingProber{seenToken: &seenToken}
+
+	if _, err := Setup(Deps{Home: home, ContainerRunner: docker, Prober: prober, ContainerSpec: spec}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	tok, terr := container.ReadMemoryAuthToken(home)
+	if terr != nil || tok == "" {
+		t.Fatalf("ReadMemoryAuthToken = (%q, %v), want a generated token", tok, terr)
+	}
+	if seenToken != tok {
+		t.Fatalf("probe authenticated with token %q, want the generated token %q", seenToken, tok)
 	}
 }
 

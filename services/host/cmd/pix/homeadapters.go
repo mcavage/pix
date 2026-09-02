@@ -77,6 +77,20 @@ func homeContainerSpec(home pixhome.Paths) container.Spec {
 	}
 }
 
+// homeMemoryProber builds the production, authenticated container.Prober
+// every v2 home caller (`pix doctor`) probes pix-memory's /mcp endpoint
+// with: container.HTTPProber carrying THIS home's already-persisted bearer
+// token (container.ReadMemoryAuthToken, read-only — never generates one,
+// matching homeContainerSpec's own pre-`pix setup` posture). A tokenless
+// HTTPProber{} against a real, auth-requiring pix-memory container is
+// exactly the false "unhealthy" report ("mcp initialize at
+// http://127.0.0.1:<port>/mcp returns 401") this function exists to stop
+// producing.
+func homeMemoryProber(home pixhome.Paths) container.HTTPProber {
+	token, _ := container.ReadMemoryAuthToken(home)
+	return container.HTTPProber{Token: token}
+}
+
 // execChecker is the production health.ExecChecker: run the named binary
 // with args and report its combined output, exactly like every other small
 // Runner interface in this module (pixhome.Runner, container.Runner).
@@ -95,6 +109,16 @@ type startupProber struct {
 	Timeout  time.Duration
 	Interval time.Duration
 	OnRetry  func(time.Duration)
+}
+
+// WithToken implements container.TokenAuthenticated: it hands token to
+// Inner when Inner itself supports it, and returns an otherwise-unchanged
+// copy of p wrapping the result — so `provision.Setup`'s WithToken call can
+// authenticate the REAL container.HTTPProber underneath the retry/backoff
+// wrapper without needing to know it is there.
+func (p startupProber) WithToken(token string) container.Prober {
+	p.Inner = container.WithToken(p.Inner, token)
+	return p
 }
 
 func (p startupProber) Probe(baseURL string) error {

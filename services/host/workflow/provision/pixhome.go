@@ -248,6 +248,13 @@ func Setup(d Deps) (Result, error) {
 			return fmt.Errorf("pix-memory auth token: %w", terr)
 		}
 		token = tok
+		// d.Prober was built by the caller's seams BEFORE this token existed
+		// (cmd/pix's productionSetupSeams runs before pixhome.Resolve, let
+		// alone this lock) — container.WithToken hands the resolved token to
+		// it now, reaching through any startupProber wrapper, so the readiness
+		// probe below authenticates against the SAME container this call just
+		// created/adopted instead of reporting a false unhealthy 401.
+		prober := container.WithToken(d.Prober, token)
 
 		port, perr := container.AllocateMemoryPortLocked(d.Home)
 		if perr != nil {
@@ -263,7 +270,7 @@ func Setup(d Deps) (Result, error) {
 		// says one thing and Docker another.
 		for attempt := 0; ; attempt++ {
 			resolvedSpec.HostPort = port
-			cres, cerr := container.Reconcile(d.ContainerRunner, resolvedSpec, d.Prober, container.ReconcileOptions{
+			cres, cerr := container.Reconcile(d.ContainerRunner, resolvedSpec, prober, container.ReconcileOptions{
 				ConfirmReplace: d.ConfirmReplace,
 			})
 			if cerr == nil {

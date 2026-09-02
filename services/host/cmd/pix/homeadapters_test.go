@@ -62,6 +62,35 @@ func TestHomeContainerSpec_TwoHomesYieldDistinctScopedNames(t *testing.T) {
 // and that two different PIX_HOMEs diverge exactly the way
 // TestHomeContainerSpec_TwoHomesYieldDistinctScopedNames proves for the
 // container name.
+// TestHomeMemoryProber_CarriesThePersistedToken is the doctor-side wiring
+// regression for the reported false "pix-memory unhealthy" report: once
+// `pix setup` has generated this home's bearer token, `pix doctor`'s own
+// Prober must carry it — a bare, tokenless container.HTTPProber{} against a
+// real auth-requiring pix-memory container is exactly what produced "mcp
+// initialize at http://127.0.0.1:<port>/mcp returns 401".
+func TestHomeMemoryProber_CarriesThePersistedToken(t *testing.T) {
+	home := pixhome.New(t.TempDir())
+	tok, err := container.EnsureMemoryAuthToken(home)
+	if err != nil {
+		t.Fatalf("EnsureMemoryAuthToken: %v", err)
+	}
+	if got := homeMemoryProber(home).Token; got != tok {
+		t.Fatalf("homeMemoryProber(home).Token = %q, want the persisted token %q", got, tok)
+	}
+}
+
+// TestHomeMemoryProber_NoTokenYetIsUnauthenticated proves the pre-`pix
+// setup` posture stays exactly what it always was: no token file yet means
+// no token attached, matching homeContainerSpec's own AuthTokenFile
+// ("points at a file that may not exist yet") posture — never a crash and
+// never a fabricated value.
+func TestHomeMemoryProber_NoTokenYetIsUnauthenticated(t *testing.T) {
+	home := pixhome.New(t.TempDir())
+	if got := homeMemoryProber(home).Token; got != "" {
+		t.Fatalf("homeMemoryProber(home).Token = %q, want empty before pix setup has run", got)
+	}
+}
+
 func TestBuiltinMCPFactsUsesScopedNames(t *testing.T) {
 	homeA := t.TempDir()
 	t.Setenv("PIX_HOME", homeA)
@@ -113,6 +142,27 @@ func TestProductionSetupUsesFullMCPStartupProbe(t *testing.T) {
 	}
 	if _, ok := p.Inner.(container.HTTPProber); !ok {
 		t.Fatalf("startup inner prober = %T, want container.HTTPProber", p.Inner)
+	}
+}
+
+// TestStartupProberWithTokenReachesTheRealHTTPProber proves
+// container.WithToken(startupProber{...}, tok) authenticates the actual
+// container.HTTPProber it wraps — the exact seam provision.Setup uses to
+// hand its own generated token through to `pix setup`'s startup-retry
+// prober, resolved long after productionSetupSeams() built it tokenless.
+func TestStartupProberWithTokenReachesTheRealHTTPProber(t *testing.T) {
+	p := startupProber{Inner: container.HTTPProber{}}
+	authenticated := container.WithToken(p, "tok-123")
+	sp, ok := authenticated.(startupProber)
+	if !ok {
+		t.Fatalf("WithToken returned %T, want startupProber", authenticated)
+	}
+	hp, ok := sp.Inner.(container.HTTPProber)
+	if !ok {
+		t.Fatalf("startupProber.Inner = %T, want container.HTTPProber", sp.Inner)
+	}
+	if hp.Token != "tok-123" {
+		t.Fatalf("inner HTTPProber.Token = %q, want %q", hp.Token, "tok-123")
 	}
 }
 
