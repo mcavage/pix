@@ -8,11 +8,23 @@
 //     existing default environment is never rewritten; the picker degrades
 //     to a display of the model, the rule, and the exact file/key to edit
 //     by hand (R9).
-//   - The default answer is always "keep the shown fallback": empty input,
-//     an out-of-range choice, or anything unparsable leaves the scaffolded
-//     pix.toml exactly as EnsureDefaultEnvironment wrote it.
+//   - The FIRST question is a plain-language yes/no: it names the provider
+//     the fallback rule chose ("OpenAI is first among your configured
+//     providers") and the model by its human label, never the internal
+//     "configured provider default" source string a model choice is
+//     stamped with elsewhere. Enter, "y", or anything that is not a "no"
+//     keeps that fallback.
+//   - Only on an explicit "no" does it list alternatives, and ONLY for that
+//     one provider — never every configured provider at once. The list is
+//     catalog id + human label; it never prints a context window (that is
+//     an internal sizing fact, not a selection cue) and never repeats the
+//     "configured provider default" wording.
+//   - The default answer at every prompt is always "keep the shown
+//     fallback": empty input, an out-of-range choice, or anything
+//     unparsable leaves the scaffolded pix.toml exactly as
+//     EnsureDefaultEnvironment wrote it.
 //   - The listed choices are the catalog's own `available`, non-local
-//     models for the providers THIS home already configures, in catalog
+//     models for the ONE provider the fallback rule chose, in catalog
 //     order — never scored, priced, or ranked (that machinery does not
 //     exist here and this file must not grow it).
 package main
@@ -53,20 +65,11 @@ func setupModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, defau
 	// The fallback resolveRunModel would pick for a scaffolded environment
 	// with NO [models].main set — the same authoritative function `pix run`
 	// and `pix env show` use, never a parallel computation of it (R3).
-	fallbackModel, fallbackSource, err := resolveRunModel("", nil, env)
+	fallbackModel, _, err := resolveRunModel("", nil, env)
 	if err != nil || fallbackModel == "" {
 		return
 	}
 	sidecarPath := filepath.Join(home.EnvironmentDir(provision.DefaultEnvironmentName), "pix.toml")
-
-	if !defaultEnvCreated {
-		// R9: setup did not create the default environment this run, so its
-		// pix.toml is user-owned and untouched. Display only.
-		fmt.Fprintln(d.Out, "")
-		fmt.Fprintf(d.Out, "the default environment already exists; it will use %s (%s).\n", fallbackModel, fallbackSource)
-		fmt.Fprintf(d.Out, "  To change it, edit %s and set [models].main.\n", sidecarPath)
-		return
-	}
 
 	catalog, err := inference.LoadCatalog()
 	if err != nil {
@@ -74,13 +77,37 @@ func setupModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, defau
 		// already surfaced (or would surface) that same failure at launch.
 		return
 	}
-	configured := make(map[string]bool, len(providers))
-	for _, p := range providers {
-		configured[p] = true
+	fallback, ok := catalog.Get(fallbackModel)
+	if !ok {
+		return
 	}
+	why := fmt.Sprintf("%s is first among your configured providers.", providerDisplayName(fallback.Provider))
+
+	if !defaultEnvCreated {
+		// R9: setup did not create the default environment this run, so its
+		// pix.toml is user-owned and untouched. Display only.
+		fmt.Fprintln(d.Out, "")
+		fmt.Fprintf(d.Out, "Default model: %s The default environment already exists; it will use %s.\n", why, fallback.Label)
+		fmt.Fprintf(d.Out, "  To change it, edit %s and set [models].main.\n", sidecarPath)
+		return
+	}
+
+	fmt.Fprintln(d.Out, "")
+	fmt.Fprintf(d.Out, "Default model: %s Use %s? [Y/n] ", why, fallback.Label)
+
+	sc := bufio.NewScanner(d.In)
+	if !sc.Scan() {
+		return
+	}
+	answer := strings.ToLower(strings.TrimSpace(sc.Text()))
+	if answer != "n" && answer != "no" {
+		fmt.Fprintf(d.Out, "using %s (%s).\n", fallback.Label, fallbackModel)
+		return
+	}
+
 	var choices []inference.Model
 	for _, m := range catalog.Models {
-		if m.Available && !m.Local && configured[m.Provider] {
+		if m.Available && !m.Local && m.Provider == fallback.Provider {
 			choices = append(choices, m)
 		}
 	}
@@ -88,37 +115,53 @@ func setupModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, defau
 		return
 	}
 
-	fmt.Fprintln(d.Out, "")
-	fmt.Fprintln(d.Out, "current models for the providers this home configures:")
+	fmt.Fprintf(d.Out, "%s models:\n", providerDisplayName(fallback.Provider))
 	for i, m := range choices {
-		fmt.Fprintf(d.Out, "  %d) %-32s %s, context %d tokens\n", i+1, m.ID, m.Label, m.ContextWindow)
+		fmt.Fprintf(d.Out, "  %d) %-32s %s\n", i+1, m.ID, m.Label)
 	}
-	fmt.Fprintf(d.Out, "Pick a number, or press Enter to keep the shown fallback: %s (%s): ", fallbackModel, fallbackSource)
+	fmt.Fprintf(d.Out, "Pick a number, or press Enter to keep %s: ", fallback.Label)
 
-	sc := bufio.NewScanner(d.In)
 	if !sc.Scan() {
 		return
 	}
 	line := strings.TrimSpace(sc.Text())
 	if line == "" {
-		fmt.Fprintf(d.Out, "keeping the fallback: %s (%s)\n", fallbackModel, fallbackSource)
+		fmt.Fprintf(d.Out, "keeping %s.\n", fallback.Label)
 		return
 	}
 	idx, err := strconv.Atoi(line)
 	if err != nil || idx < 1 || idx > len(choices) {
-		fmt.Fprintf(d.Out, "%q is not one of the listed choices; keeping the fallback: %s (%s)\n", line, fallbackModel, fallbackSource)
+		fmt.Fprintf(d.Out, "%q is not one of the listed choices; keeping %s.\n", line, fallback.Label)
 		return
 	}
-	chosen := choices[idx-1].ID
-	if chosen == fallbackModel {
-		fmt.Fprintf(d.Out, "%s is already the fallback; nothing to record.\n", chosen)
+	chosen := choices[idx-1]
+	if chosen.ID == fallbackModel {
+		fmt.Fprintf(d.Out, "%s is already the default; nothing to record.\n", chosen.Label)
 		return
 	}
-	if err := writeScaffoldedModelMain(env, sidecarPath, chosen); err != nil {
+	if err := writeScaffoldedModelMain(env, sidecarPath, chosen.ID); err != nil {
 		fmt.Fprintf(d.Out, "pix setup: could not record the model choice: %v\n", err)
 		return
 	}
-	fmt.Fprintf(d.Out, "recorded [models].main = %q in %s\n", chosen, sidecarPath)
+	fmt.Fprintf(d.Out, "recorded [models].main = %q in %s\n", chosen.ID, sidecarPath)
+}
+
+// providerDisplayName renders a catalog provider key in the plain language
+// the picker's prompts use, never the internal "configured provider
+// default" source string resolveRunModel stamps a model choice with.
+func providerDisplayName(provider string) string {
+	switch provider {
+	case "openai":
+		return "OpenAI"
+	case "anthropic":
+		return "Anthropic"
+	case "google":
+		return "Google"
+	case "ollama":
+		return "Ollama"
+	default:
+		return provider
+	}
 }
 
 // writeScaffoldedModelMain inserts `main = "<id>"` right after the

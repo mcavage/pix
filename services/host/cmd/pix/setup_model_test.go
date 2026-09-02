@@ -69,7 +69,7 @@ func TestSetupModelSelection_NonInteractiveNeverPromptsOrWrites(t *testing.T) {
 	home, sidecar := modelSetupHome(t, "ANTHROPIC_API_KEY=op://Vault/Anthropic/key\n")
 	before := readFile(t, sidecar)
 	var out bytes.Buffer
-	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("2\n"), Interactive: false}
+	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("n\n2\n"), Interactive: false}
 
 	setupModelSelection(d, home, defaultShellEnv(), true)
 
@@ -100,9 +100,11 @@ func TestSetupModelSelection_NoProviderConfiguredSkipsSilently(t *testing.T) {
 	}
 }
 
-// TestSetupModelSelection_EmptyInputKeepsFallbackNoWrite: the default
-// answer is "keep the shown fallback" — a bare Enter changes nothing.
-func TestSetupModelSelection_EmptyInputKeepsFallbackNoWrite(t *testing.T) {
+// TestSetupModelSelection_EmptyInputAcceptsTheDefault: the plain-language
+// [Y/n] confirm defaults to yes — a bare Enter accepts the shown fallback,
+// never writes, and never shows internal "configured provider default"
+// wording.
+func TestSetupModelSelection_EmptyInputAcceptsTheDefault(t *testing.T) {
 	home, sidecar := modelSetupHome(t, "ANTHROPIC_API_KEY=op://Vault/Anthropic/key\n")
 	before := readFile(t, sidecar)
 	var out bytes.Buffer
@@ -113,26 +115,46 @@ func TestSetupModelSelection_EmptyInputKeepsFallbackNoWrite(t *testing.T) {
 	if got := readFile(t, sidecar); got != before {
 		t.Errorf("empty input must never write pix.toml:\nbefore:\n%s\nafter:\n%s", before, got)
 	}
-	if !strings.Contains(out.String(), "keeping the fallback: anthropic/claude-opus-5") {
-		t.Errorf("want the fallback named on empty input:\n%s", out.String())
+	gotOut := out.String()
+	if !strings.Contains(gotOut, "Default model: Anthropic is first among your configured providers. Use Claude Opus 5? [Y/n]") {
+		t.Errorf("want the plain-language confirm naming the provider and model:\n%s", gotOut)
+	}
+	if !strings.Contains(gotOut, "using Claude Opus 5 (anthropic/claude-opus-5).") {
+		t.Errorf("want the accepted default confirmed:\n%s", gotOut)
+	}
+	if strings.Contains(gotOut, "configured provider default") {
+		t.Errorf("must never print the internal source wording:\n%s", gotOut)
 	}
 }
 
-// TestSetupModelSelection_InvalidChoiceKeepsFallbackNoWrite: a choice
-// outside the listed range degrades to the same default, never an error.
-func TestSetupModelSelection_InvalidChoiceKeepsFallbackNoWrite(t *testing.T) {
-	home, sidecar := modelSetupHome(t, "ANTHROPIC_API_KEY=op://Vault/Anthropic/key\n")
-	before := readFile(t, sidecar)
+// TestSetupModelSelection_NoListsOnlyThatProvidersModels: answering "no"
+// lists ONLY the fallback provider's models — no context window, no
+// "configured provider default" wording, and never another provider's
+// models.
+func TestSetupModelSelection_NoListsOnlyThatProvidersModels(t *testing.T) {
+	home, _ := modelSetupHome(t, "ANTHROPIC_API_KEY=op://Vault/Anthropic/key\nOPENAI_API_KEY=op://Vault/OpenAI/key\n")
 	var out bytes.Buffer
-	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("not-a-number\n"), Interactive: true}
+	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("n\nnot-a-number\n"), Interactive: true}
 
 	setupModelSelection(d, home, defaultShellEnv(), true)
 
-	if got := readFile(t, sidecar); got != before {
-		t.Errorf("an invalid choice must never write pix.toml")
+	gotOut := out.String()
+	// The shipped fallback order tries openai before anthropic, so with both
+	// configured OpenAI is the one provider this listing may name.
+	if !strings.Contains(gotOut, "OpenAI models:") {
+		t.Errorf("want the fallback provider's own list heading:\n%s", gotOut)
 	}
-	if !strings.Contains(out.String(), "keeping the fallback") {
-		t.Errorf("want the fallback named on an invalid choice:\n%s", out.String())
+	if strings.Contains(gotOut, "context") {
+		t.Errorf("must never print a context window:\n%s", gotOut)
+	}
+	if strings.Contains(gotOut, "configured provider default") {
+		t.Errorf("must never print the internal source wording:\n%s", gotOut)
+	}
+	if strings.Contains(gotOut, "anthropic/claude") || strings.Contains(gotOut, "Claude ") {
+		t.Errorf("must never list a different provider's models:\n%s", gotOut)
+	}
+	if !strings.Contains(gotOut, "keeping GPT-5.6 Sol.") {
+		t.Errorf("want the fallback named on an invalid choice:\n%s", gotOut)
 	}
 }
 
@@ -145,7 +167,7 @@ func TestSetupModelSelection_ChoosingListedModelWritesFullyQualifiedMain(t *test
 	var out bytes.Buffer
 	// Catalog order for anthropic: 1) claude-opus-5 (default/fallback)
 	// 2) claude-fable-5 3) claude-sonnet-5 4) claude-haiku-4-5.
-	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("3\n"), Interactive: true}
+	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("n\n3\n"), Interactive: true}
 
 	setupModelSelection(d, home, defaultShellEnv(), true)
 
@@ -188,11 +210,14 @@ func TestSetupModelSelection_ExistingEnvironmentNeverRewritten(t *testing.T) {
 	if got := readFile(t, sidecar); got != before {
 		t.Errorf("an existing default environment must never be rewritten:\nbefore:\n%s\nafter:\n%s", before, got)
 	}
-	if strings.Contains(out.String(), "current models for the providers") {
+	if strings.Contains(out.String(), "models:\n") {
 		t.Errorf("an existing default environment must not be offered the picker:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "already exists; it will use anthropic/claude-opus-5") {
+	if !strings.Contains(out.String(), "already exists; it will use Claude Opus 5") {
 		t.Errorf("want the display-only fallback line naming the model and file:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "configured provider default") {
+		t.Errorf("must never print the internal source wording:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), sidecar) {
 		t.Errorf("want the exact pix.toml path named for a hand edit:\n%s", out.String())
@@ -210,7 +235,7 @@ func TestSetupModelSelection_RefusesToOverwriteAnAlreadySetMain(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("3\n"), Interactive: true}
+	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("n\n3\n"), Interactive: true}
 
 	setupModelSelection(d, home, defaultShellEnv(), true)
 
