@@ -65,6 +65,98 @@ func TestSetupCredentials_SeedsRefsDespiteGlobals(t *testing.T) {
 			t.Errorf("setup claimed %q with no configured ref:\n%s", forbidden, got)
 		}
 	}
+
+	// Parallel web search is optional and unconfigured: setup says so
+	// accurately, names the exact fix, and never claims it is configured.
+	if !strings.Contains(got, "Parallel web search is optional and not configured") {
+		t.Errorf("want the Parallel web-search fallback state explained:\n%s", got)
+	}
+	if !strings.Contains(got, "pix secret set PARALLEL_API_KEY op://") {
+		t.Errorf("want `pix secret set PARALLEL_API_KEY` named as the fix:\n%s", got)
+	}
+	if strings.Contains(got, "Parallel web search is configured") {
+		t.Errorf("setup claimed Parallel search is configured with no ref present:\n%s", got)
+	}
+}
+
+// TestSetupCredentials_ReportsParallelSearchConfigured: a filled
+// PARALLEL_API_KEY ref is reported as configured, and setup still never
+// resolves or shells out to consult it (sbxLog stays empty per setupHome's
+// fixture, which fails the test if sbx were ever invoked).
+func TestSetupCredentials_ReportsParallelSearchConfigured(t *testing.T) {
+	home, _ := setupHome(t)
+	if err := os.WriteFile(filepath.Join(home, "secrets.env"),
+		[]byte("ANTHROPIC_API_KEY=op://Private/anthropic/key\nPARALLEL_API_KEY=op://Private/parallel/key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false})
+
+	got := out.String()
+	if !strings.Contains(got, "Parallel web search is configured") {
+		t.Errorf("want Parallel search reported as configured:\n%s", got)
+	}
+	if strings.Contains(got, "Parallel web search is optional and not configured") {
+		t.Errorf("setup claimed the fallback state with a ref present:\n%s", got)
+	}
+}
+
+// TestSetupCredentials_InteractiveOfferWritesRefAndReportsConfigured proves
+// the TTY path end to end through setupCredentials itself, not just the
+// secret package helper: accepting the offer and pasting a ref leaves
+// secrets.env with that ref and the SAME run's report already says
+// configured.
+// A provider ref is already seeded so the 1Password model-key offer's own
+// gate (ProviderKeyRefsPresent) skips it deterministically REGARDLESS of
+// whether this test host happens to have `op` on PATH — the first line of
+// input is then guaranteed to reach the Parallel offer, not a race against
+// this host's own tooling.
+func TestSetupCredentials_InteractiveOfferWritesRefAndReportsConfigured(t *testing.T) {
+	home, sbxLog := setupHome(t)
+	if err := os.WriteFile(filepath.Join(home, "secrets.env"),
+		[]byte("ANTHROPIC_API_KEY=op://Private/anthropic/key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader("y\nop://Docker/parallel/key\n"), Interactive: true})
+
+	body, err := os.ReadFile(filepath.Join(home, "secrets.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "PARALLEL_API_KEY=op://Docker/parallel/key") {
+		t.Errorf("want the accepted ref written to secrets.env:\n%s", body)
+	}
+	if !strings.Contains(out.String(), "Parallel web search is configured") {
+		t.Errorf("want the same run to report it configured after accepting:\n%s", out.String())
+	}
+	if _, serr := os.Stat(sbxLog); serr == nil {
+		b, _ := os.ReadFile(sbxLog)
+		t.Errorf("the Parallel offer must never consult sbx: %s", b)
+	}
+}
+
+// TestSetupCredentials_NonInteractiveNeverPromptsForParallel: a script (no
+// TTY) must never see the Parallel offer prompt, and secrets.env must stay
+// untouched — the noninteractive no-prompt invariant applies here exactly
+// as it does to the 1Password model-key offer.
+func TestSetupCredentials_NonInteractiveNeverPromptsForParallel(t *testing.T) {
+	home, _ := setupHome(t)
+	var out, errb bytes.Buffer
+	// A reader that would answer "yes" if ever read from — proving the offer
+	// never even asks on a non-interactive run.
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader("y\nop://v/parallel/key\n"), Interactive: false})
+
+	if strings.Contains(out.String(), "Configure Parallel web search now") {
+		t.Errorf("non-interactive setup must never show the Parallel prompt:\n%s", out.String())
+	}
+	body, err := os.ReadFile(filepath.Join(home, "secrets.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "PARALLEL_API_KEY=op://v/parallel/key") {
+		t.Errorf("non-interactive setup must never write a ref it never asked for:\n%s", body)
+	}
 }
 
 // TestSetupCredentials_ReportsConfiguredRefsWithoutResolving: with a ref

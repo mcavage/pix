@@ -22,19 +22,20 @@
     "pix/host/cmd/pix": {
       "_prod_loc_note": "Environment [[setup]] hooks (the v2 replacement for pack-authored install/auth hooks): a real capability addition, not accumulation. setup_cmd.go's runSetupHooks wires `pix setup --env NAME` to the envsetup runner (+1 edge for pix/host/envsetup) and env_cmd.go's renderTrustBill now prints each hook's id/kind/required/check argv/apply argv/sha256 in the DEFAULT consent screen, since a count is not consent. Setup-hook TOCTOU/inputs hardening: env_cmd.go now renders each hook's declared `inputs` (path + sha256) and quotes every argv element individually (safeArgv) instead of a bare space-Join, so a reviewer sees the real argument boundaries os/exec will use. Coexistence review fixes: pix task rm resolves this stack's id and routes teardown through launch.RemoveScopedPixSandbox, so it can never force-remove another PIX_HOME's sandbox, and pix setup renders the new present-but-UNVERIFIED memory MCP registration state with its exact manual remedy (inspect, rm, rerun) instead of one line that called an unprobed registration present.",
       "_inference_setup_note": "Explicit Inference Setup item 1/2: `pix env show` now reports the provider REFS this home configures (names only, secret.ConfiguredModelRefs) and the catalog source/materialized-snapshot path (inference.DescribeCatalogSource), plus their two renderers (renderConfiguredProviders/renderCatalogSource) \u2014 the rest of the selection-rule inspection surface, real capability, not accumulation.",
-      "prod_loc": 4767,
-      "test_loc": 7806,
+      "_parallel_search_note": "Explicit Inference Setup follow-up: setup_cmd.go's new setupParallelSearch step explains the optional Parallel web-search tool key's configured/fallback state on both first run and explicit `pix setup` and wires the TTY-only default-No secret.OfferParallelSearchKey offer before that report \u2014 real capability, not accumulation. Rebaselined to the exact current values (prod_loc, globals net -1 despite the addition since the extracted helper replaced an inline early-return).",
+      "prod_loc": 4786,
+      "test_loc": 7898,
       "exports": 5,
       "exports_used_externally": 0,
       "exits": 1,
       "streams": 3,
-      "globals": 22,
+      "globals": 21,
       "init": 1,
       "edges": 26,
       "parser_families": {
         "cmd": 8,
-        "core": 10,
-        "test": 48
+        "core": 13,
+        "test": 54
       },
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
       "_launch_ux_note": "Launch UX wave: (1) trustSatisfied \u2014 one Tier1-aware answer every trust caller asks, so a zero-footprint environment is never prompted for and writes no trust state; (2) run_create_quiet.go \u2014 the create child's own stdio seam: Pix answers sbx 0.41's duplicate \"Approve this plan?\" internally after its OWN trust gate, captures that child's output instead of printing it, and renders a bounded, token-redacted diagnostic only on failure; (3) upgrade_auto.go + setup_cmd.go's extracted machineSetup \u2014 pix run reconciles this home's machine-owned stack artifacts when the bundle beside the binary no longer matches the installed manifest, with credentials, environment trust and setup hooks deliberately left in the setup command. Provider-default follow-up: run_model.go selects the catalog's explicit default only when CLI/environment selection is absent and this PIX_HOME configures that provider, preventing Pi's retired native fallback; no selected model and no readable configured provider now refuses instead of falling back. When several providers are configured, the explicit shipped session order is OpenAI, Anthropic, Google, preserving GPT Sol as the top-level default without restoring scored routing. Upgrade readiness follow-up: startupProber retries only setup/upgrade health checks for a bounded 15 seconds, while doctor remains one-shot; successful upgrade/recreate output is collapsed across the internal retry. Review closure adds the nil-prober refusal, gives the final readiness probe the full timeout budget, and applies the same one-line model suppression to an environment-authored main model. PIX_HOME cleanup adds model/agent visibility to env show and relocates the creation HMAC key under hidden state. Rebaselined ONCE to the EXACT current values, no slack. New globals are the auto-upgrade seam var and the create-child constants; no new package edges beyond the ones already declared."
@@ -284,18 +285,19 @@
     },
     "pix/host/secret": {
       "_prod_loc_note": "SECURITY re-review MEDIUM finding fix: SetRef/RemoveRef in pixhome.go are now lock-protected (secretsEnvLockPath, +1 global for the lock-name const, +1 edge for the new pix/host/sys import) against a concurrent secrets.env writer \u2014 a real correctness fix, not accumulation. Coexistence review fix (MEDIUM): setScopedSbxSecret writes the resolved value to `sbx secret set`'s STDIN instead of passing `-t <value>` in argv, so no `ps` on the host can read a provider credential. The added lines are the seam's doc comment explaining why redaction is now defence in depth rather than the primary control.",
-      "prod_loc": 1623,
-      "test_loc": 2120,
-      "exports": 63,
-      "exports_used_externally": 12,
+      "_parallel_search_note": "Explicit Inference Setup follow-up: new parallel.go adds ConfiguredParallelSearchRef (mirrors ConfiguredGitHubRef) and OfferParallelSearchKey (mirrors OfferOnePasswordKeys, single-key, TTY-only, default-No) for the optional Parallel web-search tool key, plus the ParallelSearchKeyRef var ToolKeyRefOrder now references instead of duplicating the EnvVar/Name pair \u2014 real capability, not accumulation. Rebaselined to the exact current values, no slack.",
+      "prod_loc": 1693,
+      "test_loc": 2336,
+      "exports": 66,
+      "exports_used_externally": 14,
       "exits": 0,
       "streams": 0,
-      "globals": 20,
+      "globals": 21,
       "init": 0,
       "edges": 5,
       "parser_families": {
-        "core": 7,
-        "test": 9
+        "core": 8,
+        "test": 10
       },
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port."
     },

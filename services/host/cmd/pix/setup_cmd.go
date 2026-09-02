@@ -16,6 +16,7 @@ import (
 	"pix/host/config"
 	"pix/host/container"
 	"pix/host/envsetup"
+	"pix/host/hostenv"
 	"pix/host/pixhome"
 	"pix/host/release"
 	"pix/host/secret"
@@ -186,11 +187,29 @@ func setupCredentials(d *cli.Deps) {
 	}
 	if secret.ProviderKeyRefsPresent(env) {
 		fmt.Fprintln(d.Out, "pix setup: model keys are configured as 1Password refs; each run resolves them into that run's own sandbox.")
+	} else {
+		fmt.Fprintln(d.Out, "pix setup: no model provider key is configured yet. Next:")
+		fmt.Fprintln(d.Out, "  pix secret set ANTHROPIC_API_KEY op://vault/item/field   (repeat per provider)")
+		fmt.Fprintln(d.Out, "  pix secret check                                          (resolve every ref through op; no values printed)")
+	}
+	setupParallelSearch(d, env)
+}
+
+// setupParallelSearch is setup's explain step for the OPTIONAL Parallel
+// web-search tool key: it never blocks a launch and it is never required,
+// so this only ever offers (TTY, default-No) and reports, matching
+// ToolKeyRefOrder's own contract (secret/sync.go). The offer runs BEFORE
+// the report so a ref entered just now is reflected accurately, exactly
+// like the model-key block above.
+func setupParallelSearch(d *cli.Deps, env hostenv.Env) {
+	if d.Interactive {
+		secret.OfferParallelSearchKey(env, d.In, d.Out, true)
+	}
+	if secret.ConfiguredParallelSearchRef(env) {
+		fmt.Fprintln(d.Out, "pix setup: Parallel web search is configured (PARALLEL_API_KEY ref present); pi-web-access uses it for that backend.")
 		return
 	}
-	fmt.Fprintln(d.Out, "pix setup: no model provider key is configured yet. Next:")
-	fmt.Fprintln(d.Out, "  pix secret set ANTHROPIC_API_KEY op://vault/item/field   (repeat per provider)")
-	fmt.Fprintln(d.Out, "  pix secret check                                          (resolve every ref through op; no values printed)")
+	fmt.Fprintln(d.Out, "pix setup: Parallel web search is optional and not configured; search falls back to other backends. To enable: pix secret set PARALLEL_API_KEY op://vault/item/field")
 }
 
 // setupSelectedEnvironment is `--env NAME`'s whole job (surface §3.6): sets

@@ -49,7 +49,7 @@ var ProviderKeyRefOrder = []ProviderKeyRef{
 // matching credentials[] entry plus an egress allowlist entry for the API host,
 // or the sentinel reaches the VM with nowhere to be swapped.
 var ToolKeyRefOrder = []ProviderKeyRef{
-	{"PARALLEL_API_KEY", "parallel"},
+	ParallelSearchKeyRef,
 }
 
 // ProviderKeyRef pairs a key's secrets.env variable with its short name.
