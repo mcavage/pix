@@ -152,6 +152,67 @@ func RemoveRef(home pixhome.Paths, key string) error {
 	})
 }
 
+// SetPlainValue upserts a NON-secret literal KEY=value line into
+// <home>/secrets.env, for a name an environment declares via
+// [host.mcp.<name>].plain_keys (workflow/env.HostMCPFact.PlainKeys). It is
+// deliberately NOT reachable from `pix secret set` — that command's whole
+// contract stays "op:// references only" (SetRef, above) — and its ONLY
+// caller is `pix setup --env NAME`'s declared-requirements collector
+// (cmd/pix's validateDeclaredEnvironmentValues). A plain value belongs in
+// this SAME file because `op run --env-file` passes a non-op:// line
+// through to the wrapped process UNCHANGED, and a server's env_keys and
+// plain_keys travel through the identical wrapper, so both must live in
+// the one file it reads. Locked the same way SetRef is, against the SAME
+// lock file, so a set/rm and a plain-value write cannot interleave.
+func SetPlainValue(home pixhome.Paths, key, value string) error {
+	if !EnvVarNameRe.MatchString(key) {
+		return &InvalidEnvVarNameError{Key: key}
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("pix setup: %s: a non-secret value cannot be empty", key)
+	}
+	if strings.HasPrefix(value, "op://") {
+		return fmt.Errorf("pix setup: %s is declared non-secret (plain_keys); an op:// reference is not accepted here — if this should be a secret, declare it in env_keys instead", key)
+	}
+	if i := strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }); i >= 0 {
+		return fmt.Errorf("pix setup: %s value contains a control character at byte %d; secrets.env is one entry per line", key, i)
+	}
+	return sys.Lock(secretsEnvLockPath(home), func() error {
+		path := RefsEnvPath(home)
+		content := ""
+		if data, err := os.ReadFile(path); err == nil {
+			content = string(data)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		newContent := upsertOpRef(content, key, value)
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+		return atomicWriteSecrets(dir, path, []byte(newContent), 0o600)
+	})
+}
+
+// PlainValue reads key's current literal value from <home>/secrets.env, if
+// present and NOT an op:// reference. Returning it is safe: a plain_keys
+// value is non-secret by the declaration that put it here, unlike an
+// op:// ref's resolved target, which this package never reads or returns.
+func PlainValue(home pixhome.Paths, key string) (value string, present bool) {
+	path := RefsEnvPath(home)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	for _, r := range ParseOpRefs(string(data), nil) {
+		if r.Key == key && !r.IsRef && !r.Placeholder && strings.TrimSpace(r.Value) != "" {
+			return r.Value, true
+		}
+	}
+	return "", false
+}
+
 // OpReader resolves one op:// reference without ever returning its value —
 // the injectable seam CheckRef uses so a test never has to run the real `op`
 // binary, and so no caller anywhere in this file can accidentally print a

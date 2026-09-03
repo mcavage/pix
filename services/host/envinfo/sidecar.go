@@ -143,9 +143,21 @@ type HostSection struct {
 
 // HostMCPEntry is optional metadata for one [host.mcp.<name>] entry. Name is
 // populated from the table key, not decoded from a field.
+//
+// EnvKeys are SECRET names: each must resolve to an op:// reference
+// recorded with `pix secret set` before the op-run wrapper can hand this
+// server a real value (setup's declared-requirements check, cmd/pix's
+// validateDeclaredEnvironmentValues, proves this before any `[[setup]]`
+// hook runs). PlainKeys are the opposite: names the SAME op-run wrapper
+// must also supply, but whose value is not sensitive (an account address,
+// a company domain, ...) and must never be forced into an op:// reference
+// just to satisfy the wrapper's all-or-nothing env-file contract. A name
+// may appear in at most one of the two lists; ParseSidecar refuses an
+// entry naming it in both.
 type HostMCPEntry struct {
 	Name      string   `toml:"-"`
 	EnvKeys   []string `toml:"env_keys"`
+	PlainKeys []string `toml:"plain_keys"`
 	ProbeArgs []string `toml:"probe_args"`
 }
 
@@ -411,10 +423,48 @@ func ParseSidecar(path string) (*Sidecar, error) {
 		entry.Name = name
 		s.Host.MCP[name] = entry
 	}
+	if err := validateHostMCPKeys(base, text, s.Host.MCP); err != nil {
+		return nil, err
+	}
 	if err := validateSetupHooks(base, text, s.Setup); err != nil {
 		return nil, err
 	}
 	return &s, nil
+}
+
+// validateHostMCPKeys refuses a [host.mcp.<name>] entry that lists the same
+// env var name in both env_keys and plain_keys — the two lists are mutually
+// exclusive classifications (a secret that must resolve to an op:// ref, or
+// a plain value that must never be one), so a name in both is an authoring
+// mistake, not something either list's own reader could silently resolve.
+func validateHostMCPKeys(base, text string, mcp map[string]HostMCPEntry) error {
+	for _, name := range sortedHostMCPEntryKeys(mcp) {
+		entry := mcp[name]
+		plain := map[string]bool{}
+		for _, k := range entry.PlainKeys {
+			plain[k] = true
+		}
+		for _, k := range entry.EnvKeys {
+			if plain[k] {
+				key := fmt.Sprintf("host.mcp.%s", name)
+				line := locateKeyLines(text)[key]
+				if line == 0 {
+					line = 1
+				}
+				return &Error{File: base, Line: line, Key: key, Reason: fmt.Sprintf("%q is listed in both env_keys and plain_keys; it must be a secret (env_keys) or a plain value (plain_keys), never both", k)}
+			}
+		}
+	}
+	return nil
+}
+
+func sortedHostMCPEntryKeys(m map[string]HostMCPEntry) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // validateSetupHooks enforces the whole `[[setup]]` grammar at parse time,

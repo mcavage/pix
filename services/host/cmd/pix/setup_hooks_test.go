@@ -293,15 +293,41 @@ func TestRenderTrustBill_ShowsSetupHooksByDefault(t *testing.T) {
 	var out bytes.Buffer
 	renderTrustBill(&out, "work", bom, false)
 	s := out.String()
+	// The default consent screen names WHAT will run (id, kind,
+	// required/optional) unconditionally — that much is never behind
+	// --verbose, unlike every other section in this bill.
 	for _, want := range []string{
 		"1 setup hook(s)",
+		"setup hook:        tool (install, required)",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the default consent screen omits %q:\n%s", want, s)
+		}
+	}
+	// The full argv and content digest are review DETAIL, gated behind
+	// --verbose exactly like every other section (kits, host services, MCP
+	// commands): a concise summary is the normal review surface.
+	for _, notWant := range []string{
+		"check: ./setup-tool check",
+		"apply: ./setup-tool install",
+		"sha256:",
+	} {
+		if strings.Contains(s, notWant) {
+			t.Errorf("the default consent screen should not print hook detail %q behind no --verbose:\n%s", notWant, s)
+		}
+	}
+
+	var verboseOut bytes.Buffer
+	renderTrustBill(&verboseOut, "work", bom, true)
+	vs := verboseOut.String()
+	for _, want := range []string{
 		"setup hook:        tool (install, required) ./setup-tool",
 		"check: ./setup-tool check",
 		"apply: ./setup-tool install",
 		"sha256:",
 	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("the default consent screen omits %q:\n%s", want, s)
+		if !strings.Contains(vs, want) {
+			t.Errorf("--verbose omits %q:\n%s", want, vs)
 		}
 	}
 }

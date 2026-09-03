@@ -639,16 +639,30 @@ func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, ve
 	for _, s := range b.HostServices {
 		fmt.Fprintf(out, "  host service:      %s  port %d\n", safe(s.Name), s.Port)
 	}
-	// Setup hooks render BY DEFAULT, never only under --verbose, and with
-	// their full argv: they are the one thing in this bill that `pix setup
-	// --env NAME` will execute on this host with the human's own stdio
-	// attached, so "3 setup hook(s)" alone is not consent. Required/optional
-	// and install/auth are shown too, because those two bits decide whether
-	// a failure stops the run and whether the hook may talk to the terminal.
+	// Setup hooks render BY DEFAULT (never omitted, unlike the argv-heavy
+	// sections gated by !verbose below), because they are the one thing in
+	// this bill `pix setup --env NAME` will execute on this host with the
+	// human's own stdio attached, so "3 setup hook(s)" alone is not consent.
+	// Required/optional and install/auth are shown too, because those two
+	// bits decide whether a failure stops the run and whether the hook may
+	// talk to the terminal. The exact check/apply argv and content digests
+	// are, like every other section here, behind --verbose: a concise
+	// id/kind/required-or-optional line is the normal review surface, full
+	// argv and sha256 is what a reviewer who wants to READ the hook asks for.
 	for _, h := range b.SetupHooks {
 		need := "optional"
 		if h.Required {
 			need = "required"
+		}
+		if !verbose {
+			// Concise by default: id, kind, and required/optional — enough to
+			// know WHAT will run on this host without the full argv/digest
+			// wall of text every review used to print unconditionally. Full
+			// detail (exact check/apply argv, sha256 of the executable and
+			// every input) is exactly what --verbose restores below, matching
+			// every other section in this bill.
+			fmt.Fprintf(out, "  setup hook:        %s (%s, %s)\n", safe(h.ID), safe(h.Kind), need)
+			continue
 		}
 		fmt.Fprintf(out, "  setup hook:        %s (%s, %s) %s\n", safe(h.ID), safe(h.Kind), need, safe(h.Command))
 		fmt.Fprintf(out, "                     check: %s %s\n", safe(h.Command), safeArgv(h.CheckArgs))

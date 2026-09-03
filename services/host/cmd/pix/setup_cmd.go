@@ -10,7 +10,10 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"pix/host/cli"
@@ -153,8 +156,16 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 		return err
 	}
 	renderSetupResult(d, home, res, c.Verbose)
-	setupCredentials(d)
-	setupModelSelection(d, home, defaultShellEnv(), res.DefaultEnvCreated)
+	// A named --env setup is not a base-install interview: the environment
+	// already declares its own model roster ([models].main, [agents]), so
+	// the base default-model picker and the optional Parallel-search offer
+	// are noise here, not a prompt this run needs answered. Both stay in
+	// full for a bare `pix setup` (baseSetup == true).
+	baseSetup := c.Env == ""
+	setupCredentials(d, baseSetup)
+	if baseSetup {
+		setupModelSelection(d, home, defaultShellEnv(), res.DefaultEnvCreated)
+	}
 	if c.Env != "" {
 		if eerr := setupSelectedEnvironment(d, home, c.Env); eerr != nil {
 			return eerr
@@ -177,7 +188,7 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 //
 // It claims nothing about a model being ready. Nothing here resolved a ref,
 // so the honest close is the command that configures one.
-func setupCredentials(d *cli.Deps) {
+func setupCredentials(d *cli.Deps, baseSetup bool) {
 	path, _, err := config.SeedOpRefs()
 	if err != nil {
 		fmt.Fprintf(d.Err, "pix setup: could not create the secrets file (%s): %v\n", path, err)
@@ -196,7 +207,9 @@ func setupCredentials(d *cli.Deps) {
 		fmt.Fprintln(d.Out, "  pix secret set ANTHROPIC_API_KEY op://vault/item/field   (repeat per provider)")
 		fmt.Fprintln(d.Out, "  pix secret check                                          (resolve every ref through op; no values printed)")
 	}
-	setupParallelSearch(d, env)
+	if baseSetup {
+		setupParallelSearch(d, env)
+	}
 }
 
 // setupParallelSearch is setup's explain step for the OPTIONAL Parallel
@@ -204,7 +217,9 @@ func setupCredentials(d *cli.Deps) {
 // so this only ever offers (TTY, default-No) and reports, matching
 // ToolKeyRefOrder's own contract (secret/sync.go). The offer runs BEFORE
 // the report so a ref entered just now is reflected accurately, exactly
-// like the model-key block above.
+// like the model-key block above. Called only for a bare `pix setup`
+// (baseSetup): a named `--env NAME` run has its own declared roster and
+// gets no base-install prompts or reports (setup_cmd.go's Run).
 func setupParallelSearch(d *cli.Deps, env hostenv.Env) {
 	if d.Interactive {
 		secret.OfferParallelSearchKey(env, d.In, d.Out, true)
@@ -267,8 +282,93 @@ func setupSelectedEnvironment(d *cli.Deps, home pixhome.Paths, name string) erro
 	if verr := validateRunRoster(cfg, launch.EnvSelection{Name: loaded.Name, Root: loaded.Root, Sidecar: loaded.Sidecar}, shipped); verr != nil {
 		return fmt.Errorf("pix setup --env %s: %v", name, verr)
 	}
+	if verr := validateDeclaredEnvironmentValues(d, home, bom); verr != nil {
+		return fmt.Errorf("pix setup --env %s: %w", name, verr)
+	}
 	fmt.Fprintf(d.Out, "environment %q declared requirements check passed.\n", name)
 	return runSetupHooks(d, name, loaded.Root, bom)
+}
+
+// validateDeclaredEnvironmentValues is the declared-requirements check
+// surface.md §3.6 step 7 promises: prove every credential and every plain
+// value this environment's `[host.mcp.<name>]` entries declare
+// (env_keys/plain_keys) is actually recorded, BEFORE any `[[setup]]` hook
+// runs — so an environment never has to ship its own hook whose whole job
+// is failing on purpose to print `pix secret set` commands (the pattern
+// this replaces). A secret name (env_keys) is never prompted for here: the
+// reviewed way in is `pix secret set`, and this only names the exact
+// command. A plain name (plain_keys) IS collected here, on a TTY only — it
+// is not a credential, so there is no reviewed-path reason to defer it to
+// a second command — and is recorded with secret.SetPlainValue, never as
+// an op:// reference. Either kind still missing after collection is a
+// concise, actionable refusal naming every remaining name and its exact
+// remedy, never a bare "setup failed".
+func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nativeenv.BillOfMaterials) error {
+	refs, _ := secret.LoadRefs(home)
+	haveRef := map[string]bool{}
+	for _, r := range refs {
+		if r.IsRef && !r.Placeholder {
+			haveRef[r.Key] = true
+		}
+	}
+
+	var missingSecrets []string
+	seenSecret := map[string]bool{}
+	var missingPlain []string
+	seenPlain := map[string]bool{}
+	for _, m := range bom.HostMCP {
+		for _, k := range m.EnvKeys {
+			if !haveRef[k] && !seenSecret[k] {
+				seenSecret[k] = true
+				missingSecrets = append(missingSecrets, k)
+			}
+		}
+		for _, k := range m.PlainKeys {
+			if _, ok := secret.PlainValue(home, k); !ok && !seenPlain[k] {
+				seenPlain[k] = true
+				missingPlain = append(missingPlain, k)
+			}
+		}
+	}
+	sort.Strings(missingSecrets)
+	sort.Strings(missingPlain)
+
+	// Collect plain (non-secret) values right here, on a TTY: there is
+	// nothing to review before recording an account address or a domain,
+	// unlike a credential.
+	if d.Interactive {
+		var stillMissing []string
+		reader := bufio.NewReader(d.In)
+		for _, k := range missingPlain {
+			fmt.Fprintf(d.Out, "  %s is a non-secret value this environment needs. Enter it now (blank to skip): ", k)
+			line, _ := reader.ReadString('\n')
+			line = strings.TrimSpace(line)
+			if line == "" {
+				stillMissing = append(stillMissing, k)
+				continue
+			}
+			if serr := secret.SetPlainValue(home, k, line); serr != nil {
+				fmt.Fprintf(d.Out, "    could not record %s: %v\n", k, serr)
+				stillMissing = append(stillMissing, k)
+				continue
+			}
+			fmt.Fprintf(d.Out, "    recorded %s in %s\n", k, home.SecretsEnv)
+		}
+		missingPlain = stillMissing
+	}
+
+	if len(missingSecrets) == 0 && len(missingPlain) == 0 {
+		return nil
+	}
+
+	fmt.Fprintln(d.Out, "this environment's declared requirements are not all recorded yet:")
+	for _, k := range missingSecrets {
+		fmt.Fprintf(d.Out, "  pix secret set %s op://<vault>/<item>/<field>\n", k)
+	}
+	for _, k := range missingPlain {
+		fmt.Fprintf(d.Out, "  %s is a non-secret value; re-run `pix setup --env NAME` on a terminal to be prompted for it, or record it directly: printf '%s=<value>\\n' >> %s\n", k, k, home.SecretsEnv)
+	}
+	return fmt.Errorf("%d requirement(s) not recorded; see the exact commands above", len(missingSecrets)+len(missingPlain))
 }
 
 // runSetupHooks executes this environment's own `[[setup]]` hooks — the v2

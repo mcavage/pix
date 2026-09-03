@@ -36,7 +36,7 @@ func setupHome(t *testing.T) (home string, sbxLog string) {
 func TestSetupCredentials_SeedsRefsDespiteGlobals(t *testing.T) {
 	home, sbxLog := setupHome(t)
 	var out, errb bytes.Buffer
-	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false})
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false}, true)
 
 	refs := filepath.Join(home, "secrets.env")
 	body, err := os.ReadFile(refs)
@@ -90,7 +90,7 @@ func TestSetupCredentials_ReportsParallelSearchConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
-	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false})
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false}, true)
 
 	got := out.String()
 	if !strings.Contains(got, "Parallel web search is configured") {
@@ -118,7 +118,7 @@ func TestSetupCredentials_InteractiveOfferWritesRefAndReportsConfigured(t *testi
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
-	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader("y\nop://Docker/parallel/key\n"), Interactive: true})
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader("y\nop://Docker/parallel/key\n"), Interactive: true}, true)
 
 	body, err := os.ReadFile(filepath.Join(home, "secrets.env"))
 	if err != nil {
@@ -145,7 +145,7 @@ func TestSetupCredentials_NonInteractiveNeverPromptsForParallel(t *testing.T) {
 	var out, errb bytes.Buffer
 	// A reader that would answer "yes" if ever read from — proving the offer
 	// never even asks on a non-interactive run.
-	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader("y\nop://v/parallel/key\n"), Interactive: false})
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader("y\nop://v/parallel/key\n"), Interactive: false}, true)
 
 	if strings.Contains(out.String(), "Configure Parallel web search now") {
 		t.Errorf("non-interactive setup must never show the Parallel prompt:\n%s", out.String())
@@ -169,7 +169,7 @@ func TestSetupCredentials_ReportsConfiguredRefsWithoutResolving(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
-	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false})
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false}, true)
 
 	if !strings.Contains(out.String(), "resolves them into that run's own sandbox") {
 		t.Errorf("want the per-sandbox resolution explained:\n%s", out.String())
@@ -188,7 +188,7 @@ func TestSetupCredentials_ReportsConfiguredRefsWithoutResolving(t *testing.T) {
 func TestSetupCredentials_NormalStatusHasNoPixSetupPrefix(t *testing.T) {
 	_, _ = setupHome(t)
 	var out, errb bytes.Buffer
-	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false})
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false}, true)
 
 	if strings.Contains(out.String(), "pix setup:") {
 		t.Errorf("normal setup status must not carry the pix setup: prefix:\n%s", out.String())
@@ -207,7 +207,7 @@ func TestSetupCredentials_NeverNarratesSecretsFileCreationOrPresence(t *testing.
 	home, _ := setupHome(t)
 	var out, errb bytes.Buffer
 	// First run: secrets.env does not exist yet, so this call creates it.
-	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false})
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false}, true)
 	for _, forbidden := range []string{"created " + filepath.Join(home, "secrets.env"), "secrets file present"} {
 		if strings.Contains(out.String(), forbidden) {
 			t.Errorf("setup must not narrate secrets.env creation, found %q:\n%s", forbidden, out.String())
@@ -216,7 +216,7 @@ func TestSetupCredentials_NeverNarratesSecretsFileCreationOrPresence(t *testing.
 
 	// Second run: secrets.env already exists, so this call finds it present.
 	out.Reset()
-	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false})
+	setupCredentials(&cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false}, true)
 	for _, forbidden := range []string{"created " + filepath.Join(home, "secrets.env"), "secrets file present"} {
 		if strings.Contains(out.String(), forbidden) {
 			t.Errorf("setup must not narrate secrets.env presence on a rerun, found %q:\n%s", forbidden, out.String())

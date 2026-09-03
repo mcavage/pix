@@ -46,6 +46,45 @@ func TestSetRef_RejectsLiteralValue(t *testing.T) {
 	}
 }
 
+func TestSetPlainValue_RoundTripsAndNeverRequiresAnOpRef(t *testing.T) {
+	home := testHome(t)
+	if err := SetPlainValue(home, "GOG_ACCOUNT", "you@docker.com"); err != nil {
+		t.Fatalf("SetPlainValue: %v", err)
+	}
+	val, present := PlainValue(home, "GOG_ACCOUNT")
+	if !present || val != "you@docker.com" {
+		t.Fatalf("PlainValue = %q, %v", val, present)
+	}
+	data, err := os.ReadFile(RefsEnvPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "op://") {
+		t.Fatalf("a plain value must never be recorded as an op:// reference:\n%s", data)
+	}
+}
+
+func TestSetPlainValue_RejectsAnOpRefValue(t *testing.T) {
+	home := testHome(t)
+	if err := SetPlainValue(home, "GOG_ACCOUNT", "op://Vault/gog/account"); err == nil {
+		t.Fatal("an op:// value passed to SetPlainValue must be refused (it belongs in env_keys, not plain_keys)")
+	}
+}
+
+func TestSetPlainValue_RejectsEmptyValue(t *testing.T) {
+	home := testHome(t)
+	if err := SetPlainValue(home, "GOG_ACCOUNT", "   "); err == nil {
+		t.Fatal("an empty non-secret value must be refused")
+	}
+}
+
+func TestPlainValue_AbsentIsNotPresent(t *testing.T) {
+	home := testHome(t)
+	if _, present := PlainValue(home, "GOG_ACCOUNT"); present {
+		t.Fatal("expected not present for a name never recorded")
+	}
+}
+
 func TestSetRef_RejectsInvalidKey(t *testing.T) {
 	home := testHome(t)
 	err := SetRef(home, "not a var!", "op://vault/item/field")

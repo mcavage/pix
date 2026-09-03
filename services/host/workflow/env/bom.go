@@ -219,10 +219,18 @@ type KitFact struct {
 
 // HostMCPFact is one pix.toml `[host.mcp.<name>]` sidecar annotation: env
 // var NAMES a local-command MCP server receives (never values) and its
-// health-probe argv (host execution — `pix doctor` runs it).
+// health-probe argv (host execution — `pix doctor` runs it). EnvKeys are
+// secret names (each must resolve to an op:// reference); PlainKeys are
+// the same wrapper's non-secret names (an account address, a company
+// domain, ...) that must never be forced into an op:// reference just to
+// satisfy the op-run wrapper's all-or-nothing env-file contract — `pix
+// setup --env NAME`'s declared-requirements check (cmd/pix's
+// validateDeclaredEnvironmentValues) proves both are recorded, the secret
+// way and the plain way respectively, before any `[[setup]]` hook runs.
 type HostMCPFact struct {
 	Name      string
 	EnvKeys   []string
+	PlainKeys []string
 	ProbeArgs []string
 }
 
@@ -615,9 +623,18 @@ func computeHostMCP(s *envinfo.Sidecar, b *BillOfMaterials) {
 		e := s.Host.MCP[name]
 		envKeys := append([]string(nil), e.EnvKeys...)
 		sort.Strings(envKeys)
-		b.HostMCP = append(b.HostMCP, HostMCPFact{Name: name, EnvKeys: envKeys, ProbeArgs: append([]string(nil), e.ProbeArgs...)})
+		plainKeys := append([]string(nil), e.PlainKeys...)
+		sort.Strings(plainKeys)
+		b.HostMCP = append(b.HostMCP, HostMCPFact{Name: name, EnvKeys: envKeys, PlainKeys: plainKeys, ProbeArgs: append([]string(nil), e.ProbeArgs...)})
 		for _, key := range envKeys {
 			b.CredentialTargets = append(b.CredentialTargets, CredentialTarget{Source: key, Destination: name + " (host)"})
+		}
+		// A plain key is a declared VALUE, not a credential — rendered on the
+		// same trust-bill line shape (a reviewer must still see the wrapper
+		// receives it) but named as a value so "credential: GOG_ACCOUNT" never
+		// misreads a plain account address as a secret handoff.
+		for _, key := range plainKeys {
+			b.CredentialTargets = append(b.CredentialTargets, CredentialTarget{Source: key, Destination: name + " (host, non-secret value)"})
 		}
 		// Restriction 2: `pix doctor` runs probe_args on this host — that is
 		// host execution regardless of whether this entry names any
@@ -773,12 +790,13 @@ type fpDoc struct {
 // comment promises is both fingerprinted and (where §5.8 names it)
 // rendered. Every list is sorted canonically before hashing so a pure
 // authoring reorder never re-gates; HostCommands/HostServices/Ports/etc.
-// V bumped 2 -> 3 when SetupHooks joined the surface, and 3 -> 4 when
+// V bumped 2 -> 3 when SetupHooks joined the surface, 3 -> 4 when
 // KitFact/HostServiceItem/MCPServerFact grew Target (the physical path a
-// resolved symlink chain led to, alongside each existing SHA): an
-// already-accepted environment is re-gated once, which is the correct
-// outcome for a schema that can now carry host-exec facts it could not
-// express before.
+// resolved symlink chain led to, alongside each existing SHA), and 4 -> 5
+// when HostMCPFact grew PlainKeys (declared non-secret values, distinct
+// from EnvKeys' secrets): an already-accepted environment is re-gated
+// once, which is the correct outcome for a schema that can now carry
+// host-exec facts it could not express before.
 // HostCommands/HostServices/Ports/etc. are already produced in a stable
 // (sorted-key or identity) order by
 // ComputeBoM, so this function only imposes the ordering ComputeBoM does
@@ -787,7 +805,7 @@ type fpDoc struct {
 // fingerprint boundary rather than trusting an upstream producer's order).
 func Fingerprint(b BillOfMaterials) (string, error) {
 	doc := fpDoc{
-		V:                 4,
+		V:                 5,
 		HostCommands:      sortedByField(b.HostCommands, func(v HostCommand) string { return v.Name }),
 		HostServices:      sortedByField(b.HostServices, func(v HostServiceItem) string { return v.Name }),
 		SetupHooks:        sortedByField(b.SetupHooks, func(v SetupHookFact) string { return v.ID }),

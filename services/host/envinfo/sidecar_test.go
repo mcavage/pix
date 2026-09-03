@@ -136,6 +136,42 @@ func TestParseValidSidecarProducesTypedFacts(t *testing.T) {
 	}
 }
 
+func TestParseSidecarAcceptsPlainKeysDistinctFromEnvKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSidecar(t, dir, `schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_KEYRING_PASSWORD"]
+plain_keys = ["GOG_ACCOUNT"]
+`)
+	s, err := ParseSidecar(path)
+	if err != nil {
+		t.Fatalf("ParseSidecar: %v", err)
+	}
+	entry := s.Host.MCP["google-workspace"]
+	if len(entry.EnvKeys) != 1 || entry.EnvKeys[0] != "GOG_KEYRING_PASSWORD" {
+		t.Errorf("env_keys = %v", entry.EnvKeys)
+	}
+	if len(entry.PlainKeys) != 1 || entry.PlainKeys[0] != "GOG_ACCOUNT" {
+		t.Errorf("plain_keys = %v", entry.PlainKeys)
+	}
+}
+
+func TestParseSidecarRejectsKeyInBothEnvKeysAndPlainKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSidecar(t, dir, `schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_ACCOUNT"]
+plain_keys = ["GOG_ACCOUNT"]
+`)
+	if _, err := ParseSidecar(path); err == nil {
+		t.Fatal("a name in both env_keys and plain_keys must refuse to parse")
+	} else if !strings.Contains(err.Error(), "both env_keys and plain_keys") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestModelReferencesCollectsMainAndAgentsSorted(t *testing.T) {
 	path := writeSidecar(t, t.TempDir(), validSidecar)
 	s, err := ParseSidecar(path)
