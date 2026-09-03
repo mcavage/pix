@@ -589,6 +589,50 @@ exact executable identity, arguments, credential destinations, and requested
 host grants before launch; `pix doctor` probes the declared endpoint but does
 not supervise the process. See `docs/gworkspace.md` for a worked example.
 
+### Integration state: `${PIX_HOME}` and `.state/integrations/<name>`
+
+A host MCP server that keeps durable state (an OAuth grant, a keyring) needs a
+place to put it, and `mcp.servers[].args` is static argv: there is no shell, so
+`$HOME` does not expand and a hard-coded `/Users/<someone>` is one person's
+machine committed for everyone.
+
+`${PIX_HOME}` is therefore the one interpolation variable **Pix itself
+defines**. Pix resolves its own home (`$PIX_HOME`, else `~/.pix`) and
+substitutes it into a local MCP server's command and args before it renders the
+effective document, so:
+
+- an authored `${PIX_HOME}` is never the undefined-variable refusal — Pix knows
+  its home whether or not a shell exported it;
+- the value in the effective document is a real path, not an expression a
+  `docker run -v` would take literally;
+- every other `${VAR}` is untouched. Host variables stay surfaced and are
+  resolved by sbx, so the persisted effective document never becomes a sink of
+  resolved host values.
+
+The conventional home for that state is `<PIX_HOME>/.state/integrations/<name>`
+(`pixhome.Paths.IntegrationStateDir`), bind-mounted into the container that
+owns it:
+
+```yaml
+mcp:
+  servers:
+    - name: gworkspace
+      command: docker
+      args: ["run", "--rm", "-i",
+             "-v", "${PIX_HOME}/.state/integrations/gworkspace:/home/app",
+             "example/gworkspace-mcp@sha256:..."]
+```
+
+Pix owns the LOCATION only: it neither creates nor populates that directory.
+The environment's own `[[setup]]` hook creates it, because only that hook knows
+what belongs inside and what ownership the container needs — and it should,
+since `docker run -v` creates a missing bind-mount source silently, which turns
+a missing directory into a container that has quietly lost its credential.
+
+The alternative — a named docker volume — puts credentials outside every
+PIX_HOME: `pix reset` cannot move them aside, a PIX_HOME backup does not contain
+them, and two homes on one host silently share one credential store.
+
 Skills never hardcode a vendor: they ask for a **capability** (`chat`,
 `docs`, `github`, `meeting-notes`), and `capabilities.json` maps that
 capability to a concrete provider (an `mcp` server, a `cli` on PATH, an

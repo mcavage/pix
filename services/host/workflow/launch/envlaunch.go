@@ -43,6 +43,7 @@ import (
 	"pix/host/inference"
 	"pix/host/lease"
 	"pix/host/mcp"
+	"pix/host/pixhome"
 	"pix/host/recreatelog"
 	"pix/host/sandbox"
 	"pix/host/sys"
@@ -406,7 +407,11 @@ func CreateHMACResolver(configDir string, lookupEnv func(string) (string, bool))
 // resolvers share. The value it returns is handed straight to
 // hosttrust.SignResolvedValue and never travels anywhere else.
 func resolveInterpolation(lookupEnv func(string) (string, bool), varName string, def *string) string {
-	if value, ok := lookupEnv(varName); ok {
+	// Pix's own variables win over the host environment, exactly as they do
+	// in the undefined-variable refusal and in the argv expansion: three
+	// consumers, one set of names, or a fingerprint would key a value no
+	// launch ever used.
+	if value, ok := envinfo.LookupPixManaged(pixManagedVars(), lookupEnv)(varName); ok {
 		return value
 	}
 	if def != nil {
@@ -1049,7 +1054,13 @@ func EnvMCPWrapperFacts(doc *envinfo.Document, sidecar *envinfo.Sidecar) []envin
 			out = append(out, fact)
 			continue
 		}
-		argv := append([]string{srv.Command}, srv.Args...)
+		// `${PIX_HOME}` is resolved by PIX, here, before any wrapper argv is
+		// applied — the same expansion, in the same position, workflow/env's
+		// preview does. Static argv has no shell, and upstream's observed
+		// interpolation covers `env:` values only, so a container that keeps
+		// its state under this home has no other way to name the directory.
+		// Host variables are untouched: sbx resolves those.
+		argv := envinfo.ExpandPixManagedArgv(append([]string{srv.Command}, srv.Args...), pixManagedVars())
 		if entry, ok := hostMCP[srv.Name]; ok && len(entry.EnvKeys) > 0 {
 			argv = opRunWrapIfAvailable(argv)
 		}
@@ -1058,6 +1069,18 @@ func EnvMCPWrapperFacts(doc *envinfo.Document, sidecar *envinfo.Sidecar) []envin
 		out = append(out, fact)
 	}
 	return out
+}
+
+// pixManagedVars resolves the Pix-defined interpolation variables for this
+// host's home (envinfo.PixManagedVars). An unresolvable home yields none,
+// so `${PIX_HOME}` stays undefined rather than becoming "" — the same
+// fail-closed choice workflow/env's loader makes.
+func pixManagedVars() map[string]string {
+	home, err := pixhome.Dir()
+	if err != nil {
+		return nil
+	}
+	return envinfo.PixManagedVars(home)
 }
 
 // opRunWrapIfAvailable wraps argv through mcp.OpRunWrap when this host has

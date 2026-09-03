@@ -29,7 +29,22 @@ import (
 
 	"pix/host/cli"
 	"pix/host/envinfo"
+	"pix/host/pixhome"
 )
+
+// pixManagedVars resolves the Pix-defined interpolation variables for THIS
+// host's home. A home Pix cannot resolve yields no variables at all, which
+// leaves `${PIX_HOME}` exactly as undefined as any other unset name rather
+// than defining it as the empty string — the fail-closed direction, and the
+// one that produces the refusal a person can act on instead of a container
+// mounting the filesystem root.
+func pixManagedVars() map[string]string {
+	home, err := pixhome.Dir()
+	if err != nil {
+		return nil
+	}
+	return envinfo.PixManagedVars(home)
+}
 
 // LoadHome composes an *Environment from an already-resolved pixhome
 // Selected value (ResolveIn/SelectIn). effective is the SAME typed
@@ -104,7 +119,12 @@ func LoadHome(sel Selected, effective EffectiveMounts, lookPath func(string) (st
 	// host-environment probe; this runs on every load, so `pix env show`,
 	// `--effective`, and a real launch (which all funnel through LoadHome)
 	// refuse identically rather than only the launch path catching it.
-	if err := envinfo.RefuseUndefinedInterpolations(tree, os.LookupEnv); err != nil {
+	//
+	// Pix's OWN variables (envinfo.PixManagedVars — `${PIX_HOME}`) are
+	// layered over that probe: Pix resolves its home whether or not a shell
+	// ever exported it, so an environment that names it is never refused for
+	// a variable the launcher itself always knows.
+	if err := envinfo.RefuseUndefinedInterpolations(tree, envinfo.LookupPixManaged(pixManagedVars(), os.LookupEnv)); err != nil {
 		return nil, cli.UsageError{Err: err}
 	}
 

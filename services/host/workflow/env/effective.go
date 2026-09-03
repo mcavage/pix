@@ -277,7 +277,12 @@ func mcpWrapperFacts(doc *envinfo.Document, sidecar *envinfo.Sidecar) []envinfo.
 			out = append(out, fact)
 			continue
 		}
-		argv := append([]string{srv.Command}, srv.Args...)
+		// Pix's own `${PIX_HOME}` is resolved HERE, before the wrapper, so
+		// the preview shows the same final argv a real launch composes
+		// (workflow/launch's EnvMCPWrapperFacts does the identical thing in
+		// the identical order). Every other `${VAR}` stays authored: sbx
+		// resolves host variables, Pix resolves only its own.
+		argv := envinfo.ExpandPixManagedArgv(append([]string{srv.Command}, srv.Args...), pixManagedVars())
 		if entry, ok := hostMCP[srv.Name]; ok && len(entry.EnvKeys) > 0 {
 			argv = opRunWrapIfAvailable(argv)
 		}
