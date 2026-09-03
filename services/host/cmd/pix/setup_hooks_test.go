@@ -149,9 +149,10 @@ exit 0
 	if _, statErr := os.Stat(marker); statErr == nil {
 		t.Fatal("the swapped executable RAN")
 	}
-	// The re-fired review shows the NEW content hash, so a human is asked
-	// about what is on disk now rather than what they accepted before.
-	if !strings.Contains(out.String(), "setup hook:        tool") {
+	// The re-fired review shows the setup hook's CURRENT bill (the fresh
+	// fingerprint from what is on disk now, not what they accepted before),
+	// so a human is asked about the new content rather than the old one.
+	if !strings.Contains(out.String(), "1 setup hook(s)") {
 		t.Fatalf("the re-fired review must show the setup hook again:\n%s%s", out.String(), errb.String())
 	}
 }
@@ -276,9 +277,10 @@ exit 2
 	}
 }
 
-// The consent screen must show every hook fact a human is approving —
-// argv included — by DEFAULT, not only under --verbose.
-func TestRenderTrustBill_ShowsSetupHooksByDefault(t *testing.T) {
+// The default (non-verbose) consent screen is a SUMMARY: it counts the
+// setup hook but names neither its id nor its argv — that detail, like
+// every other section of this bill, is exactly what --verbose restores.
+func TestRenderTrustBill_SummarizesSetupHooksByDefaultShowsDetailVerbose(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("PIX_HOME", home)
 	p, _ := hookEnvFixture(t, home, "work", hookSidecar, "#!/bin/sh\nexit 0\n")
@@ -293,21 +295,17 @@ func TestRenderTrustBill_ShowsSetupHooksByDefault(t *testing.T) {
 	var out bytes.Buffer
 	renderTrustBill(&out, "work", bom, false)
 	s := out.String()
-	// The default consent screen names WHAT will run (id, kind,
-	// required/optional) unconditionally — that much is never behind
-	// --verbose, unlike every other section in this bill.
-	for _, want := range []string{
-		"1 setup hook(s)",
-		"setup hook:        tool (install, required)",
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("the default consent screen omits %q:\n%s", want, s)
-		}
+	if !strings.Contains(s, "1 setup hook(s)") {
+		t.Errorf("the default consent screen omits the setup hook count:\n%s", s)
 	}
-	// The full argv and content digest are review DETAIL, gated behind
-	// --verbose exactly like every other section (kits, host services, MCP
-	// commands): a concise summary is the normal review surface.
+	if !strings.Contains(s, "env trust work --verbose") {
+		t.Errorf("the default consent screen should point at --verbose for detail:\n%s", s)
+	}
+	// Every per-hook fact — id, kind, required/optional, argv, digests — is
+	// review DETAIL, gated behind --verbose exactly like every other section
+	// in this bill: the default screen is counts/risk categories only.
 	for _, notWant := range []string{
+		"setup hook:        tool",
 		"check: ./setup-tool check",
 		"apply: ./setup-tool install",
 		"sha256:",

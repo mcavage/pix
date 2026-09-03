@@ -2,13 +2,16 @@
 // renderTrustBill previously counted Inference in nothing and printed no
 // per-backend line at all, so a human answering "y" at `pix env trust` or
 // `pix run`'s first-use prompt never saw the model-traffic endpoint(s) an
-// accepted environment would route a session's inference through. These
-// tests prove: (1) every InferenceFact field a reviewer needs — name,
-// driver, base URL, auth — reaches BOTH the default (non-verbose) and
-// verbose consent output, (2) the summary/count line includes inference,
-// (3) attacker-controlled fields pass through sys.TerminalSafe so a
+// accepted environment would route a session's inference through. Inference
+// is now counted by default (D15, revised: default is counts/risk
+// categories only) and every per-backend field — name, driver, base URL,
+// auth — renders under --verbose, the same place every other section's
+// detail lives. These tests prove: (1) the default summary/count line
+// includes inference but names no backend, (2) --verbose shows every
+// InferenceFact field, (3) attacker-controlled fields pass through
+// sys.TerminalSafe under --verbose (where they actually render) so a
 // control character cannot forge an extra terminal line (a fake count, a
-// fake prompt, a fake "trusted" verdict), and (4) the printed
+// fake prompt, a fake "trusted" verdict), and (4) the --verbose
 // representation is exactly the fingerprinted InferenceFact — never a
 // value that could diverge from what Fingerprint actually hashed.
 package main
@@ -21,11 +24,11 @@ import (
 	nativeenv "pix/host/workflow/env"
 )
 
-// TestRenderTrustBill_RendersInferenceFactsByDefault proves every field of
-// an InferenceFact reaches the DEFAULT (non-verbose) render, including an
-// attacker-controlled backend name/driver/base_url/auth — the exact values
-// an attacker.example endpoint and a non-standard driver/auth would carry.
-func TestRenderTrustBill_RendersInferenceFactsByDefault(t *testing.T) {
+// TestRenderTrustBill_CountsInferenceByDefaultWithoutNamingIt proves the
+// default (non-verbose) render counts an InferenceFact but names none of
+// its fields — the summary/count line is the whole default screen for
+// inference now, matching every other bill section.
+func TestRenderTrustBill_CountsInferenceByDefaultWithoutNamingIt(t *testing.T) {
 	b := nativeenv.BillOfMaterials{
 		Inference: []nativeenv.InferenceFact{
 			{
@@ -41,13 +44,13 @@ func TestRenderTrustBill_RendersInferenceFactsByDefault(t *testing.T) {
 	renderTrustBill(&out, "work", b, false)
 	got := out.String()
 
-	for _, want := range []string{"rogue", "openai-compatible", "attacker.example", "bearer"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("default render missing %q; got:\n%s", want, got)
-		}
-	}
 	if !strings.Contains(got, "1 inference backend(s)") {
 		t.Errorf("summary line did not count inference backends; got:\n%s", got)
+	}
+	for _, notWant := range []string{"rogue", "openai-compatible", "attacker.example", "bearer"} {
+		if strings.Contains(got, notWant) {
+			t.Errorf("default render should not name inference detail %q; got:\n%s", notWant, got)
+		}
 	}
 }
 
@@ -85,7 +88,9 @@ func TestRenderTrustBill_InferenceControlCharsCannotForgeATerminalLine(t *testin
 		},
 	}
 	var out bytes.Buffer
-	renderTrustBill(&out, "work", b, false)
+	// Inference detail only renders under --verbose now; that is where the
+	// injection-safety proof actually needs to hold.
+	renderTrustBill(&out, "work", b, true)
 	got := out.String()
 
 	if strings.Contains(got, "\x1b") {
@@ -145,7 +150,9 @@ func TestRenderTrustBill_PrintedInferenceMatchesFingerprintedFact(t *testing.T) 
 	}
 
 	var out bytes.Buffer
-	renderTrustBill(&out, "work", b, false)
+	// Inference detail is --verbose-only now; that is the rendering this
+	// proof is actually about ("nothing shown was never fingerprinted").
+	renderTrustBill(&out, "work", b, true)
 	got := out.String()
 	for _, want := range []string{fact.Name, fact.Driver, fact.BaseURL, fact.Auth} {
 		if !strings.Contains(got, want) {

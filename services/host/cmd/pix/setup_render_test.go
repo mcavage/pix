@@ -205,3 +205,61 @@ func TestRenderSetupResult_QuietOnRerunNoOp(t *testing.T) {
 		t.Errorf("a converged rerun's own zero exit already says ready; no separate line is printed:\n%s", got)
 	}
 }
+
+// TestConfirmContainerReplace_DefaultSaysOnlyChangedAndPreserved proves the
+// normal (non-verbose) memory-replacement prompt names neither the running
+// nor wanted image reference nor either fingerprint — it says only that the
+// service changed and that /data is preserved either way. --verbose (only)
+// restores the exact running/wanted image and fingerprint for anyone who
+// wants to confirm precisely what changed, matching `pix env trust`'s own
+// counts-by-default/--verbose-for-detail split.
+func TestConfirmContainerReplace_DefaultSaysOnlyChangedAndPreserved(t *testing.T) {
+	var errb bytes.Buffer
+	d := &cli.Deps{
+		Out:         &bytes.Buffer{},
+		Err:         &errb,
+		In:          strings.NewReader("n\n"),
+		Interactive: true,
+	}
+	confirm := confirmContainerReplace(d, false)
+	current := container.Info{Image: "pix-memory:old", Labels: map[string]string{container.FingerprintLabel: "fp-old"}}
+	want := container.Spec{Image: "pix-memory:new"}
+
+	confirm(current, want)
+
+	got := errb.String()
+	for _, wantStr := range []string{"changed", "preserved"} {
+		if !strings.Contains(got, wantStr) {
+			t.Errorf("default prompt missing %q:\n%s", wantStr, got)
+		}
+	}
+	for _, notWant := range []string{"pix-memory:old", "pix-memory:new", "fp-old"} {
+		if strings.Contains(got, notWant) {
+			t.Errorf("default prompt should not dump image/fingerprint detail %q:\n%s", notWant, got)
+		}
+	}
+}
+
+// TestConfirmContainerReplace_VerboseShowsImagesAndFingerprints proves
+// --verbose restores the exact drift the default prompt above omits.
+func TestConfirmContainerReplace_VerboseShowsImagesAndFingerprints(t *testing.T) {
+	var errb bytes.Buffer
+	d := &cli.Deps{
+		Out:         &bytes.Buffer{},
+		Err:         &errb,
+		In:          strings.NewReader("n\n"),
+		Interactive: true,
+	}
+	confirm := confirmContainerReplace(d, true)
+	current := container.Info{Image: "pix-memory:old", Labels: map[string]string{container.FingerprintLabel: "fp-old"}}
+	want := container.Spec{Image: "pix-memory:new"}
+
+	confirm(current, want)
+
+	got := errb.String()
+	for _, wantStr := range []string{"pix-memory:old", "fp-old", "pix-memory:new"} {
+		if !strings.Contains(got, wantStr) {
+			t.Errorf("--verbose prompt missing %q:\n%s", wantStr, got)
+		}
+	}
+}

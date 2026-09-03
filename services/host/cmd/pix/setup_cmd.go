@@ -151,7 +151,7 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 	// The container spec is derived from the DISCOVERED manifest, not from
 	// whatever release.json a previous run happened to leave behind: the
 	// image this setup reconciles is the one this binary shipped with.
-	res, err := machineSetup(home, s, *bundle, confirmContainerReplace(d))
+	res, err := machineSetup(home, s, *bundle, confirmContainerReplace(d, c.Verbose))
 	if err != nil {
 		return err
 	}
@@ -497,18 +497,28 @@ func renderSetupNotReady(d *cli.Deps, res provision.Result) {
 
 // confirmContainerReplace is the exact prompt architecture §9.1 requires
 // before a mismatched pix-memory container is stopped, removed, and
-// recreated: show the drift, ask, default to declining on anything that
+// recreated: say plainly that the memory service changed and that its data
+// is preserved either way, ask, default to declining on anything that
 // cannot ask (non-interactive, no confirmation requested with --yes).
-func confirmContainerReplace(d *cli.Deps) func(current container.Info, want container.Spec) bool {
+// Normal output names NEITHER image reference NOR fingerprint — a raw
+// digest dump reads as a full audit a human has to interpret before
+// answering y/N, when the only fact that actually changes the answer is
+// "the service changed, your data survives regardless". verbose restores
+// the exact running/wanted image and fingerprint for anyone who wants to
+// confirm precisely what changed, matching `pix env trust`'s own
+// counts-by-default/--verbose-for-detail split.
+func confirmContainerReplace(d *cli.Deps, verbose bool) func(current container.Info, want container.Spec) bool {
 	return func(current container.Info, want container.Spec) bool {
-		fmt.Fprintf(d.Err, "pix setup: the running pix-memory container does not match the pinned release:\n")
-		fmt.Fprintf(d.Err, "  running: %s (fingerprint %s)\n", current.Image, current.Fingerprint())
-		fmt.Fprintf(d.Err, "  wanted:  %s (fingerprint %s)\n", want.Image, want.Fingerprint())
+		fmt.Fprintln(d.Err, "pix setup: the pix-memory service has changed and needs to be replaced. Its /data volume is preserved either way.")
+		if verbose {
+			fmt.Fprintf(d.Err, "  running: %s (fingerprint %s)\n", current.Image, current.Fingerprint())
+			fmt.Fprintf(d.Err, "  wanted:  %s (fingerprint %s)\n", want.Image, want.Fingerprint())
+		}
 		if !d.Interactive {
 			fmt.Fprintf(d.Err, "pix setup: refusing to replace it on a non-interactive terminal; rerun interactively or remove it yourself: docker rm -f %s\n", want.ContainerName)
 			return false
 		}
-		fmt.Fprint(d.Err, "Replace it? Its /data volume is preserved either way. [y/N] ")
+		fmt.Fprint(d.Err, "Replace it? [y/N] ")
 		var line string
 		fmt.Fscanln(d.In, &line)
 		return line == "y" || line == "Y"

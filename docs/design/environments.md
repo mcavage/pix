@@ -694,12 +694,27 @@ The accepted record lives in launcher-owned state outside the environment. A
 name never carries trust, and repointing a name never transfers acceptance.
 Non-TTY review fails closed without `--yes`.
 
-`pix env review` prints a summary by default: counts, plus each host command
-and host service name, every credential destination, and every mount
-expansion. Full argv and content digests are behind `--verbose`; counts alone
-train a reflexive `y`, and full argv by default is noise that also trains one,
-so the default view names what executes and where secrets go without either
-failure mode.
+`pix env review` prints a summary by default: counts, plus a named risk
+category for anything that changes the SHAPE of what a human is accepting
+(today: how many registries skip TLS verification). Every host command and
+host service name, credential destination, mount expansion, MCP server, kit,
+inference backend, setup hook, interpolation, and the full argv/content-digest
+section are `--verbose`-only. This is a revision of the original default view,
+which used to name host commands/services, credential destinations, and
+mount expansion as default-visible detail too, but that still read as a full
+audit dump a human had to parse line-by-line before answering a single
+`y`/`N` — counts
+alone train a reflexive `y` in the OTHER direction, and full detail by
+default trains one just as surely, so the default view is now exactly the
+counts plus categorical risk flags, with `pix env trust NAME --verbose` (or
+`pix run`'s own printed pointer) the one place a reviewer who wants the full
+audit asks for it.
+
+The same split applies to `pix setup`'s memory-container replace prompt: by
+default it says only that the pix-memory service changed and that its
+`/data` volume is preserved either way, never the running/wanted image
+references or fingerprints — `pix setup --verbose` restores those for a
+reviewer who wants to confirm precisely what changed.
 
 A creation-fingerprint attach refusal names the drifted facets by canonical
 key path, read from the adapter's pre-composition semantic tree rather than

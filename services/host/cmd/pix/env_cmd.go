@@ -603,66 +603,68 @@ func safeArgv(argv []string) string {
 	return strings.Join(parts, " ")
 }
 
-// renderTrustBill prints workflow/env's canonical BillOfMaterials: counts
-// plus every host command/service name, credential destination, mount
-// expansion, and inference backend by default (D15); full argv and content
-// digests behind --verbose. Inference facts render by default (never only
-// under --verbose) because a model-traffic endpoint is one of the four
-// things docs/design/environments.md §9.1 names the trust fingerprint
-// exists to gate, alongside host execution, credential disclosure, and
-// mount expansion: a human must see every backend name, driver, base URL,
-// and auth mode an accepted environment would route a session's model
-// traffic through before answering y/N, not just count it. Every value
-// that can carry AUTHORED environment content (attacker-controlled for a
-// cloned or shared environment) passes through sys.TerminalSafe before
-// reaching the terminal a human is about to answer "y" on: a raw ESC/CSI/OSC
-// could repaint or retitle the consent screen, and a raw newline could
-// forge a renderer-owned line (a fake count, a fake prompt, a fake
-// "trusted" verdict). This is the same discipline the deleted v1
-// environment-review renderer applied (docs/design/environments.md §9.1's
-// Wave C security M1); it is not optional polish. Every rendered argv
-// (a setup hook's check/apply, a host command's or host service's own
-// argument list) additionally goes through safeArgv, never a bare
-// strings.Join: each element is shell-quoted INDIVIDUALLY, so a reviewer
-// sees exactly the argument boundaries os/exec will actually use, not a
-// space-joined string a multi-word single argument could be misread as
-// two arguments (or the reverse).
+// renderTrustBill prints workflow/env's canonical BillOfMaterials: by
+// default (D15, revised) it shows ONLY the summary counts plus any risk
+// CATEGORY that changes the shape of what a human is accepting (today:
+// how many registries skip TLS verification) — never a per-item
+// enumeration of names, destinations, or endpoints. Every host
+// command/service name, credential destination, mount path, MCP server,
+// kit, inference backend, and interpolation, plus the full argv and
+// content-digest section, is --verbose-only: `pix env trust NAME
+// --verbose` is the one place a reviewer who wants to READ the bill
+// line-by-line asks for it. D15 previously required host
+// commands/services, credential destinations, mount expansion, and every
+// inference backend by default; user feedback on the live consent screen
+// (still reading as a full audit dump before a single y/N) moved that
+// detail behind --verbose too, matching the setup-hook and kit/host-service
+// argv sections that were already there. The fingerprint (printed by every
+// caller right after this function returns) still lets a reviewer confirm
+// an ALREADY-reviewed acceptance did not silently change — it is a receipt,
+// not an audit dump, so it stays outside verbose.
+//
+// Every value that can carry AUTHORED environment content
+// (attacker-controlled for a cloned or shared environment) passes through
+// sys.TerminalSafe before reaching the terminal a human is about to answer
+// "y" on: a raw ESC/CSI/OSC could repaint or retitle the consent screen,
+// and a raw newline could forge a renderer-owned line (a fake count, a
+// fake prompt, a fake "trusted" verdict). This is the same discipline the
+// deleted v1 environment-review renderer applied (docs/design/
+// environments.md §9.1's Wave C security M1); it is not optional polish.
+// Every rendered argv (a setup hook's check/apply, a host command's or
+// host service's own argument list) additionally goes through safeArgv,
+// never a bare strings.Join: each element is shell-quoted INDIVIDUALLY, so
+// a reviewer sees exactly the argument boundaries os/exec will actually
+// use, not a space-joined string a multi-word single argument could be
+// misread as two arguments (or the reverse).
 func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, verbose bool) {
 	safe := sys.TerminalSafe
 	fmt.Fprintf(out, "pix env trust %s\n", safe(name))
 	fmt.Fprintln(out, "  environment runs code on your host and hands it credentials:")
-	fmt.Fprintf(out, "  %d host command(s), %d host service(s), %d setup hook(s), %d credential target(s), %d mount(s), %d MCP server(s), %d kit(s), %d inference backend(s)\n\n",
+	fmt.Fprintf(out, "  %d host command(s), %d host service(s), %d setup hook(s), %d credential target(s), %d mount(s), %d MCP server(s), %d kit(s), %d inference backend(s)\n",
 		len(b.HostCommands), len(b.HostServices), len(b.SetupHooks), len(b.CredentialTargets), len(b.EffectiveMounts), len(b.MCPServers), len(b.Kits), len(b.Inference))
+	if n := len(b.NoVerifyRegistries()); n > 0 {
+		fmt.Fprintf(out, "  %d of those registrie(s) skip TLS certificate verification (no-verify)\n", n)
+	}
+	if !verbose {
+		fmt.Fprintf(out, "\n  full detail: pix env trust %s --verbose\n", sys.ShellQuote(name))
+		return
+	}
+	fmt.Fprintln(out)
 	for _, c := range b.HostCommands {
 		fmt.Fprintf(out, "  runs on this host: %s\n", safe(c.Name))
 	}
 	for _, s := range b.HostServices {
 		fmt.Fprintf(out, "  host service:      %s  port %d\n", safe(s.Name), s.Port)
 	}
-	// Setup hooks render BY DEFAULT (never omitted, unlike the argv-heavy
-	// sections gated by !verbose below), because they are the one thing in
-	// this bill `pix setup --env NAME` will execute on this host with the
-	// human's own stdio attached, so "3 setup hook(s)" alone is not consent.
-	// Required/optional and install/auth are shown too, because those two
-	// bits decide whether a failure stops the run and whether the hook may
-	// talk to the terminal. The exact check/apply argv and content digests
-	// are, like every other section here, behind --verbose: a concise
-	// id/kind/required-or-optional line is the normal review surface, full
-	// argv and sha256 is what a reviewer who wants to READ the hook asks for.
+	// Every SetupHook is now --verbose-only (this whole block only runs once
+	// !verbose has already returned above): id, kind, required/optional, the
+	// full check/apply argv, and every content digest render together — a
+	// reviewer who asks for detail at all gets the complete hook, not a
+	// concise line first and a second flag for the rest of it.
 	for _, h := range b.SetupHooks {
 		need := "optional"
 		if h.Required {
 			need = "required"
-		}
-		if !verbose {
-			// Concise by default: id, kind, and required/optional — enough to
-			// know WHAT will run on this host without the full argv/digest
-			// wall of text every review used to print unconditionally. Full
-			// detail (exact check/apply argv, sha256 of the executable and
-			// every input) is exactly what --verbose restores below, matching
-			// every other section in this bill.
-			fmt.Fprintf(out, "  setup hook:        %s (%s, %s)\n", safe(h.ID), safe(h.Kind), need)
-			continue
 		}
 		fmt.Fprintf(out, "  setup hook:        %s (%s, %s) %s\n", safe(h.ID), safe(h.Kind), need, safe(h.Command))
 		fmt.Fprintf(out, "                     check: %s %s\n", safe(h.Command), safeArgv(h.CheckArgs))
@@ -711,10 +713,9 @@ func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, ve
 		}
 		fmt.Fprintf(out, "  interpolation:     %s -> %s\n", safe(src), safe(it.KeyPath))
 	}
-	if !verbose {
-		fmt.Fprintf(out, "\n  full argv and content digests: pix env trust %s --verbose\n", sys.ShellQuote(name))
-		return
-	}
+	// The rest of this function is the full argv/content-digest section —
+	// reachable only through the verbose block above, since !verbose already
+	// returned before any of this ran.
 	fmt.Fprintln(out)
 	for _, c := range b.HostCommands {
 		fmt.Fprintf(out, "  argv %-20s %s\n", safe(c.Name), safeArgv(c.Argv))
