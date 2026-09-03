@@ -656,7 +656,11 @@ func computeSetupHooks(root string, s *envinfo.Sidecar, b *BillOfMaterials) erro
 			Inputs:    inputs,
 		})
 	}
-	sort.Slice(b.SetupHooks, func(i, j int) bool { return b.SetupHooks[i].ID < b.SetupHooks[j].ID })
+	// b.SetupHooks keeps s.Setup's AUTHORED order (no sort here): hooks are
+	// often dependency-ordered, so envsetup.Run and every rendered bill must
+	// execute/print them as authored, never resorted by id. canonicalDoc
+	// sorts a separate COPY by id for Fingerprint only, so a pure reorder
+	// need not re-gate; that sort must never reach this live field.
 	return nil
 }
 
