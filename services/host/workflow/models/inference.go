@@ -557,6 +557,23 @@ func ResolveEnvironmentRoster(cfg *config.Config, shippedAgents []string) (Envir
 func rosterKnownModels(cfg *config.Config, facts EnvironmentRosterFacts) map[string]bool {
 	known := make(map[string]bool, len(facts.LocalModels)+len(cfg.Inference.Models))
 	if !facts.Exclusive {
+		// The SHIPPED CATALOG counts as machine-declared, and leaving it
+		// out was a straight contradiction: resolveRunModel picks this
+		// home's default STRAIGHT from the catalog (no binding needed,
+		// stamped "configured provider default"), so a fresh home ran
+		// `openai/sol` happily until someone wrote that exact same id into
+		// [models].main — which then refused to launch, because a fresh
+		// config.toml binds nothing. A model this build can name is a model
+		// a roster may reference; whether it is CALLABLE is a credential
+		// and probe question `pix doctor` answers, not a spelling question
+		// this check can answer.
+		if catalog, err := inference.LoadCatalog(); err == nil {
+			for _, m := range catalog.Models {
+				if m.Available {
+					known[m.ID] = true
+				}
+			}
+		}
 		for _, b := range cfg.Inference.Models {
 			known[b.Model] = true
 		}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -73,10 +74,92 @@ type OllamaStatus struct {
 	Models map[string]OllamaModelInfo
 }
 
-// HasModel reports whether tag is on the resolved endpoint's list.
+// NormalizeOllamaTag renders a model name the way Ollama's own /api/tags
+// listing does, so a name a HUMAN wrote (config.toml's
+// memory_embed_model, a pix.toml roster entry, a `[models].main` value)
+// can be compared against a name the DAEMON reported without a spurious
+// mismatch. Two conventions differ and both are correct: `ollama pull
+// nomic-embed-text` is listed as `nomic-embed-text:latest`, and a catalog
+// id carries the provider prefix (`ollama/qwen3.5:9b`) the daemon never
+// uses. Normalizing means lowercasing (Ollama names are case-insensitive),
+// dropping a leading `ollama/`, and defaulting the implicit `:latest` tag.
+func NormalizeOllamaTag(tag string) string {
+	t := strings.ToLower(strings.TrimSpace(tag))
+	t = strings.TrimPrefix(t, "ollama/")
+	if t == "" {
+		return ""
+	}
+	// Only the last path segment can carry the `:tag` suffix; an earlier
+	// colon would be part of a registry/namespace, which Ollama does not
+	// treat as the tag.
+	last := t[strings.LastIndex(t, "/")+1:]
+	if !strings.Contains(last, ":") {
+		t += ":latest"
+	}
+	return t
+}
+
+// HasModel reports whether tag is on the resolved endpoint's list, under
+// NormalizeOllamaTag's equivalence — `nomic-embed-text` and
+// `nomic-embed-text:latest` are the same model, and asking otherwise is how
+// a present model gets reported missing.
 func (s OllamaStatus) HasModel(tag string) bool {
-	_, ok := s.Models[tag]
+	_, ok := s.ResolveModel(tag)
 	return ok
+}
+
+// ResolveModel returns the tag the endpoint ACTUALLY listed for tag, which
+// is what a caller should render and record: the daemon's spelling is the
+// one that will still match after a reprobe.
+func (s OllamaStatus) ResolveModel(tag string) (string, bool) {
+	if m, ok := s.Models[tag]; ok {
+		return m.Tag, true
+	}
+	want := NormalizeOllamaTag(tag)
+	if want == "" {
+		return "", false
+	}
+	for listed, m := range s.Models {
+		if NormalizeOllamaTag(listed) == want {
+			return m.Tag, true
+		}
+	}
+	return "", false
+}
+
+// ChatModels is every listed tag that is a plausible CHAT model for this
+// endpoint, in stable order: the listing minus the embedding-only families,
+// which are not selectable as a session model however prominently they
+// appear in `ollama list`. It is a listing filter, never a ranking — this
+// package does not score models.
+func (s OllamaStatus) ChatModels() []string {
+	tags := make([]string, 0, len(s.Models))
+	for listed := range s.Models {
+		if isEmbeddingOnlyTag(listed) {
+			continue
+		}
+		tags = append(tags, listed)
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+// embeddingOnlyFamilies are the model families whose whole purpose is
+// embeddings: they answer /api/embed and cannot hold a conversation, so
+// offering one as a session model is offering a broken session. Matched as
+// a substring of the normalized name, which is how these families are
+// actually named (`nomic-embed-text`, `mxbai-embed-large`,
+// `snowflake-arctic-embed2`).
+var embeddingOnlyFamilies = []string{"-embed", "embed-", "embedding"}
+
+func isEmbeddingOnlyTag(tag string) bool {
+	name := NormalizeOllamaTag(tag)
+	for _, f := range embeddingOnlyFamilies {
+		if strings.Contains(name, f) {
+			return true
+		}
+	}
+	return false
 }
 
 // CanPull reports whether this integration may offer to pull a missing

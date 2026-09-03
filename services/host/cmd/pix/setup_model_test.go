@@ -2,14 +2,22 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"pix/host/cli"
+	"pix/host/config"
+	"pix/host/envinfo"
+	"pix/host/hostenv"
 	"pix/host/pixhome"
 	"pix/host/sys"
+	"pix/host/sys/systest"
+	"pix/host/workflow/launch"
 )
 
 // modelSetupHome creates a temp PIX_HOME with the exact scaffolded default
@@ -81,23 +89,80 @@ func TestSetupModelSelection_NonInteractiveNeverPromptsOrWrites(t *testing.T) {
 	}
 }
 
-// TestSetupModelSelection_NoProviderConfiguredSkipsSilently: with no
-// provider ref configured, the picker has nothing to list and prints
-// nothing (setupCredentials already covers that story).
-func TestSetupModelSelection_NoProviderConfiguredSkipsSilently(t *testing.T) {
+// TestSetupModelSelection_NoProviderNoOllamaSkipsSilently: with no
+// provider ref configured AND no Ollama answering, the picker has nothing
+// to list and prints nothing (setupCredentials already covers that story).
+func TestSetupModelSelection_NoProviderNoOllamaSkipsSilently(t *testing.T) {
 	home, sidecar := modelSetupHome(t, "")
 	before := readFile(t, sidecar)
 	var out bytes.Buffer
 	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("1\n"), Interactive: true}
 
-	setupModelSelection(d, home, defaultShellEnv(), true)
+	setupModelSelection(d, home, ollamaEnvAt(t, "127.0.0.1:1", ""), true)
 
 	if out.Len() != 0 {
-		t.Errorf("no configured provider must print nothing from the picker: %s", out.String())
+		t.Errorf("no provider and no ollama must print nothing from the picker: %s", out.String())
 	}
 	if got := readFile(t, sidecar); got != before {
 		t.Errorf("no configured provider must never write pix.toml")
 	}
+}
+
+// TestSetupModelSelection_OllamaOnlyHomeCanPickALocalModel: a home with NO
+// API key and a reachable Ollama is not a home with no models. The picker
+// offers the catalog-known installed tags, records the pick as
+// [models].main, and that recorded id must be one a run accepts — the
+// selectable-equals-usable property, proven here against the real roster
+// validator rather than assumed.
+func TestSetupModelSelection_OllamaOnlyHomeCanPickALocalModel(t *testing.T) {
+	home, sidecar := modelSetupHome(t, "")
+	var out bytes.Buffer
+	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &out, In: strings.NewReader("1\n"), Interactive: true}
+	env := ollamaEnvAt(t, "", `{"models":[{"name":"qwen3.5:9b"},{"name":"nomic-embed-text:latest"},{"name":"homegrown:7b"}]}`)
+
+	setupModelSelection(d, home, env, true)
+
+	got := readFile(t, sidecar)
+	if !strings.Contains(got, `main = "ollama/qwen3.5:9b"`) {
+		t.Fatalf("pix.toml did not record the picked local model:\n%s\noutput:\n%s", got, out.String())
+	}
+	if strings.Contains(out.String(), "nomic-embed-text") {
+		t.Errorf("an embedding-only model must never be offered as a session model: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "homegrown:7b") {
+		t.Errorf("an installed but uncataloged tag must be reported, not silently dropped: %s", out.String())
+	}
+	sc, perr := envinfo.ParseSidecar(sidecar)
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if verr := validateRunRoster(&config.Config{}, launch.EnvSelection{Name: "default", Root: filepath.Dir(sidecar), Sidecar: sc}, nil); verr != nil {
+		t.Errorf("the recorded model must be launchable on this same home: %v", verr)
+	}
+}
+
+// ollamaEnvAt fakes this host's Ollama for the picker: an endpoint that
+// answers /api/tags with models, or (with an unroutable host) one that does
+// not answer at all.
+func ollamaEnvAt(t *testing.T, host, tags string) hostenv.Env {
+	t.Helper()
+	if host == "" {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tags))
+		}))
+		t.Cleanup(srv.Close)
+		u, err := url.Parse(srv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		host = u.Host
+	}
+	return hostenv.Env{System: &systest.Fake{
+		Base:       sys.Real{},
+		GetenvFn:   func(string) string { return host },
+		LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil },
+	}}
 }
 
 // TestSetupModelSelection_EmptyInputAcceptsTheDefault: the plain-language

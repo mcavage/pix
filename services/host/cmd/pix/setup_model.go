@@ -57,9 +57,17 @@ func setupModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, defau
 		return
 	}
 	providers, state := secret.ConfiguredModelRefs(env)
-	if state != secret.RefsAnswered || len(providers) == 0 {
-		// Already reported by setupCredentials: either secrets.env could not
-		// be read, or no provider is configured yet. Nothing new to add.
+	if state != secret.RefsAnswered {
+		// Already reported by setupCredentials: secrets.env could not be
+		// read. Nothing new to add.
+		return
+	}
+	if len(providers) == 0 {
+		// No API-key provider, which is NOT the same as no model: a host
+		// running Ollama has models that need no key at all. That home used
+		// to get no picker and then a refusal at launch ("configures no
+		// provider"), with nothing naming the models sitting right there.
+		setupOllamaOnlyModelSelection(d, home, env, defaultEnvCreated)
 		return
 	}
 	// The fallback resolveRunModel would pick for a scaffolded environment
@@ -111,14 +119,18 @@ func setupModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, defau
 			choices = append(choices, m)
 		}
 	}
+	// This host's OWN Ollama models are alternatives too, and keyless ones:
+	// leaving them out of the list meant the only way to pick a local model
+	// was to know the catalog id and hand-edit pix.toml.
+	installed, uncataloged := installedOllamaChoices(catalog, env)
+	choices = append(choices, installed...)
 	if len(choices) == 0 {
 		return
 	}
 
 	fmt.Fprintf(d.Out, "%s models:\n", providerDisplayName(fallback.Provider))
-	for i, m := range choices {
-		fmt.Fprintf(d.Out, "  %d) %-32s %s\n", i+1, m.ID, m.Label)
-	}
+	renderModelChoices(d, choices)
+	reportUncatalogedOllamaTags(d, uncataloged)
 	fmt.Fprintf(d.Out, "Pick a number, or press Enter to keep %s: ", fallback.Label)
 
 	if !sc.Scan() {
@@ -144,6 +156,104 @@ func setupModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, defau
 		return
 	}
 	fmt.Fprintf(d.Out, "recorded [models].main = %q in %s\n", chosen.ID, sidecarPath)
+}
+
+// setupOllamaOnlyModelSelection is the picker for a home with NO API-key
+// provider configured and a reachable Ollama: the models are already on
+// disk and cost nothing to call, so the only thing missing is a NAME in
+// [models].main. Nothing is auto-selected here (safety invariant 10): with
+// no configured provider there is no shipped fallback to fall back to, so a
+// bare Enter records nothing and says what to do instead.
+func setupOllamaOnlyModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, defaultEnvCreated bool) {
+	catalog, err := inference.LoadCatalog()
+	if err != nil {
+		return
+	}
+	choices, uncataloged := installedOllamaChoices(catalog, env)
+	if len(choices) == 0 {
+		reportUncatalogedOllamaTags(d, uncataloged)
+		return
+	}
+	sidecarPath := filepath.Join(home.EnvironmentDir(provision.DefaultEnvironmentName), "pix.toml")
+	fmt.Fprintln(d.Out, "")
+	fmt.Fprintf(d.Out, "No provider key is configured, but this host's Ollama already serves %d model(s) — those need no key:\n", len(choices))
+	renderModelChoices(d, choices)
+	reportUncatalogedOllamaTags(d, uncataloged)
+	if !defaultEnvCreated {
+		// R9: the default environment is user-owned this run; display only.
+		fmt.Fprintf(d.Out, "  To use one, set [models].main in %s.\n", sidecarPath)
+		return
+	}
+	fmt.Fprint(d.Out, "Pick a number to use as your default model, or press Enter to decide later: ")
+	line, _ := d.Line().ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		fmt.Fprintf(d.Out, "nothing recorded; set [models].main in %s, or pass --model, before a run.\n", sidecarPath)
+		return
+	}
+	idx, cerr := strconv.Atoi(line)
+	if cerr != nil || idx < 1 || idx > len(choices) {
+		fmt.Fprintf(d.Out, "%q is not one of the listed choices; nothing recorded.\n", line)
+		return
+	}
+	chosen := choices[idx-1]
+	if werr := writeScaffoldedModelMain(env, sidecarPath, chosen.ID); werr != nil {
+		fmt.Fprintf(d.Out, "pix setup: could not record the model choice: %v\n", werr)
+		return
+	}
+	fmt.Fprintf(d.Out, "recorded [models].main = %q in %s\n", chosen.ID, sidecarPath)
+}
+
+// installedOllamaChoices is the one join between what this host's Ollama
+// ACTUALLY serves (inference.DetectOllama — the same detection setup's
+// embedding step and `pix doctor`'s ollama row use) and what this build can
+// NAME (the shipped catalog). Only the intersection is offered: a tag no
+// catalog entry declares has no roster identity, so offering it would
+// record a [models].main that refuses at launch. Those tags are returned
+// separately to be REPORTED, never silently dropped.
+func installedOllamaChoices(catalog *inference.Catalog, env hostenv.Env) (choices []inference.Model, uncataloged []string) {
+	if env.System == nil {
+		return nil, nil
+	}
+	st := inference.DetectOllama(env)
+	if !st.Reachable {
+		return nil, nil
+	}
+	cataloged := map[string]inference.Model{}
+	for _, m := range catalog.Models {
+		if m.Available && m.Provider == "ollama" {
+			cataloged[inference.NormalizeOllamaTag(m.ID)] = m
+		}
+	}
+	for _, tag := range st.ChatModels() {
+		if m, ok := cataloged[inference.NormalizeOllamaTag(tag)]; ok {
+			choices = append(choices, m)
+			continue
+		}
+		uncataloged = append(uncataloged, tag)
+	}
+	return choices, uncataloged
+}
+
+func renderModelChoices(d *cli.Deps, choices []inference.Model) {
+	for i, m := range choices {
+		suffix := ""
+		if m.Provider == "ollama" {
+			suffix = "  (installed on this host, no key needed)"
+		}
+		fmt.Fprintf(d.Out, "  %d) %-32s %s%s\n", i+1, m.ID, m.Label, suffix)
+	}
+}
+
+// reportUncatalogedOllamaTags names the local tags this build cannot offer
+// and why, so a user who can see them in `ollama list` is not left
+// wondering why the picker pretended they do not exist.
+func reportUncatalogedOllamaTags(d *cli.Deps, tags []string) {
+	if len(tags) == 0 {
+		return
+	}
+	fmt.Fprintf(d.Out, "  (%d other local Ollama tag(s) are installed but not in this build's model catalog: %s. Declare one in an environment's [[inference.models]] to use it.)\n",
+		len(tags), strings.Join(tags, ", "))
 }
 
 // providerDisplayName renders a catalog provider key in the plain language

@@ -13,7 +13,6 @@
 package secret
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -94,14 +93,18 @@ func OfferOnePasswordKeys(env hostenv.Env, in io.Reader, out io.Writer, tty bool
 		return
 	}
 	fmt.Fprintln(out, "Paste an op:// ref per provider (op://Vault/Item/field), or Enter to skip each.")
-	sc := bufio.NewScanner(in)
+	// cli.LineIn, never a fresh bufio here: this function is one step of a
+	// multi-prompt `pix setup` run, and a reader created per step swallows
+	// whatever the caller's shared buffer already held.
+	sc := cli.LineIn(in)
 	wrote := false
 	for _, p := range ProviderKeyRefOrder {
 		fmt.Fprintf(out, "  %s: ", p.Name)
-		if !sc.Scan() {
+		line, rerr := sc.ReadString('\n')
+		if line == "" && rerr != nil {
 			break
 		}
-		ref := NormalizeOpRef(sc.Text())
+		ref := NormalizeOpRef(line)
 		if ref == "" {
 			continue
 		}

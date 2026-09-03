@@ -18,6 +18,7 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,6 +59,11 @@ type Deps struct {
 	// main would make those fail for an unrelated reason.
 	cfg    *config.Config
 	cfgErr error
+
+	// line is this command's one buffered stdin reader (see Deps.Line in
+	// prompt.go). It is memoized because a second reader over the same
+	// stdin silently eats whatever the first one buffered.
+	line *bufio.Reader
 }
 
 // Config loads config.toml once per command. The error is returned rather than

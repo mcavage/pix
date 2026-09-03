@@ -10,7 +10,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"sort"
 	"strings"
@@ -161,12 +160,20 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 	// The container spec is derived from the DISCOVERED manifest, not from
 	// whatever release.json a previous run happened to leave behind: the
 	// image this setup reconciles is the one this binary shipped with.
+	// Ollama comes FIRST, before the container is reconciled: the
+	// pix-memory container's OLLAMA_HOST/MEMORY_EMBED_MODEL environment —
+	// and its fingerprint, which decides whether the container is replaced
+	// — is composed from exactly this detection (memoryContainerEnv). Ask
+	// after the reconcile and a model pulled in this run lands in the NEXT
+	// run's container, which is how a freshly pulled embedding model still
+	// produced keyword-only recall until the user ran `pix setup` twice.
+	setupMemoryEmbeddings(d, s.Env)
+
 	res, err := machineSetup(home, s, *bundle, confirmContainerReplace(d, c.Verbose))
 	if err != nil {
 		return err
 	}
 	renderSetupResult(d, home, res, c.Verbose)
-	reportMemoryEmbeddingStatus(d, s.Env)
 	// A named --env setup is not a base-install interview: the environment
 	// already declares its own model roster ([models].main, [agents]), so
 	// the base default-model picker and the optional Parallel-search offer
@@ -188,7 +195,7 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 	return nil
 }
 
-// reportMemoryEmbeddingStatus is setup's Ollama/embedding step: the SAME
+// setupMemoryEmbeddings is setup's Ollama/embedding step: the SAME
 // inference.DetectOllama integration the memory container's own OLLAMA_HOST
 // (memoryContainerEnv) and `pix doctor`'s ollama row use, so all three can
 // never disagree about what this host's Ollama looks like. It is never
@@ -197,7 +204,7 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 // endpoint missing the embedding model gets an interactive, default-No
 // offer to pull it; a REMOTE endpoint (a shared team daemon, or a proxied
 // Ollama Cloud account) only ever gets reported, never offered a pull.
-func reportMemoryEmbeddingStatus(d *cli.Deps, env hostenv.Env) {
+func setupMemoryEmbeddings(d *cli.Deps, env hostenv.Env) {
 	if env.System == nil {
 		return
 	}
@@ -233,19 +240,26 @@ func reportMemoryEmbeddingStatus(d *cli.Deps, env hostenv.Env) {
 		return
 	}
 	fmt.Fprintf(d.Out, "pix setup: ollama: local endpoint %s is missing the embedding model %q; semantic memory recall degrades to keyword search without it.\n", st.Endpoint.String(), embed)
-	fmt.Fprintf(d.Out, "Pull %s now? Downloading it can take a few minutes and several hundred MB of disk. [y/N] ", embed)
-	sc := bufio.NewScanner(d.In)
-	if !sc.Scan() {
-		return
-	}
-	answer := strings.ToLower(strings.TrimSpace(sc.Text()))
-	if answer != "y" && answer != "yes" {
+	if !d.AskYN(fmt.Sprintf("Pull %s now? Downloading it can take a few minutes and several hundred MB of disk. [y/N] ", embed), false) {
 		fmt.Fprintf(d.Out, "skipping; pull it yourself later: ollama pull %s\n", embed)
 		return
 	}
 	if err := env.RunInteractive("ollama", "pull", embed); err != nil {
 		fmt.Fprintf(d.Err, "pix setup: ollama pull %s failed: %v\n", embed, err)
+		return
 	}
+	// A pull that exited 0 is not proof the model is callable: REPROBE the
+	// same endpoint and report what it now lists. This is the only claim
+	// this step is entitled to make, and it is why the whole step runs
+	// before the container reconcile — the reprobed listing is what
+	// memoryContainerEnv reads next.
+	after := inference.DetectOllama(env)
+	if !after.HasModel(embed) {
+		fmt.Fprintf(d.Err, "pix setup: ollama pull %s reported success, but %s still does not list it; memory embeddings stay on keyword recall.\n", embed, after.Endpoint.String())
+		return
+	}
+	listed, _ := after.ResolveModel(embed)
+	fmt.Fprintf(d.Out, "pix setup: ollama: pulled %s; %s now lists it. Semantic memory recall is wired.\n", listed, after.Endpoint.String())
 }
 
 // setupCredentials is setup's credential step, and it is deliberately small:
@@ -269,7 +283,7 @@ func setupCredentials(d *cli.Deps, baseSetup bool) {
 	if d.Interactive {
 		// Fires only when op is installed AND no provider ref is configured
 		// yet (OfferOnePasswordKeys' own gate) — never a nag, never a claim.
-		secret.OfferOnePasswordKeys(env, d.In, d.Out, true)
+		secret.OfferOnePasswordKeys(env, d.Line(), d.Out, true)
 	}
 	if secret.ProviderKeyRefsPresent(env) {
 		fmt.Fprintln(d.Out, "model keys are configured as 1Password refs; each run resolves them into that run's own sandbox.")
@@ -293,7 +307,7 @@ func setupCredentials(d *cli.Deps, baseSetup bool) {
 // gets no base-install prompts or reports (setup_cmd.go's Run).
 func setupParallelSearch(d *cli.Deps, env hostenv.Env) {
 	if d.Interactive {
-		secret.OfferParallelSearchKey(env, d.In, d.Out, true)
+		secret.OfferParallelSearchKey(env, d.Line(), d.Out, true)
 	}
 	if secret.ConfiguredParallelSearchRef(env) {
 		fmt.Fprintln(d.Out, "Parallel web search is configured (PARALLEL_API_KEY ref present); pi-web-access uses it for that backend.")
@@ -411,44 +425,48 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 	// still sends the user off to run something else and come back.
 	if d.Interactive && (len(missingSecrets)+len(missingPlain)) > 0 {
 		fmt.Fprintf(d.Out, "this environment needs %d value(s) before it's ready. Enter each now (blank to skip and record it later):\n", len(missingSecrets)+len(missingPlain))
-		reader := bufio.NewReader(d.In)
 
 		var stillMissingSecrets []string
 		for _, k := range missingSecrets {
-			fmt.Fprintf(d.Out, "  %s needs a 1Password reference (op://vault/item/field): ", k)
-			line, _ := reader.ReadString('\n')
-			line = strings.TrimSpace(line)
-			if line == "" {
+			// cli.Deps.Ask is the shared prompt: ONE stdin buffer for the
+			// whole command, and a rejected answer is re-asked in place
+			// instead of falling through to "go run three other commands
+			// and start over". secret.SetRef is the SAME validated, locked
+			// write `pix secret set` performs (op:// prefix, no control
+			// characters, one atomic upsert), so the retry loop validates
+			// against the real persistence path, never a copy of its rules.
+			if _, ok := d.Ask(cli.Question{
+				Label:   k,
+				Detail:  describeDeclaredValue(bom, k, true),
+				Example: "op://Private/Anthropic API Key/credential",
+				Accept: func(v string) error {
+					if serr := secret.SetRef(home, k, v); serr != nil {
+						return fmt.Errorf("could not record %s: %v", k, serr)
+					}
+					fmt.Fprintf(d.Out, "    recorded %s in %s\n", k, home.SecretsEnv)
+					return nil
+				},
+			}); !ok {
 				stillMissingSecrets = append(stillMissingSecrets, k)
-				continue
 			}
-			// secret.SetRef is the SAME validated, locked write `pix
-			// secret set` performs: an op:// prefix, no control
-			// characters, one atomic upsert into secrets.env.
-			if serr := secret.SetRef(home, k, line); serr != nil {
-				fmt.Fprintf(d.Out, "    could not record %s: %v\n", k, serr)
-				stillMissingSecrets = append(stillMissingSecrets, k)
-				continue
-			}
-			fmt.Fprintf(d.Out, "    recorded %s in %s\n", k, home.SecretsEnv)
 		}
 		missingSecrets = stillMissingSecrets
 
 		var stillMissingPlain []string
 		for _, k := range missingPlain {
-			fmt.Fprintf(d.Out, "  %s is a non-secret value this environment needs. Enter it now (blank to skip): ", k)
-			line, _ := reader.ReadString('\n')
-			line = strings.TrimSpace(line)
-			if line == "" {
+			if _, ok := d.Ask(cli.Question{
+				Label:  k,
+				Detail: describeDeclaredValue(bom, k, false),
+				Accept: func(v string) error {
+					if serr := secret.SetPlainValue(home, k, v); serr != nil {
+						return fmt.Errorf("could not record %s: %v", k, serr)
+					}
+					fmt.Fprintf(d.Out, "    recorded %s in %s\n", k, home.SecretsEnv)
+					return nil
+				},
+			}); !ok {
 				stillMissingPlain = append(stillMissingPlain, k)
-				continue
 			}
-			if serr := secret.SetPlainValue(home, k, line); serr != nil {
-				fmt.Fprintf(d.Out, "    could not record %s: %v\n", k, serr)
-				stillMissingPlain = append(stillMissingPlain, k)
-				continue
-			}
-			fmt.Fprintf(d.Out, "    recorded %s in %s\n", k, home.SecretsEnv)
 		}
 		missingPlain = stillMissingPlain
 	}
@@ -465,6 +483,37 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 		fmt.Fprintf(d.Out, "  %s is a non-secret value; re-run `pix setup --env NAME` on a terminal to be prompted for it, or record it directly: printf '%s=<value>\\n' >> %s\n", k, k, home.SecretsEnv)
 	}
 	return fmt.Errorf("%d requirement(s) not recorded; see the exact commands above", len(missingSecrets)+len(missingPlain))
+}
+
+// describeDeclaredValue is the one line of context a value prompt shows:
+// WHICH declared integration needs this name, and what kind of answer it
+// takes. It is derived from the environment's own bill of materials, never
+// from a hardcoded table of key names, so an environment that declares a
+// new key gets a truthful prompt without a launcher change.
+func describeDeclaredValue(bom nativeenv.BillOfMaterials, key string, isSecret bool) string {
+	var servers []string
+	seen := map[string]bool{}
+	for _, m := range bom.HostMCP {
+		keys := m.PlainKeys
+		if isSecret {
+			keys = m.EnvKeys
+		}
+		for _, k := range keys {
+			if k == key && !seen[m.Name] {
+				seen[m.Name] = true
+				servers = append(servers, m.Name)
+			}
+		}
+	}
+	sort.Strings(servers)
+	kind := "a non-secret value, recorded literally"
+	if isSecret {
+		kind = "a 1Password reference (op://vault/item/field), never the secret itself"
+	}
+	if len(servers) == 0 {
+		return fmt.Sprintf("%s needs %s. Blank to skip.", key, kind)
+	}
+	return fmt.Sprintf("%s is needed by %s; %s. Blank to skip.", key, strings.Join(servers, ", "), kind)
 }
 
 // runSetupHooks executes this environment's own `[[setup]]` hooks — the v2

@@ -7,7 +7,6 @@
 package secret
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"strings"
@@ -50,11 +49,12 @@ func OfferParallelSearchKey(env hostenv.Env, in io.Reader, out io.Writer, tty bo
 		return
 	}
 	fmt.Fprint(out, "Paste an op:// ref (op://Vault/Item/field), or Enter to skip: ")
-	sc := bufio.NewScanner(in)
-	if !sc.Scan() {
+	sc := cli.LineIn(in)
+	line, rerr := sc.ReadString('\n')
+	if line == "" && rerr != nil {
 		return
 	}
-	ref := NormalizeOpRef(sc.Text())
+	ref := NormalizeOpRef(line)
 	if ref == "" {
 		return
 	}
