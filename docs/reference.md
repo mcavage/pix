@@ -280,9 +280,21 @@ approved with `pix env trust NAME` before a launch will use it. The
 fingerprint is HMAC-bound and stored under `~/.pix/.state/trust`, outside the
 environment directory itself, and recomputed before every use: a changed
 fact (kit, workspace mounts, MCP command or URL, secret destinations,
-network expansion) refuses launch and reprints the same review. Trust review
+network expansion) refuses launch and re-opens the review. Trust review
 defaults to No; `--yes` removes the prompt, not the printed bill or the
 fingerprint check.
+
+A **first** review prints the whole bill of materials. A **re-review** does
+not: an acceptance also records a *receipt*, the itemized bill it approved
+(section, key, and a digest per fact, and no fact's detail), so the next
+review names what was **added, removed, or changed** since, counts what was
+not, and offers `--verbose` for the full bill underneath. Re-printing an
+unchanged 60-line audit dump for a one-line kit bump is how a consent screen
+becomes scenery and `--yes` becomes reflex. The diff is computed from the
+same canonical document the fingerprint hashes, so it can never report
+"nothing changed" while the gate is refusing entry; a record written before
+receipts existed falls back to the full bill and says that it could not
+compare, rather than showing an empty diff.
 
 ## 6. Setup
 

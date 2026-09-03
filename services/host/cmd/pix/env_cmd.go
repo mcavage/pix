@@ -414,10 +414,55 @@ func (c *envDefaultCmd) Run(d *cli.Deps) error {
 // a raw hash of the two authored files: two environments byte-identical on
 // disk but composing to a different host-exec surface (a resolved `${VAR}`
 // losing its default value between runs, for example) must re-gate.
+// Receipt is the itemized form of the bill of materials that was accepted
+// (workflow/env's Receipt): section, key, and a digest per reviewable fact,
+// and no fact's detail. It exists so the NEXT gate can show what changed
+// instead of a second full audit dump — see renderTrustReview. It is
+// absent on a record written before receipts existed, and an absent receipt
+// degrades to the full bill rather than to a silent or invented diff.
 type envTrustRecord struct {
-	Root        string `json:"root"`
-	Fingerprint string `json:"fingerprint"`
-	AcceptedAt  string `json:"accepted_at"`
+	Root        string                   `json:"root"`
+	Fingerprint string                   `json:"fingerprint"`
+	AcceptedAt  string                   `json:"accepted_at"`
+	Receipt     []nativeenv.ReceiptEntry `json:"receipt,omitempty"`
+}
+
+// readTrustRecord returns the acceptance record on disk for name, if there
+// is a readable, parseable one. Absent/corrupt is (zero, false): every
+// caller treats it as "never accepted", never as an error to surface.
+func readTrustRecord(home pixhome.Paths, name string) (envTrustRecord, bool) {
+	data, err := os.ReadFile(trustRecordPath(home, name))
+	if err != nil {
+		return envTrustRecord{}, false
+	}
+	var rec envTrustRecord
+	if json.Unmarshal(data, &rec) != nil {
+		return envTrustRecord{}, false
+	}
+	return rec, true
+}
+
+// writeTrustRecord is the ONE writer of an environment acceptance record —
+// `pix env trust` and `pix run`'s inline gate both go through it, so a
+// receipt can never be recorded by one path and forgotten by the other
+// (which would make the change screen depend on WHICH command a person
+// happened to accept from).
+//
+// A receipt that cannot be computed is not fatal: the acceptance itself is
+// what gates a launch, and refusing to record a fingerprint the operator
+// just approved because its itemization failed would fail closed on the
+// wrong thing. The record is written without one, and the next gate falls
+// back to the full bill.
+func writeTrustRecord(home pixhome.Paths, name, root, fp string, bom nativeenv.BillOfMaterials) error {
+	if err := os.MkdirAll(home.StateTrustEnvironments, 0o700); err != nil {
+		return err
+	}
+	rec := envTrustRecord{Root: root, Fingerprint: fp, AcceptedAt: time.Now().UTC().Format(time.RFC3339)}
+	if receipt, err := nativeenv.Receipt(bom); err == nil {
+		rec.Receipt = receipt
+	}
+	b, _ := json.MarshalIndent(rec, "", "  ")
+	return os.WriteFile(trustRecordPath(home, name), b, 0o600)
 }
 
 func trustRecordPath(home pixhome.Paths, name string) string {
@@ -508,12 +553,8 @@ func trustSatisfied(home pixhome.Paths, sel nativeenv.Selected, bom nativeenv.Bi
 }
 
 func trustAcceptedForFingerprint(home pixhome.Paths, sel nativeenv.Selected, fp string) bool {
-	data, err := os.ReadFile(trustRecordPath(home, sel.Name))
-	if err != nil {
-		return false
-	}
-	var rec envTrustRecord
-	if json.Unmarshal(data, &rec) != nil {
+	rec, ok := readTrustRecord(home, sel.Name)
+	if !ok {
 		return false
 	}
 	return rec.Fingerprint == fp && rec.Root == sel.Root
@@ -556,7 +597,7 @@ func runEnvTrust(d *cli.Deps, home pixhome.Paths, name string, yes, verbose bool
 		}
 		return nil
 	}
-	renderTrustBill(d.Out, sel.Name, bom, verbose)
+	renderTrustReview(d.Out, sel.Name, bom, priorAcceptance(home, sel), verbose)
 	fmt.Fprintf(d.Out, "  fingerprint: %s\n\n", fp)
 
 	accept := yes
@@ -573,12 +614,7 @@ func runEnvTrust(d *cli.Deps, home pixhome.Paths, name string, yes, verbose bool
 		fmt.Fprintln(d.Out, "pix: not accepted.")
 		return cli.SilentError{Code: 1}
 	}
-	if err := os.MkdirAll(home.StateTrustEnvironments, 0o700); err != nil {
-		return err
-	}
-	rec := envTrustRecord{Root: sel.Root, Fingerprint: fp, AcceptedAt: time.Now().UTC().Format(time.RFC3339)}
-	b, _ := json.MarshalIndent(rec, "", "  ")
-	if err := os.WriteFile(trustRecordPath(home, sel.Name), b, 0o600); err != nil {
+	if err := writeTrustRecord(home, sel.Name, sel.Root, fp, bom); err != nil {
 		return err
 	}
 	fmt.Fprintf(d.Out, "pix: environment %q trusted.\n", sel.Name)
@@ -636,6 +672,71 @@ func safeArgv(argv []string) string {
 // a reviewer sees exactly the argument boundaries os/exec will actually
 // use, not a space-joined string a multi-word single argument could be
 // misread as two arguments (or the reverse).
+// renderTrustReview is the review screen a gate prints before its y/N, and
+// the one place that decides WHICH screen that is.
+//
+// A first review has nothing to compare against, so it is the full bill
+// (renderTrustBill) exactly as before. A RE-review is different in kind: the
+// operator already read and accepted this environment once, and the only
+// question in front of them is what moved since. Printing the whole bill
+// again for a one-line kit bump is how a consent screen becomes scenery and
+// `--yes` becomes reflex — the migration plan's own risk table names that
+// failure ("kit fingerprint churn -> trust fatigue -> people run --yes
+// reflexively"), and a review nobody reads is not a gate.
+//
+// The diff is derived from the SAME canonical document the fingerprint
+// hashes, and workflow/env's receipt_test.go pins the property that makes
+// this screen honest: a changed fingerprint always produces a non-empty
+// diff. This renderer therefore cannot print "nothing changed" while the
+// gate is refusing entry. It still falls back to the full bill in the two
+// cases where it has no trustworthy comparison — a record from a pix that
+// predates receipts, or a record whose root differs (a re-pointed
+// environment name is a new subject, not an edit of the old one) — and says
+// which case it is rather than implying it made a comparison.
+func renderTrustReview(out io.Writer, name string, b nativeenv.BillOfMaterials, prev envTrustRecord, verbose bool) {
+	cur, err := nativeenv.Receipt(b)
+	switch {
+	case prev.Fingerprint == "":
+		renderTrustBill(out, name, b, verbose)
+		return
+	case err != nil, len(prev.Receipt) == 0:
+		renderTrustBill(out, name, b, verbose)
+		fmt.Fprintf(out, "\n  (you accepted an earlier version of %s on %s; pix cannot show what changed, so the whole bill is above)\n",
+			sys.TerminalSafe(name), sys.TerminalSafe(prev.AcceptedAt))
+		return
+	}
+
+	safe := sys.TerminalSafe
+	changes := nativeenv.DiffReceipts(prev.Receipt, cur)
+	unchanged := nativeenv.UnchangedCount(cur, changes)
+	fmt.Fprintf(out, "pix env trust %s\n", safe(name))
+	fmt.Fprintf(out, "  you accepted this environment on %s; %d reviewed fact(s) changed since, %d unchanged:\n\n",
+		safe(prev.AcceptedAt), len(changes), unchanged)
+	for _, c := range changes {
+		fmt.Fprintf(out, "  %-8s %-14s %s\n", string(c.Kind), safe(c.Section), safe(c.Key))
+	}
+	if !verbose {
+		fmt.Fprintf(out, "\n  full bill: pix env trust %s --verbose\n", sys.ShellQuote(name))
+		return
+	}
+	fmt.Fprintln(out)
+	renderTrustBill(out, name, b, true)
+}
+
+// priorAcceptance returns the record renderTrustReview may compare against:
+// one that exists AND was accepted for the same root. A name re-pointed at
+// a different directory is a different subject, not an edit of the old one
+// (trustAcceptedForFingerprint refuses it for gating on the same grounds),
+// so its old record must not become the base of a change diff that would
+// read as "only these three things changed".
+func priorAcceptance(home pixhome.Paths, sel nativeenv.Selected) envTrustRecord {
+	rec, ok := readTrustRecord(home, sel.Name)
+	if !ok || rec.Root != sel.Root {
+		return envTrustRecord{}
+	}
+	return rec
+}
+
 func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, verbose bool) {
 	safe := sys.TerminalSafe
 	fmt.Fprintf(out, "pix env trust %s\n", safe(name))

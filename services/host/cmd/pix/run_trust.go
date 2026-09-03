@@ -56,11 +56,8 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
-	"time"
 
 	"pix/host/cli"
 	"pix/host/pixhome"
@@ -140,7 +137,7 @@ func gateEnvTrust(d *cli.Deps, snap envTrustSnapshot, checkDrift bool) error {
 	}
 
 	fmt.Fprintln(d.Err, "pix run: this environment has not been reviewed.")
-	renderTrustBill(d.Err, name, snap.bom, false)
+	renderTrustReview(d.Err, name, snap.bom, priorAcceptance(snap.home, snap.sel), false)
 	fmt.Fprintf(d.Err, "  fingerprint: %s\n\n", snap.fingerprint)
 	fmt.Fprint(d.Err, "Accept this host-execution footprint? [y/N] ")
 	reader := bufio.NewReader(d.In)
@@ -149,12 +146,7 @@ func gateEnvTrust(d *cli.Deps, snap envTrustSnapshot, checkDrift bool) error {
 		return fmt.Errorf("not accepted; run `pix env trust %s` when ready, or launch with a different --env", name)
 	}
 
-	if err := os.MkdirAll(snap.home.StateTrustEnvironments, 0o700); err != nil {
-		return err
-	}
-	rec := envTrustRecord{Root: snap.sel.Root, Fingerprint: snap.fingerprint, AcceptedAt: time.Now().UTC().Format(time.RFC3339)}
-	b, _ := json.MarshalIndent(rec, "", "  ")
-	if err := os.WriteFile(trustRecordPath(snap.home, name), b, 0o600); err != nil {
+	if err := writeTrustRecord(snap.home, name, snap.sel.Root, snap.fingerprint, snap.bom); err != nil {
 		return err
 	}
 	fmt.Fprintf(d.Err, "pix run: environment %q trusted.\n", name)

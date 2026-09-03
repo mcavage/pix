@@ -804,7 +804,19 @@ type fpDoc struct {
 // assumed, the same discipline pack's sortedByKey applies at the
 // fingerprint boundary rather than trusting an upstream producer's order).
 func Fingerprint(b BillOfMaterials) (string, error) {
-	doc := fpDoc{
+	canonical, err := hosttrust.Canonicalize(canonicalDoc(b))
+	if err != nil {
+		return "", fmt.Errorf("encoding environment host-exec surface: %v", err)
+	}
+	return hosttrust.Fingerprint(canonical)
+}
+
+// canonicalDoc is the ONE canonical value of b: what Fingerprint hashes and
+// what Receipt (receipt.go) itemizes. Both must read the same document or a
+// change diff could disagree with the gate that produced it, so this is a
+// named function rather than a literal inside Fingerprint.
+func canonicalDoc(b BillOfMaterials) fpDoc {
+	return fpDoc{
 		V:                 5,
 		HostCommands:      sortedByField(b.HostCommands, func(v HostCommand) string { return v.Name }),
 		HostServices:      sortedByField(b.HostServices, func(v HostServiceItem) string { return v.Name }),
@@ -816,16 +828,15 @@ func Fingerprint(b BillOfMaterials) (string, error) {
 		Bindings:          sortedByField(b.Bindings, func(v BindingFact) string { return v.Service }),
 		MCPServers:        sortedByField(b.MCPServers, func(v MCPServerFact) string { return v.Name }),
 		Ports:             sortedByField(b.Ports, func(v PortFact) string { return fmt.Sprintf("%d", v.Sandbox) }),
-		Kits:              append([]KitFact(nil), b.Kits...),
-		HostMCP:           sortedByField(b.HostMCP, func(v HostMCPFact) string { return v.Name }),
-		Inference:         sortedByField(b.Inference, func(v InferenceFact) string { return v.Name }),
-		Interpolations:    append([]envinfo.Interpolation(nil), b.Interpolations...),
+		// Kits and Interpolations keep their AUTHORED order on purpose: kit
+		// mixin order is semantic (a later kit overlays an earlier one), so a
+		// reorder is a real change and must re-gate. receipt.go itemizes both
+		// positionally for the same reason.
+		Kits:           append([]KitFact(nil), b.Kits...),
+		HostMCP:        sortedByField(b.HostMCP, func(v HostMCPFact) string { return v.Name }),
+		Inference:      sortedByField(b.Inference, func(v InferenceFact) string { return v.Name }),
+		Interpolations: append([]envinfo.Interpolation(nil), b.Interpolations...),
 	}
-	canonical, err := hosttrust.Canonicalize(doc)
-	if err != nil {
-		return "", fmt.Errorf("encoding environment host-exec surface: %v", err)
-	}
-	return hosttrust.Fingerprint(canonical)
 }
 
 // sortedByField returns a sorted COPY of in — the canonical ordering every
