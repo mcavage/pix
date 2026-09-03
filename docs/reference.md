@@ -251,6 +251,21 @@ transports, sandbox resources or ports, Pi extensions, settings, keybindings,
 or themes: anything native sbx or global Pi settings already own stays out.
 Unknown keys are errors.
 
+**MCP integration status.** `pix env show NAME` reports, for every server
+the environment's `mcp:` block declares, three separate facts rather than
+collapsing them into one: `declared` (it is in `.sbxenv.yaml`, always true
+for a listed row), `registered` (present in a bounded `sbx mcp ls` listing:
+`ready`, `absent`, or `unknown` when the listing itself could not be
+obtained), and `reachable` (whether this environment's own declared health
+probe, `pix.toml [host.mcp.<name>].probe_args`, actually exited zero). A
+server with no declared probe always reports `reachable: unknown`, never a
+guessed `ready` earned by registration alone: registration only proves the
+gateway knows the name, not that the server authenticates or works.
+`--json` carries the same three fields per server plus a `_detail` string
+for `registered`/`reachable` naming exactly what was checked. An
+environment declaring no MCP server prints no `integrations:` section at
+all, and its JSON carries no `integrations` key.
+
 **An environment's own inference gateway.** `[inference.backends.<name>]`
 takes `driver`, `protocol`, `base_url`, `auth`, `key_env`, plus (for
 `auth = "sbx-session"`) `credential_service`, `credential_header`, and

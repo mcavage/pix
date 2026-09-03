@@ -30,6 +30,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/health"
 	"pix/host/inference"
 	"pix/host/pixhome"
 	"pix/host/secret"
@@ -258,6 +259,18 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 	// selection rule above stops being the only visible half of the story.
 	providers, refsState := secret.ConfiguredModelRefs(defaultShellEnv())
 	catalogInfo := inference.DescribeCatalogSource(home.Home, version)
+	// integrations is the declared/registered/reachable answer for every MCP
+	// server THIS environment declares (nativeenv.IntegrationStatuses). It
+	// needs the same bill of materials trustAccepted already computed above;
+	// bomForLoaded reuses the SAME already-parsed `loaded` rather than a
+	// second LoadHome re-read, and is skipped entirely when loadErr means
+	// there is no environment to compute it from.
+	var integrations []nativeenv.IntegrationStatus
+	if loadErr == nil {
+		if bom, _, err := bomForLoaded(loaded); err == nil {
+			integrations = computeIntegrationStatuses(bom)
+		}
+	}
 	if c.JSON {
 		fields := map[string]any{
 			"name": sel.Name, "root": sel.Root, "symlinked": sel.Symlinked,
@@ -291,6 +304,9 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 			catalog["override_path"] = catalogInfo.OverridePath
 		}
 		fields["catalog"] = catalog
+		if len(integrations) > 0 {
+			fields["integrations"] = integrationStatusesJSON(integrations)
+		}
 		b, _ := json.MarshalIndent(fields, "", "  ")
 		fmt.Fprintln(d.Out, string(b))
 		return nil
@@ -321,6 +337,7 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 	}
 	fmt.Fprintf(d.Out, "providers:   %s\n", renderConfiguredProviders(providers, refsState))
 	fmt.Fprintf(d.Out, "catalog:     %s\n", renderCatalogSource(catalogInfo))
+	renderIntegrationStatuses(d.Out, integrations)
 	if trusted {
 		fmt.Fprintf(d.Out, "fingerprint: %s\n", fp)
 	}
@@ -367,6 +384,64 @@ func renderCatalogSource(info inference.CatalogSourceInfo) string {
 		installed = "installed"
 	}
 	return fmt.Sprintf("embedded default; materialized snapshot: %s (%s)", info.RuntimePath, installed)
+}
+
+// computeIntegrationStatuses is `pix env show`'s declared/registered/
+// reachable answer for bom's own MCP servers (nativeenv.IntegrationStatuses,
+// docs/design/integrations-remediation.md's own naming for the gap: "the
+// single most load-bearing problem — registered is reported as working").
+// It costs exactly one `sbx mcp ls` call, and only when bom actually
+// declares at least one server: an environment with none pays nothing
+// extra. sbx absent or the listing failing degrades to StatusUnknown
+// registration for every server (mcp.McpRegEvidenceFrom's own fail-open
+// rule) rather than aborting `env show` itself.
+func computeIntegrationStatuses(bom nativeenv.BillOfMaterials) []nativeenv.IntegrationStatus {
+	if len(bom.MCPServers) == 0 {
+		return nil
+	}
+	lsOut, _, lsErr := runSbxCapturedOut("mcp", "ls")
+	run := nativeenv.RunnerFromEnv(defaultShellEnv())
+	return nativeenv.IntegrationStatuses(bom, lsOut, lsErr == nil, run)
+}
+
+// renderIntegrationStatuses is `pix env show`'s plain-text integrations
+// section: one line per declared MCP server naming all three states by
+// name (declared/registered/reachable), never collapsing any two of them
+// into a single verdict. Nothing is printed for an environment that
+// declares no MCP server — an empty section reads as "nothing to report",
+// matching every other omitted-when-empty line in this renderer.
+func renderIntegrationStatuses(w io.Writer, statuses []nativeenv.IntegrationStatus) {
+	if len(statuses) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "integrations:")
+	for _, s := range statuses {
+		fmt.Fprintf(w, "  %-20s declared:yes registered:%-8s reachable:%-8s\n", s.Name, s.Registered, s.Reachable)
+		if s.Reachable == health.StatusUnknown && s.ReachableDetail != "" {
+			fmt.Fprintf(w, "  %-20s   (%s)\n", "", s.ReachableDetail)
+		}
+	}
+}
+
+// integrationStatusesJSON is `pix env show --json`'s shape for the same
+// data renderIntegrationStatuses prints: every field machine-readable,
+// including BOTH states' detail strings — a script deciding whether to
+// alert on a gap needs the reason, not just the tri-state word.
+func integrationStatusesJSON(statuses []nativeenv.IntegrationStatus) []map[string]any {
+	out := make([]map[string]any, 0, len(statuses))
+	for _, s := range statuses {
+		out = append(out, map[string]any{
+			"name":              s.Name,
+			"url":               s.URL,
+			"command":           s.Command,
+			"declared":          s.Declared,
+			"registered":        string(s.Registered),
+			"registered_detail": s.RegisteredDetail,
+			"reachable":         string(s.Reachable),
+			"reachable_detail":  s.ReachableDetail,
+		})
+	}
+	return out
 }
 
 // ── default ──────────────────────────────────────────────────────────────

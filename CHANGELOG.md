@@ -13,6 +13,33 @@ scored model router, `pix-host`, the pack system, and the custom memory RPC
 are deleted outright, not deprecated. There is no migration path and no
 compatibility shim — `~/.pix` from a v1 install is not read by this build.
 
+### Added — MCP integration status: declared, registered, reachable
+
+`pix env show NAME` now reports three separate facts for every MCP server
+an environment's `mcp:` block declares, instead of letting a bare
+registration count stand in for "working"
+(`docs/design/integrations-remediation.md`'s own name for that gap):
+
+- **declared** — the server is in `.sbxenv.yaml`.
+- **registered** — `ready`/`absent`/`unknown`, read from the same bounded
+  `sbx mcp ls` evidence `pix mcp ls` itself uses
+  (`pix/host/mcp.McpRegEvidenceFrom`), never a second, disagreeing
+  definition of "registered".
+- **reachable** — `ready` only after this environment's OWN declared health
+  probe (`pix.toml [host.mcp.<name>].probe_args`) actually exits zero;
+  `absent` for a verified non-zero exit; `unknown` for everything this host
+  cannot positively resolve, including a server with no declared probe at
+  all. `reachable` is never guessed `ready` from registration alone — a
+  bare TCP dial or unauthenticated HTTP request would prove a socket is
+  open, not that the integration works, so none is attempted.
+
+This is the first real caller of `pix.toml`'s `probe_args` field
+(`HostMCPFact`), which the schema has carried since environments shipped
+but nothing ever executed. `--json` carries the same fields (`declared`,
+`registered`, `registered_detail`, `reachable`, `reachable_detail`) per
+server; an environment with no declared MCP server gets no `integrations`
+section or key at all, in either form.
+
 ### Added — coexistence: one PIX_HOME = one stack
 
 Two Pix installations (a release stack and a dev checkout, or two projects'
