@@ -17,7 +17,10 @@ import (
 	"time"
 
 	"pix/host/cli"
+	"pix/host/config"
 	"pix/host/container"
+	"pix/host/hostenv"
+	"pix/host/inference"
 	"pix/host/mcp"
 	"pix/host/pixhome"
 	"pix/host/release"
@@ -75,6 +78,48 @@ func homeContainerSpec(home pixhome.Paths) container.Spec {
 		StackID:       id,
 		Home:          home.Home,
 	}
+}
+
+// memoryContainerEnv builds the pix-memory container's non-secret Env and
+// ExtraHosts — the ONE Ollama integration (inference.DetectOllama) wired to
+// the memory container's own OLLAMA_HOST, so semantic embeddings actually
+// work: the container's own 127.0.0.1 is ITSELF, never this host, so a
+// bare copy of the host's default loopback endpoint would silently point
+// the container at nothing. When Ollama resolves LOCAL, this translates
+// the endpoint to host.docker.internal (with the --add-host Linux Docker
+// needs to resolve it) and pulls MEMORY_EMBED_MODEL from machine config,
+// defaulted exactly like config.applyDefaults would. A REMOTE endpoint
+// (a shared team daemon, or a proxied Ollama Cloud account) is passed
+// through unchanged — it already names an address reachable from anywhere
+// on the network, container or not.
+//
+// env with a nil System (a bare setupSeams{} a test built without wiring one)
+// is a deliberate no-op: no network call, no panic, just MEMORY_EMBED_MODEL
+// left at its machine-config default and no OLLAMA_HOST at all. A nil cfg
+// (config.Load failed, or a caller has none yet) degrades the same way.
+func memoryContainerEnv(cfg *config.Config, env hostenv.Env) (map[string]string, []string) {
+	embed := config.DefaultMemoryEmbedModel
+	if cfg != nil && cfg.MemoryEmbedModel != "" {
+		embed = cfg.MemoryEmbedModel
+	}
+	out := map[string]string{"MEMORY_EMBED_MODEL": embed}
+	if cfg != nil && cfg.MemoryWatcherModel != "" {
+		out["MEMORY_WATCHER_MODEL"] = cfg.MemoryWatcherModel
+	}
+	if env.System == nil {
+		return out, nil
+	}
+	st := inference.DetectOllama(env)
+	out["OLLAMA_HOST"] = inference.ContainerOllamaHost(st)
+	var extraHosts []string
+	if st.Mode == inference.OllamaModeLocal {
+		// Docker Desktop (macOS/Windows) resolves host.docker.internal on its
+		// own; Linux Docker does not until told to, via the host-gateway
+		// pseudo-IP this flag requests (Docker >= 20.10). Harmless to add on
+		// every platform: Docker Desktop simply ignores a redundant mapping.
+		extraHosts = []string{"host.docker.internal:host-gateway"}
+	}
+	return out, extraHosts
 }
 
 // homeMemoryProber builds the production, authenticated container.Prober

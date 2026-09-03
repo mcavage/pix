@@ -367,6 +367,63 @@ func TestCreateArgs_StampsStackAndHomeLabels(t *testing.T) {
 	}
 }
 
+// TestCreateArgs_EnvAndExtraHostsAreDeterministicAndPresent proves the
+// memory-embedding wiring (OLLAMA_HOST etc.) actually reaches `docker
+// create` as -e/--add-host flags, in a stable sorted order.
+func TestCreateArgs_EnvAndExtraHostsAreDeterministicAndPresent(t *testing.T) {
+	spec := testSpec()
+	spec.Env = map[string]string{"MEMORY_EMBED_MODEL": "nomic-embed-text", "OLLAMA_HOST": "host.docker.internal:11434"}
+	spec.ExtraHosts = []string{"host.docker.internal:host-gateway"}
+	args := spec.CreateArgs()
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"-e MEMORY_EMBED_MODEL=nomic-embed-text",
+		"-e OLLAMA_HOST=host.docker.internal:11434",
+		"--add-host host.docker.internal:host-gateway",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("create argv missing %q: %q", want, joined)
+		}
+	}
+	// -e MEMORY_EMBED_MODEL must appear before -e OLLAMA_HOST: sorted key
+	// order, not map iteration order, which Go deliberately randomizes.
+	if strings.Index(joined, "MEMORY_EMBED_MODEL") > strings.Index(joined, "OLLAMA_HOST") {
+		t.Errorf("env flags are not in sorted key order: %q", joined)
+	}
+}
+
+// TestFingerprint_ChangesWithEnvOrExtraHosts proves a changed OLLAMA_HOST (or
+// a changed --add-host set) is a changed container identity: Reconcile must
+// replace a running container whose embedding wiring drifted, not silently
+// keep serving the old value.
+func TestFingerprint_ChangesWithEnvOrExtraHosts(t *testing.T) {
+	base := testSpec()
+	base.Env = map[string]string{"OLLAMA_HOST": "host.docker.internal:11434"}
+	fp := base.Fingerprint()
+
+	changedEnv := testSpec()
+	changedEnv.Env = map[string]string{"OLLAMA_HOST": "team-ollama.internal:11434"}
+	if changedEnv.Fingerprint() == fp {
+		t.Error("a changed OLLAMA_HOST must change the fingerprint")
+	}
+
+	changedHosts := testSpec()
+	changedHosts.Env = map[string]string{"OLLAMA_HOST": "host.docker.internal:11434"}
+	changedHosts.ExtraHosts = []string{"host.docker.internal:host-gateway"}
+	if changedHosts.Fingerprint() == fp {
+		t.Error("a changed ExtraHosts set must change the fingerprint")
+	}
+
+	// Same content, key order swapped by construction (Go map iteration is
+	// randomized already, but this pins it explicitly): the fingerprint must
+	// not depend on insertion order.
+	reordered := testSpec()
+	reordered.Env = map[string]string{"OLLAMA_HOST": "host.docker.internal:11434"}
+	if reordered.Fingerprint() != fp {
+		t.Error("identical Env content must fingerprint identically regardless of map iteration")
+	}
+}
+
 // TestFingerprint_ChangesWithStackID proves StackID participates in the
 // fingerprint: two otherwise-identical specs for two different stacks must
 // never fingerprint identically.

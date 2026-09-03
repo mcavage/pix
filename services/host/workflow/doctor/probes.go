@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"pix/host/config"
@@ -10,6 +11,30 @@ import (
 	"pix/host/inference"
 	"pix/host/secret"
 )
+
+// memoryEmbedModel is the tag OllamaProbe checks for: THIS PIX_HOME's own
+// cfg.MemoryEmbedModel, defaulting exactly like config.applyDefaults would
+// (a nil cfg, or one that skipped Load, must still name the real default —
+// never an empty string, which OllamaProbe reads as "nothing to check").
+func memoryEmbedModel(cfg *config.Config) string {
+	if cfg == nil || strings.TrimSpace(cfg.MemoryEmbedModel) == "" {
+		return config.DefaultMemoryEmbedModel
+	}
+	return cfg.MemoryEmbedModel
+}
+
+// ollamaDetect is the OllamaProbe seam: THIS host's real detection through
+// o.Env, or a zero OllamaStatus (renders as "not installed") when no host
+// environment was wired at all — the same fail-open shape providerRefScan
+// uses for an unwired Options.
+func ollamaDetect(o Options) func() inference.OllamaStatus {
+	return func() inference.OllamaStatus {
+		if o.Env.System == nil {
+			return inference.OllamaStatus{}
+		}
+		return inference.DetectOllama(o.Env)
+	}
+}
 
 // probes.go is where a config becomes a list of things to go and check. It is
 // the whole of doctor's and status's knowledge of WHAT a healthy host is; both
@@ -97,6 +122,12 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 		// that Pix ignores entirely. Saying so is the difference between "my
 		// key is right there" and understanding why it does nothing.
 		health.IgnoredGlobalSecretsProbe{Fix: secret.GlobalSecretRemoveFix, Scan: globalSecretScan(o)},
+		// Ollama is an OPTIONAL local capability (surface.md §7): a cloud-only
+		// host reports StatusOff here, never a gap. The SAME detection
+		// (inference.DetectOllama) that decides the memory container's own
+		// OLLAMA_HOST feeds this row, so the two can never disagree about
+		// what this host's Ollama integration looks like.
+		health.OllamaProbe{Detect: ollamaDetect(o), EmbedModel: memoryEmbedModel(cfg)},
 	}
 }
 

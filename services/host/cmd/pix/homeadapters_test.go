@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,12 +14,93 @@ import (
 	"time"
 
 	"pix/host/cli"
+	"pix/host/config"
 	"pix/host/container"
+	"pix/host/hostenv"
 	"pix/host/pixhome"
 	"pix/host/release"
+	"pix/host/sys/systest"
 	"pix/host/workflow/provision"
 	"pix/host/workflow/reset"
 )
+
+// memoryEmbedEnvAt fakes an ollama daemon at OLLAMA_HOST for
+// memoryContainerEnv's own detection call.
+func memoryEmbedEnvAt(t *testing.T, body string) hostenv.Env {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &systest.Fake{
+		LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil },
+		GetenvFn:   func(name string) string { return u.Host },
+	}
+	return hostenv.Env{System: fake}
+}
+
+// TestMemoryContainerEnv_LocalOllamaTranslatesToHostDockerInternal is the
+// bug this pass fixes: the pix-memory CONTAINER's own 127.0.0.1 is itself,
+// never the host, so a bare copy of the host's default loopback endpoint
+// would silently point the container at nothing.
+func TestMemoryContainerEnv_LocalOllamaTranslatesToHostDockerInternal(t *testing.T) {
+	env := memoryEmbedEnvAt(t, `{"models":[]}`)
+	envVars, hosts := memoryContainerEnv(&config.Config{MemoryEmbedModel: "nomic-embed-text"}, env)
+	if !strings.HasPrefix(envVars["OLLAMA_HOST"], "host.docker.internal:") {
+		t.Errorf("OLLAMA_HOST = %q, want a host.docker.internal translation", envVars["OLLAMA_HOST"])
+	}
+	if envVars["MEMORY_EMBED_MODEL"] != "nomic-embed-text" {
+		t.Errorf("MEMORY_EMBED_MODEL = %q", envVars["MEMORY_EMBED_MODEL"])
+	}
+	found := false
+	for _, h := range hosts {
+		if h == "host.docker.internal:host-gateway" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ExtraHosts = %v, want the host-gateway mapping for Linux Docker", hosts)
+	}
+}
+
+// TestMemoryContainerEnv_RemoteOllamaPassesThroughUnchanged proves a remote
+// endpoint (a shared team daemon, or a proxied Ollama Cloud account) is
+// never rewritten and never gets the host-gateway mapping — that address is
+// already reachable from a container exactly as it is from this host.
+func TestMemoryContainerEnv_RemoteOllamaPassesThroughUnchanged(t *testing.T) {
+	fake := &systest.Fake{
+		LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil },
+		GetenvFn:   func(name string) string { return "team-ollama.internal:11434" },
+	}
+	envVars, hosts := memoryContainerEnv(&config.Config{MemoryEmbedModel: "nomic-embed-text"}, hostenv.Env{System: fake})
+	if envVars["OLLAMA_HOST"] != "team-ollama.internal:11434" {
+		t.Errorf("OLLAMA_HOST = %q, want the remote endpoint unchanged", envVars["OLLAMA_HOST"])
+	}
+	if len(hosts) != 0 {
+		t.Errorf("ExtraHosts = %v, want none for a remote endpoint", hosts)
+	}
+}
+
+// TestMemoryContainerEnv_NilSystemIsAGuardedNoOp: a bare setupSeams{} (no
+// Env wired) must never panic and must never make a network call — it just
+// gets no OLLAMA_HOST at all, with MEMORY_EMBED_MODEL still defaulted.
+func TestMemoryContainerEnv_NilSystemIsAGuardedNoOp(t *testing.T) {
+	envVars, hosts := memoryContainerEnv(nil, hostenv.Env{})
+	if envVars["MEMORY_EMBED_MODEL"] != config.DefaultMemoryEmbedModel {
+		t.Errorf("MEMORY_EMBED_MODEL = %q, want the default %q", envVars["MEMORY_EMBED_MODEL"], config.DefaultMemoryEmbedModel)
+	}
+	if _, ok := envVars["OLLAMA_HOST"]; ok {
+		t.Error("OLLAMA_HOST must not be set when no env seam is wired")
+	}
+	if len(hosts) != 0 {
+		t.Errorf("ExtraHosts = %v, want none", hosts)
+	}
+}
 
 func TestHomeContainerSpecUsesCanonicalReleaseImageReference(t *testing.T) {
 	home := pixhome.New(t.TempDir())

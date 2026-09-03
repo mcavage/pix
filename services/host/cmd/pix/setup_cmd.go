@@ -21,6 +21,7 @@ import (
 	"pix/host/container"
 	"pix/host/envsetup"
 	"pix/host/hostenv"
+	"pix/host/inference"
 	"pix/host/pixhome"
 	"pix/host/release"
 	"pix/host/secret"
@@ -45,6 +46,12 @@ type setupSeams struct {
 	ContainerRunner container.Runner
 	Prober          container.Prober
 	MCP             provision.MCPRegistrar
+	// Env is the host seam machineSetup's Ollama detection reads (the SAME
+	// integration `pix doctor`'s ollama row and any environment-declared
+	// backend use). The zero value (System nil) is a deliberate, guarded
+	// no-op — existing tests that build a bare setupSeams{} still run with no
+	// network access and no panic; they simply get no memory-embedding wiring.
+	Env hostenv.Env
 }
 
 func productionSetupSeams() setupSeams {
@@ -54,6 +61,7 @@ func productionSetupSeams() setupSeams {
 		ContainerRunner: container.DefaultRunner,
 		Prober:          startupProber{Inner: container.HTTPProber{}},
 		MCP:             sbxMemoryRegistrar{},
+		Env:             defaultShellEnv(),
 	}
 }
 
@@ -100,6 +108,8 @@ func discoverVerifiedBundle(s setupSeams) (*release.Bundle, error) {
 func machineSetup(home pixhome.Paths, s setupSeams, bundle release.Bundle, confirmReplace func(container.Info, container.Spec) bool) (provision.Result, error) {
 	spec := homeContainerSpec(home)
 	spec.Image = provision.MemoryImageRef(bundle.Manifest)
+	cfg, _ := config.Load()
+	spec.Env, spec.ExtraHosts = memoryContainerEnv(cfg, s.Env)
 	return provision.Setup(provision.Deps{
 		Home:            home,
 		Prereqs:         s.Prereqs,
@@ -156,6 +166,7 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 		return err
 	}
 	renderSetupResult(d, home, res, c.Verbose)
+	reportMemoryEmbeddingStatus(d, s.Env)
 	// A named --env setup is not a base-install interview: the environment
 	// already declares its own model roster ([models].main, [agents]), so
 	// the base default-model picker and the optional Parallel-search offer
@@ -175,6 +186,66 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 		return cli.SilentError{Code: 1}
 	}
 	return nil
+}
+
+// reportMemoryEmbeddingStatus is setup's Ollama/embedding step: the SAME
+// inference.DetectOllama integration the memory container's own OLLAMA_HOST
+// (memoryContainerEnv) and `pix doctor`'s ollama row use, so all three can
+// never disagree about what this host's Ollama looks like. It is never
+// fatal — memory embeddings are an optional enhancement that degrades to
+// keyword recall — and it follows the task's own rule literally: a LOCAL
+// endpoint missing the embedding model gets an interactive, default-No
+// offer to pull it; a REMOTE endpoint (a shared team daemon, or a proxied
+// Ollama Cloud account) only ever gets reported, never offered a pull.
+func reportMemoryEmbeddingStatus(d *cli.Deps, env hostenv.Env) {
+	if env.System == nil {
+		return
+	}
+	cfg, _ := config.Load()
+	embed := config.DefaultMemoryEmbedModel
+	if cfg != nil && cfg.MemoryEmbedModel != "" {
+		embed = cfg.MemoryEmbedModel
+	}
+	st := inference.DetectOllama(env)
+	switch {
+	case !st.CLIPresent && !st.Reachable:
+		fmt.Fprintln(d.Out, "pix setup: ollama: not installed; memory embeddings degrade to keyword recall (optional).")
+		return
+	case !st.Reachable:
+		fmt.Fprintf(d.Out, "pix setup: ollama: endpoint %s did not answer; memory embeddings degrade to keyword recall.\n", st.Endpoint.String())
+		return
+	}
+	modeWord := "local"
+	if st.Mode == inference.OllamaModeRemote {
+		modeWord = "remote"
+	}
+	if st.HasModel(embed) {
+		fmt.Fprintf(d.Out, "pix setup: ollama: %s endpoint %s, embedding model %q present.\n", modeWord, st.Endpoint.String(), embed)
+		return
+	}
+	if !st.CanPull() {
+		// Remote/cloud: report only, never pull — this is not this host's disk.
+		fmt.Fprintf(d.Out, "pix setup: ollama: %s endpoint %s reachable, %d model(s) listed, embedding model %q not listed; memory embeddings degrade to keyword recall.\n", modeWord, st.Endpoint.String(), len(st.Models), embed)
+		return
+	}
+	if !d.Interactive {
+		fmt.Fprintf(d.Out, "pix setup: ollama: local endpoint %s, embedding model %q not pulled. Pull it yourself: ollama pull %s\n", st.Endpoint.String(), embed, embed)
+		return
+	}
+	fmt.Fprintf(d.Out, "pix setup: ollama: local endpoint %s is missing the embedding model %q; semantic memory recall degrades to keyword search without it.\n", st.Endpoint.String(), embed)
+	fmt.Fprintf(d.Out, "Pull %s now? Downloading it can take a few minutes and several hundred MB of disk. [y/N] ", embed)
+	sc := bufio.NewScanner(d.In)
+	if !sc.Scan() {
+		return
+	}
+	answer := strings.ToLower(strings.TrimSpace(sc.Text()))
+	if answer != "y" && answer != "yes" {
+		fmt.Fprintf(d.Out, "skipping; pull it yourself later: ollama pull %s\n", embed)
+		return
+	}
+	if err := env.RunInteractive("ollama", "pull", embed); err != nil {
+		fmt.Fprintf(d.Err, "pix setup: ollama pull %s failed: %v\n", embed, err)
+	}
 }
 
 // setupCredentials is setup's credential step, and it is deliberately small:

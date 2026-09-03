@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +17,8 @@ import (
 
 	"pix/host/config"
 	"pix/host/health"
+	"pix/host/hostenv"
+	"pix/host/sys/systest"
 )
 
 // These tests drive the REAL surfaces. Every exec probe runs a compiled
@@ -115,7 +120,7 @@ func TestProbes_CoverTheWholeHostSurface(t *testing.T) {
 	for _, p := range Probes(&config.Config{}, Options{}) {
 		names = append(names, p.Name())
 	}
-	want := []string{"sbx", "providers", "github", "sbx-globals"}
+	want := []string{"sbx", "providers", "github", "sbx-globals", "ollama"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("probe set = %v, want %v", names, want)
 	}
@@ -331,6 +336,101 @@ func TestDoctor_VerboseAddsEvidenceForReadyChecks(t *testing.T) {
 	}
 	if !strings.Contains(verbose.String(), "sbx --version = ") {
 		t.Errorf("--verbose must show the evidence:\n%s", verbose.String())
+	}
+}
+
+// ollamaTagsEnv builds an Options.Env whose OLLAMA_HOST resolves to a fake
+// /api/tags server, so the ollama row in Probes() exercises the real
+// inference.DetectOllama path end to end rather than the zero-value
+// "not installed" default healthyHost otherwise gets.
+func ollamaTagsEnv(t *testing.T, hostOverride string, body string) hostenv.Env {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := hostOverride
+	if host == "" {
+		host = u.Host
+	}
+	fake := &systest.Fake{
+		LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil },
+		GetenvFn:   func(name string) string { return host },
+	}
+	return hostenv.Env{System: fake}
+}
+
+func TestDoctor_OllamaRow_LocalEndpointEmbedModelPresent(t *testing.T) {
+	cfg, o := healthyHost(t)
+	cfg.MemoryEmbedModel = "nomic-embed-text"
+	o.Env = ollamaTagsEnv(t, "", `{"models":[{"name":"nomic-embed-text","size":274000000}]}`)
+	s := run(t, cfg, o)
+	r := result(t, s, "ollama")
+	if !r.OK() {
+		t.Errorf("ollama = %s (%s), want ready: a local endpoint listing the configured embed model", r.Effective(), r.Detail)
+	}
+	if r.Fix != "" {
+		t.Errorf("Fix = %q, want none on a ready row", r.Fix)
+	}
+}
+
+func TestDoctor_OllamaRow_LocalEndpointMissingEmbedModelOffersPull(t *testing.T) {
+	cfg, o := healthyHost(t)
+	cfg.MemoryEmbedModel = "nomic-embed-text"
+	o.Env = ollamaTagsEnv(t, "", `{"models":[{"name":"qwen3.5:9b","size":6600000000}]}`)
+	s := run(t, cfg, o)
+	r := result(t, s, "ollama")
+	if r.Effective() != health.StatusAbsent {
+		t.Fatalf("ollama = %s, want absent (embed model not pulled)", r.Effective())
+	}
+	if r.Fix != "ollama pull nomic-embed-text" {
+		t.Errorf("Fix = %q, want the local pull command", r.Fix)
+	}
+	// Required() is false, so a missing embed model must never fail doctor's
+	// own exit code — Ollama is an optional capability.
+	if s.ExitCode() != health.ExitOK {
+		t.Errorf("exit = %d, want %d: an optional row must never block", s.ExitCode(), health.ExitOK)
+	}
+}
+
+// TestDoctor_OllamaRow_RemoteEndpointModeDetected proves the row's MODE
+// classification is wired end to end off the real OLLAMA_HOST string — the
+// Fix-suppression behavior itself (a reachable remote host with a missing
+// model gets no pull command) is unit-tested directly against OllamaProbe in
+// health/ollama_test.go, where the endpoint can be injected without a real
+// network hop.
+func TestDoctor_OllamaRow_RemoteEndpointModeDetected(t *testing.T) {
+	cfg, o := healthyHost(t)
+	cfg.MemoryEmbedModel = "nomic-embed-text"
+	// team-ollama.internal never actually answers in this test, so the row
+	// reports absent (unreachable) — but it must still report absent, never
+	// a false ready, and its Fix must never claim this host can start a
+	// daemon on someone else's machine.
+	o.Env = ollamaTagsEnv(t, "team-ollama.internal:11434", `{"models":[]}`)
+	s := run(t, cfg, o)
+	r := result(t, s, "ollama")
+	if r.OK() {
+		t.Fatalf("ollama = %s, want NOT ready against an address nothing answers", r.Effective())
+	}
+	if strings.Contains(r.Fix, "start Ollama") {
+		t.Errorf("Fix = %q, must not tell the user to start a daemon they do not own", r.Fix)
+	}
+}
+
+func TestDoctor_OllamaRow_NotInstalledIsOptionalNotAGap(t *testing.T) {
+	cfg, o := healthyHost(t)
+	s := run(t, cfg, o)
+	r := result(t, s, "ollama")
+	if r.Effective() != health.StatusOff {
+		t.Errorf("ollama = %s, want off (no host env wired — zero-value \"not installed\")", r.Effective())
+	}
+	if r.Required {
+		t.Error("ollama row must never be required")
 	}
 }
 

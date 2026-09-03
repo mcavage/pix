@@ -26,8 +26,8 @@
       "_plain_language_confirm_note": "setup_model.go's picker replaced the raw multi-provider model list with a plain-language [Y/n] confirm naming the fallback provider and model, and only lists that ONE provider's models (id + label, no context window, no internal 'configured provider default' wording) on an explicit no — a UX fix, not a second selection mechanism. Rebaselined to the exact current values (prod_loc +34 for the new providerDisplayName helper and the confirm/list flow; test_loc +76 for the rewritten setup_model_test.go coverage).",
       "_gog_symlink_fix_note": "env_cmd.go's renderTrustBill now renders each MCP server command's RESOLVED symlink target and content sha256 alongside the authored command (mirroring the existing kit/host-service rows) — the fix for an ordinary Homebrew-style symlinked MCP command (e.g. `gog`) that ResolveSymlinkedReference (workflow/env) now resolves instead of blindly refusing. A real capability addition (new render lines a human approving trust actually needs to see), not accumulation. Rebaselined to the exact current values.",
       "_env_keys_trust_screen_note": "validateDeclaredEnvironmentValues (env_keys/plain_keys pre-flight) and the concise setup-hook trust screen landed in a prior commit without a budget rebaseline; this rebaseline also folds in the current change (env trust default output collapsed to summary counts plus named risk categories, full per-item detail moved to --verbose; the memory-container replace prompt says only that the service changed and /data is preserved, image refs/fingerprints moved to --verbose), doc-comment and gating changes rather than new accumulation. Rebaselined to the exact current values.",
-      "prod_loc": 5365,
-      "test_loc": 9168,
+      "prod_loc": 5481,
+      "test_loc": 9387,
       "exports": 5,
       "exports_used_externally": 0,
       "exits": 1,
@@ -38,7 +38,7 @@
       "parser_families": {
         "cmd": 8,
         "core": 14,
-        "test": 58
+        "test": 59
       },
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
       "_model_picker_note": "Explicit Inference Setup item 5: setup_model.go's new setupModelSelection is the TTY-only, default-No current-model picker that writes a fully-qualified [models].main into ONLY a same-run scaffolded default pix.toml (writeScaffoldedModelMain); an already-existing default environment gets a display-only fallback line instead, and the write refuses outright if [models].main is already declared. Real capability, not accumulation. Rebaselined to the exact current values (+1 core parser family for the new file).",
@@ -47,7 +47,8 @@
       "_setup_ux_note": "Setup UX fix: renderSetupResult's default report shrank to two lines (the PIX_HOME line plus one concise outcome line), with every per-artifact narration (runtime, default env, container action, MCP registration) moved into the new renderSetupArtifactDetail, shown only under --verbose. The prior generic 'not ready. Run pix doctor' close was replaced with renderSetupNotReady, which always names the actual container/MCP reason (probe error, declined replace, foreign-stack collision, unverified registration) and its exact remedy, independent of --verbose. Net prod_loc growth is the two extracted, documented functions plus the new not-ready branches; exports/globals/edges/exits are unchanged. Rebaselined by hand to the EXACT grown metric (prod_loc only).",
       "_memory_auth_probe_note": "pix-memory bearer-token wiring fix: doctor and setup both probed pix-memory's /mcp endpoint with a tokenless container.HTTPProber{}, which a real auth-requiring container answers with a real 401 -- a false \"unhealthy\" report. doctor_cmd.go now builds its Prober via the new homeMemoryProber(home) helper (container package), and startupProber gained WithToken so provision.Setup can hand its own just-generated token through to the wrapped container.HTTPProber after the fact. Real capability fix, not accumulation. Rebaselined to the exact current values.",
       "_env_add_note": "`pix env add SOURCE [NAME]` (env_cmd.go's envAddCmd, plus root.go's isEnvKnownVerb fix so the NAME-shorthand rewrite does not swallow the new verb): a real capability addition, not accumulation. Rebaselined to the exact current values.",
-      "_one_screen_requirements_note": "Two real fixes, not accumulation. (1) validateDeclaredEnvironmentValues now collects a MISSING env_keys op:// reference interactively too, on the same one-screen pass plain_keys already used — through secret.SetRef, the exact validated/locked write `pix secret set` itself performs — so a user is never sent off to run a separate command per missing name and rerun `pix setup --env NAME` to find the next one. (2) root.go's new printRootError stops dispatch from double-naming the program (\"pix: pix setup --env work: ...\") when a command's own error already opens with \"pix ...\"; several verbs (setupSelectedEnvironment, secret.SetRef) deliberately self-name so the SAME error reads standalone in a unit test, and dispatch's blanket prefix was stacking a second \"pix: \" in front of that. Rebaselined to the exact current values."
+      "_one_screen_requirements_note": "Two real fixes, not accumulation. (1) validateDeclaredEnvironmentValues now collects a MISSING env_keys op:// reference interactively too, on the same one-screen pass plain_keys already used — through secret.SetRef, the exact validated/locked write `pix secret set` itself performs — so a user is never sent off to run a separate command per missing name and rerun `pix setup --env NAME` to find the next one. (2) root.go's new printRootError stops dispatch from double-naming the program (\"pix: pix setup --env work: ...\") when a command's own error already opens with \"pix ...\"; several verbs (setupSelectedEnvironment, secret.SetRef) deliberately self-name so the SAME error reads standalone in a unit test, and dispatch's blanket prefix was stacking a second \"pix: \" in front of that. Rebaselined to the exact current values.",
+      "_ollama_integration_note": "One Ollama integration wiring: reportMemoryEmbeddingStatus (setup_cmd.go) and memoryContainerEnv (homeadapters.go) compose inference.DetectOllama into the pix-memory container's own OLLAMA_HOST/MEMORY_EMBED_MODEL env and setup's TTY-only, default-No pull offer (local endpoint only; a remote/cloud endpoint is reported, never pulled into). Real capability fix (the memory container's own 127.0.0.1 was never reachable as the host's Ollama), not accumulation. Rebaselined to the exact current values."
     },
     "pix/host/config": {
       "_prod_loc_note": "Sparse PIX_HOME config serialization adds an explicit disk shape so applied defaults and inert empty tables never appear as authored choices; the memory port moved to .state/memory/port. QA F5: config.Path/StateDir/DataDir/configDir now delegate to pixhome.Dir() (PIX_HOME) instead of re-deriving PIX_CONFIG/XDG_*/~/.config fallbacks inline — net prod_loc SHRANK (fewer resolution branches) but config now imports pixhome (edges 0 -> 1), closing the last executable-state escape. Coexistence docs sync: OpRefsMentalModel/OpRefsTemplate reworded to drop stale pack/host-global-gateway prose and explain the ref feeds a per-sandbox scoped credential OR a declared MCP server's own host command, +3 prod_loc, no behavior change.",
@@ -68,8 +69,8 @@
     },
     "pix/host/container": {
       "_prod_loc_note": "L1 (security re-review): authtoken.go adds RedactMemoryURLToken/RedactedTokenPlaceholder — the presentation-only redaction `pix env show --effective` uses so the pix-memory bearer token never reaches that display, while the canonical effective document a real launch composes still carries the real value. QA F4 (this round): memoryport.go adds EnsureMemoryPort/AllocateMemoryPortLocked/ReadMemoryPort/SetupLockPath — per-PIX_HOME port allocation under an advisory lock, replacing the single shared DefaultMemoryPort constant every install used to fight over (globals +1 for setupLockName, edges +1 for the new sys.Lock dependency). Round 5: memoryport.go's MemoryPort storage moved off the deleted pixhome.Machine schema onto config.Config (+1 edge for pix/host/config); container.go adds isDockerPortConflict/removeFailedCreate/dockerPortConflictMarkers so a real `docker create`/`docker start` bind-conflict error is classified into *PortInUseError and the orphaned just-created container is safely removed by ID before Setup's bounded reallocate-and-retry (+1 global for the marker slice, +78 prod_loc). Real capability change (round-5 blocker: port retry previously only worked via the pre-check, never the real docker error), not accumulation.",
-      "prod_loc": 1248,
-      "test_loc": 1086,
+      "prod_loc": 1289,
+      "test_loc": 1143,
       "exports": 48,
       "exports_used_externally": 15,
       "exits": 0,
@@ -82,7 +83,8 @@
         "test": 4
       },
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
-      "_memory_auth_probe_note": "pix-memory bearer-token wiring fix: HTTPProber gained a Token field (sent as \"Authorization: Bearer <token>\" on /mcp requests only, never a \"?token=\" query parameter, so it can never leak into this package's own error strings) plus a WithToken method, and the new TokenAuthenticated interface plus container.WithToken helper let a caller (provision.Setup) hand a token resolved AFTER Prober construction to whatever concrete Prober it was given. Real capability fix (this is what made the false \"pix-memory unhealthy: 401\" doctor/setup report possible), not accumulation. Rebaselined to the exact current values."
+      "_memory_auth_probe_note": "pix-memory bearer-token wiring fix: HTTPProber gained a Token field (sent as \"Authorization: Bearer <token>\" on /mcp requests only, never a \"?token=\" query parameter, so it can never leak into this package's own error strings) plus a WithToken method, and the new TokenAuthenticated interface plus container.WithToken helper let a caller (provision.Setup) hand a token resolved AFTER Prober construction to whatever concrete Prober it was given. Real capability fix (this is what made the false \"pix-memory unhealthy: 401\" doctor/setup report possible), not accumulation. Rebaselined to the exact current values.",
+      "_ollama_integration_note": "container.Spec gained Env/ExtraHosts (-e/--add-host, both folded into Fingerprint) so the pix-memory container can be given the translated OLLAMA_HOST (host.docker.internal) the one-Ollama-integration wiring computes. Real capability fix, not accumulation. Rebaselined to the exact current values."
     },
     "pix/host/envinfo": {
       "_plain_keys_note": "[host.mcp.<name>] gained plain_keys (a declared non-secret name list distinct from env_keys's secrets) in a prior commit without a budget rebaseline; real capability, not accumulation. Rebaselined to the exact current values.",
@@ -122,20 +124,21 @@
     },
     "pix/host/health": {
       "_prod_loc_note": "Round-7: health.EnvironmentDefaultProbe + its environmentNames helper — the doctor remedy for \"an environment exists but no default is selected\" (pix env default NAME), never a guess. Final security findings: ProviderKeyProbe.Check's wired-but-unrouted detail named the removed v1 verb `pix models add`; it now names ModelKeyFix (`pix setup`), the one real v2 remedy. sbx compatibility: tagged builds are accepted only when their numeric core is strictly newer than the 0.39.0 floor, allowing 0.41.0-rc1 development without accepting 0.39.0-rc1.",
-      "prod_loc": 1542,
-      "test_loc": 1108,
-      "exports": 47,
+      "prod_loc": 1627,
+      "test_loc": 1232,
+      "exports": 48,
       "exports_used_externally": 6,
       "exits": 0,
       "streams": 1,
       "globals": 27,
       "init": 0,
-      "edges": 3,
+      "edges": 4,
       "parser_families": {
-        "core": 5,
-        "test": 6
+        "core": 6,
+        "test": 7
       },
-      "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port."
+      "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
+      "_ollama_integration_note": "New OllamaProbe (ollama.go): the SAME inference.DetectOllama integration doctor's ollama row, `pix setup`'s embedding report, and the memory container's own OLLAMA_HOST all read — never a second, disagreeing probe. Optional (Required() is always false): a cloud-only host reports StatusOff, never a gap. Real capability addition, not accumulation. Rebaselined to the exact current values."
     },
     "pix/host/hostenv": {
       "prod_loc": 34,
@@ -169,21 +172,22 @@
     },
     "pix/host/inference": {
       "_inference_setup_note": "Explicit Inference Setup item 1: CatalogSourceInfo/RuntimeCatalogPath/DescribeCatalogSource — which catalog LoadCatalog reads, and where the release-materialized runtime/<version>/models.json snapshot lives — for `pix env show`'s inspection surface. +3 exports (the struct and its two functions), no new edges.",
-      "prod_loc": 1340,
-      "test_loc": 1424,
-      "exports": 47,
-      "exports_used_externally": 16,
+      "prod_loc": 1539,
+      "test_loc": 1593,
+      "exports": 55,
+      "exports_used_externally": 19,
       "exits": 0,
       "streams": 0,
-      "globals": 11,
+      "globals": 16,
       "init": 0,
       "edges": 2,
       "parser_families": {
-        "core": 7,
-        "test": 10
+        "core": 8,
+        "test": 13
       },
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
-      "_provider_default_note": "One explicit available cloud default per provider plus DefaultModelForProviders. This is a literal fallback only after CLI/environment selection and only for a provider this PIX_HOME configures; it replaces Pi's retired native default without restoring scoring or cross-provider routing."
+      "_provider_default_note": "One explicit available cloud default per provider plus DefaultModelForProviders. This is a literal fallback only after CLI/environment selection and only for a provider this PIX_HOME configures; it replaces Pi's retired native default without restoring scoring or cross-provider routing.",
+      "_ollama_integration_note": "New detect.go: the ONE Ollama integration (DetectOllama/OllamaStatus/OllamaMode/ListOllamaModels/ContainerOllamaHost) every caller (doctor, setup, the memory-container wiring) shares — CLI presence, endpoint mode (local vs remote, detected from the resolved endpoint's own host, never asked for), and the model listing. Deliberately does not reuse workflow/models' per-model local/cloud classification, which answers a different, unwired question. Real capability addition, not accumulation. Rebaselined to the exact current values."
     },
     "pix/host/launcher": {
       "prod_loc": 31,
@@ -364,8 +368,8 @@
       }
     },
     "pix/host/workflow/doctor": {
-      "prod_loc": 579,
-      "test_loc": 918,
+      "prod_loc": 610,
+      "test_loc": 1018,
       "exports": 17,
       "exports_used_externally": 5,
       "exits": 0,
@@ -377,7 +381,8 @@
         "core": 5,
         "test": 5
       },
-      "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port."
+      "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
+      "_ollama_integration_note": "probes.go wires health.OllamaProbe into Probes() via ollamaDetect/memoryEmbedModel — the doctor-visible half of the one Ollama integration. Real capability addition, not accumulation. Rebaselined to the exact current values."
     },
     "pix/host/workflow/env": {
       "_prod_loc_note": "Environment [[setup]] hooks (the v2 replacement for pack-authored install/auth hooks): a real capability addition, not accumulation. bom.go adds computeSetupHooks and the SetupHookFact alias of envsetup.Hook (+1 edge for pix/host/envsetup), so the hook argv and executable content hash a human accepts are the exact value the runner later executes.",

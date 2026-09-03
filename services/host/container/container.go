@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -108,6 +109,17 @@ type Spec struct {
 	// on `docker inspect`; the STACK ID is the value Reconcile actually
 	// compares.
 	Home string
+	// Env is a plain (never secret — see AuthTokenFile for why a bearer token
+	// never belongs here) set of `docker create -e KEY=VALUE` pairs, e.g. this
+	// stack's own OLLAMA_HOST/MEMORY_EMBED_MODEL facts. `docker inspect`
+	// exposes Config.Env to anything on this host with inspect access, which
+	// is exactly why a caller must never place a credential here.
+	Env map[string]string
+	// ExtraHosts is a set of `docker create --add-host HOST:IP` entries, e.g.
+	// "host.docker.internal:host-gateway" — the mapping Linux Docker (unlike
+	// Docker Desktop) does not add automatically, and which a container-side
+	// OLLAMA_HOST naming host.docker.internal therefore needs to resolve.
+	ExtraHosts []string
 }
 
 // AuthTokenMountPath is the fixed in-container path AuthTokenFile is
@@ -132,10 +144,23 @@ func (s Spec) containerName() string {
 // reordering because it hashes an explicit, ordered string, not a JSON
 // encoding of the struct.
 func (s Spec) Fingerprint() string {
+	envKeys := make([]string, 0, len(s.Env))
+	for k := range s.Env {
+		envKeys = append(envKeys, k)
+	}
+	sort.Strings(envKeys)
+	envParts := make([]string, 0, len(envKeys))
+	for _, k := range envKeys {
+		envParts = append(envParts, k+"="+s.Env[k])
+	}
+	extraHosts := append([]string(nil), s.ExtraHosts...)
+	sort.Strings(extraHosts)
 	parts := []string{
 		"image=" + s.Image,
 		"port=" + strconv.Itoa(s.HostPort),
 		"data=" + s.DataDir,
+		"env=" + strings.Join(envParts, ","),
+		"hosts=" + strings.Join(extraHosts, ","),
 		// The auth-token-file PATH is part of the create configuration identity
 		// (a changed path is a changed container), but its CONTENT (the token
 		// value) never is — this fingerprint becomes a Docker label, world-
@@ -176,6 +201,22 @@ func (s Spec) CreateArgs() []string {
 	if s.AuthTokenFile != "" {
 		// :ro — DataDir above stays this container's ONLY writable mount.
 		args = append(args, "-v", s.AuthTokenFile+":"+AuthTokenMountPath+":ro")
+	}
+	// Env/ExtraHosts are rendered in SORTED key order so CreateArgs (and the
+	// argv a test asserts against) is deterministic across runs, independent
+	// of Go's randomized map iteration.
+	envKeys := make([]string, 0, len(s.Env))
+	for k := range s.Env {
+		envKeys = append(envKeys, k)
+	}
+	sort.Strings(envKeys)
+	for _, k := range envKeys {
+		args = append(args, "-e", k+"="+s.Env[k])
+	}
+	extraHosts := append([]string(nil), s.ExtraHosts...)
+	sort.Strings(extraHosts)
+	for _, h := range extraHosts {
+		args = append(args, "--add-host", h)
 	}
 	return append(args, s.Image)
 }
