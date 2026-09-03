@@ -150,6 +150,41 @@ exit 2
 	}
 }
 
+// TestRun_ApplySucceedsButPostCheckFails_MultiLineOutputNamesOnlyTheFirstLine
+// guards the other half of the same regression: the captured check output
+// was run through sys.TerminalSafe (which turns a real newline into the
+// visible two-character placeholder `\n`, deliberately, for terminal
+// safety) BEFORE firstLineSuffix ever split on "\n" to find the first
+// line. With no real newline left to split on, the "first line" was the
+// WHOLE multi-line transcript, glued together with literal `\n` text
+// (and a trailing one, from the script's own trailing newline) instead of
+// the single clean line a human reads.
+func TestRun_ApplySucceedsButPostCheckFails_MultiLineOutputNamesOnlyTheFirstLine(t *testing.T) {
+	dir := t.TempDir()
+	path, sha := script(t, dir, "setup-tool", `
+case "$1" in
+  check) printf 'tool is not on PATH\nsee https://example.test/install\n'; exit 1 ;;
+  install) exit 0 ;;
+esac
+exit 2
+`)
+	var out, errb bytes.Buffer
+	_, err := Run(dir, []Hook{hook("tool", path, sha, true, "install")}, opts(&out, &errb, true))
+	if err == nil {
+		t.Fatal("a required hook whose post-check fails must fail setup")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, `\n`) {
+		t.Fatalf("error must not contain a literal escaped newline, got %q", msg)
+	}
+	if !strings.HasSuffix(msg, "tool is not on PATH") {
+		t.Fatalf("error must end with only the first line of output, got %q", msg)
+	}
+	if strings.Contains(msg, "see https://example.test/install") {
+		t.Fatalf("error must name only the first line, not the whole transcript, got %q", msg)
+	}
+}
+
 func TestRun_OptionalHookThatNeverBecomesReady_WarnsHonestlyAndSucceeds(t *testing.T) {
 	dir := t.TempDir()
 	path, sha := script(t, dir, "setup-tool", `
@@ -300,6 +335,29 @@ func TestRun_AuthHookWithoutATerminal_RefusesWithTheExactCommand(t *testing.T) {
 	}
 	if rec.applied {
 		t.Fatal("apply ran without a terminal; an auth hook must refuse first")
+	}
+}
+
+// TestRun_AuthHookWithoutATerminal_NamesTheCommandExactlyOnce guards the
+// specific regression a user hit: the auth-hook detail used to spell out
+// its own "rerun interactively: pix setup --env NAME" remedy INSIDE the
+// detail soft() already prefixes with that exact same command, so the
+// rendered error said "pix setup --env work: ... pix setup --env work"
+// twice in one line instead of once.
+func TestRun_AuthHookWithoutATerminal_NamesTheCommandExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	path, sha := script(t, dir, "auth-tool", "exit 1\n")
+	rec := &recordingExec{checkCode: 1}
+
+	var out, errb bytes.Buffer
+	o := opts(&out, &errb, false)
+	o.Exec = rec
+	_, err := Run(dir, []Hook{hook("gh", path, sha, true, "auth")}, o)
+	if err == nil {
+		t.Fatal("a required auth hook with no terminal must refuse")
+	}
+	if n := strings.Count(err.Error(), "pix setup --env work"); n != 1 {
+		t.Fatalf("the command must be named exactly once, got %d times in %q", n, err)
 	}
 }
 

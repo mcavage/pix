@@ -324,7 +324,6 @@ func runOne(root string, h Hook, opts Options, ex Executor) (Outcome, error) {
 	defer cleanup()
 
 	code, out, err := ex.Check(snap, exe, h.CheckArgs)
-	out = sys.TerminalSafe(out)
 	if err != nil {
 		return soft(h, opts, label, fmt.Sprintf("check could not run: %v", err))
 	}
@@ -338,7 +337,10 @@ func runOne(root string, h Hook, opts Options, ex Executor) (Outcome, error) {
 	// hang on a prompt nobody can answer or silently fail half way, so it
 	// refuses by name and prints the exact command to run instead.
 	if h.Kind == envinfo.SetupKindAuth && !opts.Interactive {
-		return soft(h, opts, label, fmt.Sprintf("needs a terminal; rerun interactively: pix setup --env %s", opts.EnvName))
+		// No "pix setup --env NAME" remedy spelled out here: soft() below
+		// already prefixes this exact detail with that exact command, so
+		// repeating it here would name the same rerun twice in one message.
+		return soft(h, opts, label, "needs a terminal to authenticate; rerun this command from an interactive terminal")
 	}
 
 	acode, aerr := ex.Apply(snap, exe, h.ApplyArgs, opts.In, opts.Out, opts.Err)
@@ -350,7 +352,6 @@ func runOne(root string, h Hook, opts Options, ex Executor) (Outcome, error) {
 	// zero exit from apply proves the installer ran, never that the tool is
 	// present and working.
 	pcode, pout, perr := ex.Check(snap, exe, h.CheckArgs)
-	pout = sys.TerminalSafe(pout)
 	if perr != nil {
 		return soft(h, opts, label, fmt.Sprintf("post-check could not run: %v", perr))
 	}
@@ -459,11 +460,12 @@ func copyVerified(src, dst, wantSHA string, perm os.FileMode) error {
 // required hook, an HONEST warning (never silence, never a success word)
 // for an optional one. Optional failures end as StateSkipped so Result.Ready
 // keeps meaning "every required hook was probed ready". detail is rendered
-// as-is by the caller — every caller of soft in this file already passes
-// text built EITHER from this package's own fixed strings OR from captured
-// process output that was already run through sys.TerminalSafe the moment
-// it was captured (runOne's out/pout), so no raw terminal control byte from
-// an environment-authored hook's stdout/stderr ever reaches here.
+// as-is by the caller: every caller in this file passes either this
+// package's own fixed text, or a SINGLE already-sys.TerminalSafe'd line
+// (firstLineSuffix does that sanitization itself now, on the one line it
+// extracts), so no raw terminal control byte from an environment-authored
+// hook's stdout/stderr ever reaches here, and no caller re-states the
+// "pix setup --env NAME" command this error is already prefixed with.
 func soft(h Hook, opts Options, label, detail string) (Outcome, error) {
 	if !h.Required {
 		fmt.Fprintf(opts.Err, "pix setup: warning: optional setup hook %s is NOT ready: %s\n", label, detail)
@@ -476,14 +478,21 @@ func soft(h Hook, opts Options, label, detail string) (Outcome, error) {
 // firstLineSuffix appends the first non-empty line of whichever captured
 // check output exists, so a failure names something concrete without
 // dumping a hook's whole (bounded) transcript into the error. Callers pass
-// already-sys.TerminalSafe'd text (runOne sanitizes out/pout the moment
-// ex.Check returns them), so this never re-emits a raw control byte a
-// hostile hook printed.
+// the RAW captured output (runOne no longer sanitizes out/pout up front):
+// splitting on "\n" here, before sanitization, is what finds the real line
+// breaks a multi-line transcript actually has. sys.TerminalSafe then runs
+// on ONLY that one extracted line, so the returned suffix can never carry a
+// raw control byte a hostile hook printed AND never carries the literal
+// `\n` placeholder TerminalSafe would otherwise leave behind for every
+// OTHER line's break if it ran before this split — the earlier ordering
+// left one single-line message studded with literal backslash-n text
+// (visibly, e.g. "pix: pix setup --env work: ... \n") instead of the
+// intended one clean line.
 func firstLineSuffix(outs ...string) string {
 	for _, s := range outs {
 		for _, line := range strings.Split(s, "\n") {
 			if t := strings.TrimSpace(line); t != "" {
-				return ": " + t
+				return ": " + sys.TerminalSafe(t)
 			}
 		}
 	}
