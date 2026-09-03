@@ -422,9 +422,13 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 
 	// One requirements screen: every missing name, secret and plain alike,
 	// collected in this single pass — never a partial collection that
-	// still sends the user off to run something else and come back.
+	// still sends the user off to run something else and come back. Each
+	// prompt's Label/Example are the environment's own [host.values.<NAME>]
+	// metadata when it declared any (valueLabel/valueExample), so a
+	// well-authored environment asks for "Google Workspace account email"
+	// instead of a bare "GOG_ACCOUNT".
 	if d.Interactive && (len(missingSecrets)+len(missingPlain)) > 0 {
-		fmt.Fprintf(d.Out, "this environment needs %d value(s) before it's ready. Enter each now (blank to skip and record it later):\n", len(missingSecrets)+len(missingPlain))
+		fmt.Fprintf(d.Out, "this environment declares %d value(s) not yet recorded. Enter each now (blank to skip and record it later):\n", len(missingSecrets)+len(missingPlain))
 
 		var stillMissingSecrets []string
 		for _, k := range missingSecrets {
@@ -436,9 +440,9 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 			// characters, one atomic upsert), so the retry loop validates
 			// against the real persistence path, never a copy of its rules.
 			if _, ok := d.Ask(cli.Question{
-				Label:   k,
+				Label:   valueLabel(bom, k),
 				Detail:  describeDeclaredValue(bom, k, true),
-				Example: "op://Private/Anthropic API Key/credential",
+				Example: valueExample(bom, k, true),
 				Accept: func(v string) error {
 					if serr := secret.SetRef(home, k, v); serr != nil {
 						return fmt.Errorf("could not record %s: %v", k, serr)
@@ -455,8 +459,9 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 		var stillMissingPlain []string
 		for _, k := range missingPlain {
 			if _, ok := d.Ask(cli.Question{
-				Label:  k,
-				Detail: describeDeclaredValue(bom, k, false),
+				Label:   valueLabel(bom, k),
+				Detail:  describeDeclaredValue(bom, k, false),
+				Example: valueExample(bom, k, false),
 				Accept: func(v string) error {
 					if serr := secret.SetPlainValue(home, k, v); serr != nil {
 						return fmt.Errorf("could not record %s: %v", k, serr)
@@ -471,26 +476,101 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 		missingPlain = stillMissingPlain
 	}
 
-	if len(missingSecrets) == 0 && len(missingPlain) == 0 {
+	// A value's own [host.values.NAME] metadata can mark it `required =
+	// false`: still asked above, but never a reason to refuse setup when
+	// it stays blank. Split AFTER the prompt loop, not before, so a
+	// declined optional prompt still reaches this classification instead
+	// of being dropped from missingSecrets/missingPlain earlier and
+	// silently skipping its own "optional, continuing without it" line.
+	requiredMissingSecrets, optionalMissingSecrets := splitByRequired(bom, missingSecrets)
+	requiredMissingPlain, optionalMissingPlain := splitByRequired(bom, missingPlain)
+	for _, k := range optionalMissingSecrets {
+		fmt.Fprintf(d.Out, "  %s is optional and not recorded; continuing without it.\n", k)
+	}
+	for _, k := range optionalMissingPlain {
+		fmt.Fprintf(d.Out, "  %s is optional and not recorded; continuing without it.\n", k)
+	}
+
+	if len(requiredMissingSecrets) == 0 && len(requiredMissingPlain) == 0 {
 		return nil
 	}
 
 	fmt.Fprintln(d.Out, "this environment's declared requirements are not all recorded yet:")
-	for _, k := range missingSecrets {
+	for _, k := range requiredMissingSecrets {
 		fmt.Fprintf(d.Out, "  pix secret set %s op://<vault>/<item>/<field>\n", k)
 	}
-	for _, k := range missingPlain {
+	for _, k := range requiredMissingPlain {
 		fmt.Fprintf(d.Out, "  %s is a non-secret value; re-run `pix setup --env NAME` on a terminal to be prompted for it, or record it directly: printf '%s=<value>\\n' >> %s\n", k, k, home.SecretsEnv)
 	}
-	return fmt.Errorf("%d requirement(s) not recorded; see the exact commands above", len(missingSecrets)+len(missingPlain))
+	return fmt.Errorf("%d requirement(s) not recorded; see the exact commands above", len(requiredMissingSecrets)+len(requiredMissingPlain))
+}
+
+// splitByRequired partitions keys by each name's own [host.values.NAME]
+// Required bit (default true when the environment declared no metadata
+// for it at all — see envinfo.HostValueMeta.EffectiveRequired), preserving
+// keys' relative order in both output slices.
+func splitByRequired(bom nativeenv.BillOfMaterials, keys []string) (required, optional []string) {
+	for _, k := range keys {
+		if valueRequired(bom, k) {
+			required = append(required, k)
+		} else {
+			optional = append(optional, k)
+		}
+	}
+	return required, optional
+}
+
+// valueRequired reports whether key must be recorded before setup succeeds:
+// its environment-declared [host.values.NAME].required when authored, true
+// otherwise — every env_keys/plain_keys name is required by default.
+func valueRequired(bom nativeenv.BillOfMaterials, key string) bool {
+	if meta, ok := bom.ValueMeta(key); ok {
+		return meta.Required
+	}
+	return true
+}
+
+// valueLabel is the prompt line's Label: the environment's own
+// [host.values.NAME].label alongside the literal name (so the env var a
+// value ultimately lands under is never hidden), or the bare name alone
+// when the environment declared no friendlier one.
+func valueLabel(bom nativeenv.BillOfMaterials, key string) string {
+	if meta, ok := bom.ValueMeta(key); ok && meta.Label != "" {
+		return fmt.Sprintf("%s (%s)", meta.Label, key)
+	}
+	return key
+}
+
+// valueExample is the prompt's Example, shown only after a rejected
+// answer (cli.Question.Example's own placement): the environment's own
+// [host.values.NAME].example when authored, else a well-formed op://
+// sample for a secret prompt, else nothing — a plain value has no generic
+// well-formed shape to demonstrate.
+func valueExample(bom nativeenv.BillOfMaterials, key string, isSecret bool) string {
+	if meta, ok := bom.ValueMeta(key); ok && meta.Example != "" {
+		return meta.Example
+	}
+	if isSecret {
+		return "op://Private/Anthropic API Key/credential"
+	}
+	return ""
 }
 
 // describeDeclaredValue is the one line of context a value prompt shows:
 // WHICH declared integration needs this name, and what kind of answer it
-// takes. It is derived from the environment's own bill of materials, never
-// from a hardcoded table of key names, so an environment that declares a
-// new key gets a truthful prompt without a launcher change.
+// takes. An environment's own [host.values.<NAME>].help, when authored,
+// is used verbatim (still suffixed with the same "Blank to skip." every
+// prompt shows) — that is exactly what host.values metadata is FOR: a
+// concise, meaningful sentence the environment author wrote, in place of
+// the generic one derived below from bare env_keys/plain_keys membership.
+// The derived fallback still exists for every environment that declares no
+// metadata at all, from the bill of materials, never from a hardcoded
+// table of key names, so an environment that declares a new key still gets
+// a truthful prompt without a launcher change.
 func describeDeclaredValue(bom nativeenv.BillOfMaterials, key string, isSecret bool) string {
+	if meta, ok := bom.ValueMeta(key); ok && meta.Help != "" {
+		return meta.Help + " Blank to skip."
+	}
 	var servers []string
 	seen := map[string]bool{}
 	for _, m := range bom.HostMCP {

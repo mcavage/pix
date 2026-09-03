@@ -393,6 +393,105 @@ func TestSetup_EnvFlagSuppressesBaseModelPrompt(t *testing.T) {
 	}
 }
 
+// TestSetupEnv_HostValueMetadataRendersFriendlyLabelAndHelp proves the
+// declared-requirements prompt uses an environment's own
+// [host.values.<NAME>] label/help instead of the bare env-var name and
+// the generic "needed by <server>" sentence, when the environment
+// authored one.
+func TestSetupEnv_HostValueMetadataRendersFriendlyLabelAndHelp(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+plain_keys = ["GOG_ACCOUNT"]
+
+[host.values.GOG_ACCOUNT]
+label = "Google Workspace account email"
+help = "The Google Workspace user gog authenticates as."
+example = "you@company.com"
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader("you@docker.com\n"), Interactive: true}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "Google Workspace account email (GOG_ACCOUNT)") {
+		t.Errorf("expected the friendly label alongside the bare name in the prompt, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "The Google Workspace user gog authenticates as.") {
+		t.Errorf("expected the authored help sentence in the prompt, got:\n%s", out.String())
+	}
+	val, present := secret.PlainValue(p, "GOG_ACCOUNT")
+	if !present || val != "you@docker.com" {
+		t.Fatalf("expected GOG_ACCOUNT recorded as a plain value, got %q present=%v", val, present)
+	}
+}
+
+// TestSetupEnv_OptionalDeclaredValueMissingDoesNotRefuse proves a value
+// whose [host.values.<NAME>] metadata sets `required = false` is still
+// asked for on a TTY, but a blank answer never fails setup: it is reported
+// as optional and skipped, never printed as one of the manual remedy
+// commands, and never turns into a non-zero error.
+func TestSetupEnv_OptionalDeclaredValueMissingDoesNotRefuse(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+plain_keys = ["GOG_ACCOUNT"]
+
+[host.values.GOG_ACCOUNT]
+required = false
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("an optional declared value missing on a non-interactive terminal must not refuse: %v\n%s%s", err, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "GOG_ACCOUNT is optional") {
+		t.Errorf("expected an optional-and-skipped line naming GOG_ACCOUNT, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "printf 'GOG_ACCOUNT=") {
+		t.Errorf("an optional value must not print the required-value manual remedy:\n%s", out.String())
+	}
+}
+
+// TestSetupEnv_OptionalDeclaredValueAlongsideRequiredOneStillRefusesOnMissingRequired
+// proves optional and required declared values are judged independently in
+// the SAME screen: a missing required plain_keys name still refuses even
+// when a co-declared optional one is also missing.
+func TestSetupEnv_OptionalDeclaredValueAlongsideRequiredOneStillRefusesOnMissingRequired(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+plain_keys = ["GOG_ACCOUNT", "GOG_NICKNAME"]
+
+[host.values.GOG_NICKNAME]
+required = false
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	err := setupSelectedEnvironment(d, p, "work")
+	if err == nil {
+		t.Fatal("a missing REQUIRED declared value must still refuse, even alongside an optional one")
+	}
+	if !strings.Contains(out.String(), "GOG_NICKNAME is optional") {
+		t.Errorf("expected GOG_NICKNAME reported as optional and skipped, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "GOG_ACCOUNT is a non-secret value") {
+		t.Errorf("expected the required-value remedy naming GOG_ACCOUNT, got:\n%s", out.String())
+	}
+}
+
 func TestSetupEnv_UnknownEnvironmentNameRefuses(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("PIX_HOME", home)

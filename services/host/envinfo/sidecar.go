@@ -131,14 +131,73 @@ type PiSection struct {
 	Skills []string `toml:"skills"`
 }
 
-// HostSection covers the two host-only concepts pix.toml may annotate: MCP
-// server metadata sbx cannot express, and non-MCP host services.
+// HostSection covers the three host-only concepts pix.toml may annotate: MCP
+// server metadata sbx cannot express, non-MCP host services, and optional
+// setup-prompt metadata for a declared env_keys/plain_keys name.
 type HostSection struct {
 	// MCP annotates a local-command MCP server declared in .sbxenv.yaml. It
 	// may never carry that server's command definition (url/command are
 	// native-owned and rejected).
 	MCP      map[string]HostMCPEntry `toml:"mcp"`
 	Services []HostService           `toml:"services"`
+	// Values is OPTIONAL [host.values.<NAME>] presentation metadata for a
+	// name some [host.mcp.<server>] entry already declares via env_keys or
+	// plain_keys — see HostValueMeta.
+	Values map[string]HostValueMeta `toml:"values"`
+}
+
+// HostValueMeta is one `[host.values.<NAME>]` entry: how `pix setup --env
+// NAME`'s declared-requirements screen presents ONE already-declared
+// env_keys/plain_keys name to a human, instead of a bare env-var name and a
+// generically-derived sentence (e.g. "Google Workspace account email"
+// instead of "GOG_ACCOUNT"). NAME must already be named by some
+// [host.mcp.<server>].env_keys or .plain_keys entry elsewhere in this same
+// file — metadata describing a name nothing declares is an authoring
+// mistake (a typo, or metadata left behind after the value it described
+// was removed), so ParseSidecar refuses it (validateHostValues) rather
+// than silently keeping dead metadata around. Name is populated from the
+// table key, exactly like HostMCPEntry.Name.
+//
+// Label/Help/Example are presentation ONLY: they change what a human
+// READS on the prompt, never what is fingerprinted for the environment's
+// host-exec trust review (workflow/env.HostValueFact is deliberately left
+// out of canonicalDoc/Fingerprint) — rewording a prompt is not host
+// execution, a credential handoff, or a mount expansion, so editing one
+// must never re-gate an otherwise-unchanged environment. Required is the
+// one field with real behavior: it can only ever make setup MORE lenient
+// than the env_keys/plain_keys declaration already was (never grant a new
+// credential or mount), so it stays out of the fingerprint too.
+type HostValueMeta struct {
+	Name string `toml:"-"`
+	// Label is the short, human phrase the prompt shows instead of the bare
+	// env-var NAME. Falls back to the bare name when empty.
+	Label string `toml:"label"`
+	// Help is one sentence of context printed once above the prompt: what
+	// the value is for, or where to find it. Falls back to a generic
+	// "needed by <server>" sentence (derived from env_keys/plain_keys
+	// membership) when empty.
+	Help string `toml:"help"`
+	// Example is a well-formed sample, shown only after a rejected answer —
+	// the same placement as cli.Question.Example — never on the first ask.
+	Example string `toml:"example"`
+	// Required overrides whether setup refuses when this value is still
+	// missing after the prompt. Nil (the key absent from this table, or no
+	// [host.values.NAME] table at all) means true: every declared
+	// env_keys/plain_keys name is required by default, matching the
+	// behavior before this field existed. An author sets `required = false`
+	// for a value setup should ask for but never refuse over when left
+	// blank. A pointer, not a bare bool, because a bare bool's Go zero value
+	// (false) would silently flip an author's OTHER metadata (label/help/
+	// example alone, `required` never mentioned) from required to optional.
+	Required *bool `toml:"required"`
+}
+
+// EffectiveRequired is Required with its documented default applied.
+func (m HostValueMeta) EffectiveRequired() bool {
+	if m.Required == nil {
+		return true
+	}
+	return *m.Required
 }
 
 // HostMCPEntry is optional metadata for one [host.mcp.<name>] entry. Name is
@@ -426,10 +485,62 @@ func ParseSidecar(path string) (*Sidecar, error) {
 	if err := validateHostMCPKeys(base, text, s.Host.MCP); err != nil {
 		return nil, err
 	}
+	for name, v := range s.Host.Values {
+		v.Name = name
+		s.Host.Values[name] = v
+	}
+	if err := validateHostValues(base, text, s.Host.MCP, s.Host.Values); err != nil {
+		return nil, err
+	}
 	if err := validateSetupHooks(base, text, s.Setup); err != nil {
 		return nil, err
 	}
 	return &s, nil
+}
+
+// validateHostValues enforces [host.values.<NAME>]'s whole grammar: NAME
+// must match a name some [host.mcp.<server>] entry actually declares (via
+// env_keys or plain_keys) elsewhere in this file, and none of its three
+// text fields may carry a control character — the same "no raw control
+// byte reaches a rendered consent screen" discipline validateSetupHooks
+// already holds argv strings to.
+func validateHostValues(base, text string, mcp map[string]HostMCPEntry, values map[string]HostValueMeta) error {
+	if len(values) == 0 {
+		return nil
+	}
+	declared := map[string]bool{}
+	for _, e := range mcp {
+		for _, k := range e.EnvKeys {
+			declared[k] = true
+		}
+		for _, k := range e.PlainKeys {
+			declared[k] = true
+		}
+	}
+	for _, name := range sortedHostValueMetaKeys(values) {
+		v := values[name]
+		key := fmt.Sprintf("host.values.%s", name)
+		line := locateKeyLines(text)[key]
+		if line == 0 {
+			line = 1
+		}
+		if !declared[name] {
+			return &Error{File: base, Line: line, Key: key, Reason: fmt.Sprintf("%q does not match any declared env_keys or plain_keys value in this file", name)}
+		}
+		if hasControlChars(v.Label) || hasControlChars(v.Help) || hasControlChars(v.Example) {
+			return &Error{File: base, Line: line, Key: key, Reason: "label, help, and example must not contain a control character"}
+		}
+	}
+	return nil
+}
+
+func sortedHostValueMetaKeys(m map[string]HostValueMeta) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // validateHostMCPKeys refuses a [host.mcp.<name>] entry that lists the same

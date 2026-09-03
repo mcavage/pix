@@ -312,9 +312,24 @@ skills = ["./skills"]
 
 # Optional metadata for a local-command MCP declared in .sbxenv.yaml.
 # sbx does not currently express per-command env grants or a health probe.
+# env_keys are secret names (each must resolve to an op:// reference);
+# plain_keys are non-secret names (an account address, a domain, ...) that
+# must never be forced into an op:// reference.
 [host.mcp.warehouse]
 env_keys = ["WAREHOUSE_TOKEN"]
 probe_args = ["probe"]
+
+# Optional presentation metadata for one already-declared env_keys/
+# plain_keys name: how `pix setup --env NAME`'s one-screen requirements
+# prompt describes it. NAME must already appear in some [host.mcp.<x>]'s
+# env_keys or plain_keys; label/help/example are shown, never fingerprinted
+# (they cannot change what this environment executes, mounts, or is
+# handed). required overrides whether setup refuses when the value is
+# still missing after the prompt; absent means true.
+[host.values.WAREHOUSE_TOKEN]
+label = "Warehouse API token"
+help = "The read-only token this environment's warehouse proxy sends upstream."
+example = "op://Private/Warehouse/token"
 
 # Optional non-MCP service that must run on the host.
 [[host.services]]

@@ -172,6 +172,83 @@ plain_keys = ["GOG_ACCOUNT"]
 	}
 }
 
+func TestParseSidecarAcceptsHostValueMetadataForDeclaredKey(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSidecar(t, dir, `schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_KEYRING_PASSWORD"]
+plain_keys = ["GOG_ACCOUNT"]
+
+[host.values.GOG_ACCOUNT]
+label = "Google Workspace account email"
+help = "The Google Workspace user gog authenticates as."
+example = "you@company.com"
+required = false
+
+[host.values.GOG_KEYRING_PASSWORD]
+label = "Google Workspace keyring password"
+`)
+	s, err := ParseSidecar(path)
+	if err != nil {
+		t.Fatalf("ParseSidecar: %v", err)
+	}
+	acct, ok := s.Host.Values["GOG_ACCOUNT"]
+	if !ok {
+		t.Fatal("Host.Values[GOG_ACCOUNT] missing")
+	}
+	if acct.Name != "GOG_ACCOUNT" {
+		t.Errorf("Host.Values[GOG_ACCOUNT].Name = %q, want GOG_ACCOUNT (populated from table key)", acct.Name)
+	}
+	if acct.Label != "Google Workspace account email" {
+		t.Errorf("Label = %q", acct.Label)
+	}
+	if acct.Help != "The Google Workspace user gog authenticates as." {
+		t.Errorf("Help = %q", acct.Help)
+	}
+	if acct.Example != "you@company.com" {
+		t.Errorf("Example = %q", acct.Example)
+	}
+	if acct.EffectiveRequired() {
+		t.Error("EffectiveRequired() = true, want false (required = false authored)")
+	}
+
+	pw, ok := s.Host.Values["GOG_KEYRING_PASSWORD"]
+	if !ok {
+		t.Fatal("Host.Values[GOG_KEYRING_PASSWORD] missing")
+	}
+	if !pw.EffectiveRequired() {
+		t.Error("EffectiveRequired() = false, want true when `required` is not authored at all")
+	}
+}
+
+func TestParseSidecarRejectsHostValueNamingUndeclaredKey(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSidecar(t, dir, `schema = 1
+
+[host.mcp.google-workspace]
+plain_keys = ["GOG_ACCOUNT"]
+
+[host.values.NOT_DECLARED]
+label = "Ghost value"
+`)
+	if _, err := ParseSidecar(path); err == nil {
+		t.Fatal("[host.values] naming a key no env_keys/plain_keys declares must refuse to parse")
+	} else if !strings.Contains(err.Error(), "does not match any declared env_keys or plain_keys value") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParseSidecarRejectsControlCharacterInHostValueLabel(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSidecar(t, dir, "schema = 1\n\n[host.mcp.google-workspace]\nplain_keys = [\"GOG_ACCOUNT\"]\n\n[host.values.GOG_ACCOUNT]\nlabel = \"bad\x1blabel\"\n")
+	if _, err := ParseSidecar(path); err == nil {
+		t.Fatal("a control character in a host.values field must refuse to parse")
+	} else if !strings.Contains(err.Error(), "control character") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestModelReferencesCollectsMainAndAgentsSorted(t *testing.T) {
 	path := writeSidecar(t, t.TempDir(), validSidecar)
 	s, err := ParseSidecar(path)

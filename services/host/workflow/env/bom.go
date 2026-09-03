@@ -219,7 +219,8 @@ type KitFact struct {
 
 // HostMCPFact is one pix.toml `[host.mcp.<name>]` sidecar annotation: env
 // var NAMES a local-command MCP server receives (never values) and its
-// health-probe argv (host execution — `pix doctor` runs it). EnvKeys are
+// health-probe argv (host execution — integration.go's IntegrationStatuses
+// runs it, reached from `pix env show`). EnvKeys are
 // secret names (each must resolve to an op:// reference); PlainKeys are
 // the same wrapper's non-secret names (an account address, a company
 // domain, ...) that must never be forced into an op:// reference just to
@@ -232,6 +233,23 @@ type HostMCPFact struct {
 	EnvKeys   []string
 	PlainKeys []string
 	ProbeArgs []string
+}
+
+// HostValueFact is one pix.toml `[host.values.<name>]` metadata entry: how
+// `pix setup --env NAME`'s declared-requirements screen presents an
+// already-declared env_keys/plain_keys name. See envinfo.HostValueMeta for
+// the full rationale, including why Label/Help/Example are deliberately
+// excluded from Fingerprint/canonicalDoc while the field itself still
+// exists on BillOfMaterials — they are consulted at prompt time, never at
+// review-fingerprint time. Required already has EffectiveRequired's
+// default applied, so a caller never needs to know whether the author
+// wrote the key at all.
+type HostValueFact struct {
+	Name     string
+	Label    string
+	Help     string
+	Example  string
+	Required bool
 }
 
 // InferenceFact is one pix.toml `[inference.backends.<name>]` entry: the
@@ -259,7 +277,10 @@ type InferenceFact struct {
 // where docs/design/environments.md §5.8/AC-66 names it a review line item,
 // a rendered summary/verbose fact (review.go). Nothing is fingerprinted
 // that renderBill/renderVerboseDetails cannot reach, and nothing rendered
-// is left out of Fingerprint — bom_test.go proves both directions.
+// is left out of Fingerprint — bom_test.go proves both directions. Values
+// is the one deliberate exception: it is presentation metadata for a setup
+// PROMPT, not a host-exec fact, so canonicalDoc/Fingerprint omit it on
+// purpose (see HostValueFact).
 type BillOfMaterials struct {
 	HostCommands      []HostCommand
 	HostServices      []HostServiceItem
@@ -273,8 +294,28 @@ type BillOfMaterials struct {
 	Ports             []PortFact
 	Kits              []KitFact
 	HostMCP           []HostMCPFact
-	Inference         []InferenceFact
-	Interpolations    []envinfo.Interpolation
+	// Values holds this environment's optional [host.values.<name>]
+	// setup-prompt metadata. Deliberately NOT part of Tier1 or Fingerprint
+	// (see HostValueFact): it changes how a value is asked for, never
+	// whether it is host execution, a credential handoff, or a mount
+	// expansion.
+	Values         []HostValueFact
+	Inference      []InferenceFact
+	Interpolations []envinfo.Interpolation
+}
+
+// ValueMeta returns the declared [host.values.<name>] metadata for name,
+// if this environment's pix.toml authored one. ok is false when it did
+// not, in which case a caller falls back to a generic description and
+// treats the value as required — exactly the behavior before this field
+// existed.
+func (b BillOfMaterials) ValueMeta(name string) (HostValueFact, bool) {
+	for _, v := range b.Values {
+		if v.Name == name {
+			return v, true
+		}
+	}
+	return HostValueFact{}, false
 }
 
 // Tier1 reports whether this environment executes anything on the host,
@@ -361,6 +402,7 @@ func ComputeBoM(env *Environment, effective EffectiveMounts, lookPath func(strin
 			return BillOfMaterials{}, err
 		}
 		computeHostMCP(env.Sidecar, &b)
+		computeHostValues(env.Sidecar, &b)
 		computeInference(env.Sidecar, &b)
 	}
 	if env.Tree != nil {
@@ -616,6 +658,32 @@ func computeSetupHooks(root string, s *envinfo.Sidecar, b *BillOfMaterials) erro
 	}
 	sort.Slice(b.SetupHooks, func(i, j int) bool { return b.SetupHooks[i].ID < b.SetupHooks[j].ID })
 	return nil
+}
+
+// computeHostValues derives BillOfMaterials.Values from the sidecar's
+// optional [host.values] table, applying EffectiveRequired's default so
+// every downstream reader (ValueMeta callers) sees the resolved bool, never
+// a tri-state it has to re-derive itself.
+func computeHostValues(s *envinfo.Sidecar, b *BillOfMaterials) {
+	for _, name := range sortedHostValueMetaKeys(s.Host.Values) {
+		v := s.Host.Values[name]
+		b.Values = append(b.Values, HostValueFact{
+			Name:     name,
+			Label:    v.Label,
+			Help:     v.Help,
+			Example:  v.Example,
+			Required: v.EffectiveRequired(),
+		})
+	}
+}
+
+func sortedHostValueMetaKeys(m map[string]envinfo.HostValueMeta) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func computeHostMCP(s *envinfo.Sidecar, b *BillOfMaterials) {
