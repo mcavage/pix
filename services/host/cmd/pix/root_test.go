@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -304,6 +305,53 @@ func TestExitMapper(t *testing.T) {
 	}
 	if got := cli.ExitCode(cli.SilentError{Code: 3}); got != 3 {
 		t.Errorf("ExitCode(SilentError{3}) = %d, want 3", got)
+	}
+}
+
+// TestDispatch_NeverDoublesThePixPrefix guards the regression a user hit
+// live: a command that already self-names ("pix secret set: ...", "pix
+// setup --env work: ...") must not ALSO get dispatch's generic "pix: "
+// prefix stacked in front of it, reading as the program name twice in one
+// line ("pix: pix secret set: ..."). `pix secret set` with a malformed env
+// var name is the real, easy-to-drive repro: secret.SetRef's own error
+// already opens with "pix secret set: ", exactly the shape
+// setupSelectedEnvironment's own "pix setup --env NAME: ..." errors share.
+func TestDispatch_NeverDoublesThePixPrefix(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	d, _, errb := rootDeps()
+	code := dispatch([]string{"secret", "set", "not a var name!", "op://x/y/z"}, d)
+	if code == 0 {
+		t.Fatalf("a malformed env var name must refuse, stderr=%q", errb.String())
+	}
+	got := errb.String()
+	if strings.HasPrefix(got, "pix: pix ") {
+		t.Fatalf("stderr = %q, doubles the program name (\"pix: pix ...\")", got)
+	}
+	if n := strings.Count(got, "pix secret set:"); n != 1 {
+		t.Fatalf("stderr = %q, want \"pix secret set:\" named exactly once, got %d", got, n)
+	}
+}
+
+// TestPrintRootError_Table pins printRootError's own decision directly:
+// exactly one "pix: " prefix, whether or not the message already opens
+// with one.
+func TestPrintRootError_Table(t *testing.T) {
+	for _, tc := range []struct {
+		msg  string
+		want string
+	}{
+		{"pix setup --env work: 1 requirement(s) not recorded; see the exact commands above",
+			"pix setup --env work: 1 requirement(s) not recorded; see the exact commands above\n"},
+		{"pix secret set: GOG is not an op:// reference", "pix secret set: GOG is not an op:// reference\n"},
+		{"pix: already prefixed", "pix: already prefixed\n"},
+		{"no release manifest found", "pix: no release manifest found\n"},
+	} {
+		var buf bytes.Buffer
+		printRootError(&buf, errors.New(tc.msg))
+		if got := buf.String(); got != tc.want {
+			t.Errorf("printRootError(%q) = %q, want %q", tc.msg, got, tc.want)
+		}
 	}
 }
 

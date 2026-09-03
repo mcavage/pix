@@ -195,6 +195,112 @@ plain_keys = ["GOG_ACCOUNT"]
 	}
 }
 
+// TestSetupEnv_MissingSecretRefPromptedInteractivelyPasses proves an
+// env_keys name is ALSO collected right here, on a TTY, through the exact
+// primitive `pix secret set` itself uses (secret.SetRef) — never a second
+// `pix setup --env work` rerun after a manual `pix secret set` in between.
+func TestSetupEnv_MissingSecretRefPromptedInteractivelyPasses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_KEYRING_PASSWORD"]
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader("op://Private/gog/password\n"), Interactive: true}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
+	}
+	refs, err := secret.LoadRefs(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range refs {
+		if r.Key == "GOG_KEYRING_PASSWORD" && r.IsRef && r.Value == "op://Private/gog/password" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected GOG_KEYRING_PASSWORD recorded as an op:// ref, got refs=%+v", refs)
+	}
+}
+
+// TestSetupEnv_CombinedSecretAndPlainPromptedInOneScreen proves BOTH kinds
+// are collected in the SAME run, without a rerun in between: the env_keys
+// ref first, then the plain_keys value, both answered from one piped
+// input, and neither remedy printed afterward since both were recorded.
+func TestSetupEnv_CombinedSecretAndPlainPromptedInOneScreen(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_KEYRING_PASSWORD"]
+plain_keys = ["GOG_ACCOUNT"]
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader("op://Private/gog/password\nyou@docker.com\n"), Interactive: true}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
+	}
+	refs, err := secret.LoadRefs(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	haveRef := false
+	for _, r := range refs {
+		if r.Key == "GOG_KEYRING_PASSWORD" && r.IsRef {
+			haveRef = true
+		}
+	}
+	if !haveRef {
+		t.Fatalf("expected GOG_KEYRING_PASSWORD recorded as an op:// ref from the one combined screen, refs=%+v", refs)
+	}
+	val, present := secret.PlainValue(p, "GOG_ACCOUNT")
+	if !present || val != "you@docker.com" {
+		t.Fatalf("expected GOG_ACCOUNT recorded as a plain value from the same screen, got %q present=%v", val, present)
+	}
+	if strings.Contains(out.String(), "pix secret set GOG_KEYRING_PASSWORD") {
+		t.Errorf("a value collected interactively must not also print the manual pix secret set remedy:\n%s", out.String())
+	}
+}
+
+// TestSetupEnv_DeclinedSecretPromptFallsBackToTheManualRemedy proves a
+// blank answer to the interactive op:// prompt still refuses, still names
+// the exact `pix secret set` command, and never records a bad value.
+func TestSetupEnv_DeclinedSecretPromptFallsBackToTheManualRemedy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_KEYRING_PASSWORD"]
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader("\n"), Interactive: true}
+	err := setupSelectedEnvironment(d, p, "work")
+	if err == nil {
+		t.Fatal("a blank answer to the interactive op:// prompt must still refuse")
+	}
+	if !strings.Contains(out.String(), "pix secret set GOG_KEYRING_PASSWORD op://") {
+		t.Errorf("expected the exact pix secret set remedy in output:\n%s", out.String())
+	}
+	refs, _ := secret.LoadRefs(p)
+	for _, r := range refs {
+		if r.Key == "GOG_KEYRING_PASSWORD" {
+			t.Fatalf("a declined prompt must not record anything, got %+v", r)
+		}
+	}
+}
+
 // TestSetupEnv_MissingPlainKeyNonInteractiveRefusesConcisely proves a
 // missing plain value on a non-interactive terminal is a concise,
 // actionable refusal — never a hook that fails on purpose.

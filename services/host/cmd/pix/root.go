@@ -12,6 +12,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -137,10 +138,29 @@ func dispatch(argv []string, d *cli.Deps) int {
 	if err != nil {
 		var silent cli.SilentError
 		if !errors.As(err, &silent) {
-			fmt.Fprintf(d.Err, "pix: %v\n", err)
+			printRootError(d.Err, err)
 		}
 	}
 	return cli.ExitCode(err)
+}
+
+// printRootError is dispatch's one renderer for a command that returns a
+// plain error (a cli.SilentError already printed itself and reaches here
+// never). It adds pix's own "pix: " program-name prefix — UNLESS the
+// command's own message already opens with one, which several verbs
+// construct deliberately so the SAME error reads standalone outside
+// dispatch too (e.g. setupSelectedEnvironment's "pix setup --env work: ...",
+// secret.SetRef's "pix secret set: ..."). Prefixing those again produced
+// exactly the regression a user hit live: "pix: pix setup --env work: ...",
+// the program name named twice in one line. A message that does NOT
+// already name "pix" gets the ordinary single prefix, unchanged.
+func printRootError(w io.Writer, err error) {
+	msg := err.Error()
+	if strings.HasPrefix(msg, "pix:") || strings.HasPrefix(msg, "pix ") {
+		fmt.Fprintln(w, msg)
+		return
+	}
+	fmt.Fprintf(w, "pix: %s\n", msg)
 }
 
 // normalizeArgv rewrites the shapes the grammar cannot express: `pix task NAME

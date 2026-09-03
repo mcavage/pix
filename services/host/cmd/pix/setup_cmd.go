@@ -295,14 +295,16 @@ func setupSelectedEnvironment(d *cli.Deps, home pixhome.Paths, name string) erro
 // (env_keys/plain_keys) is actually recorded, BEFORE any `[[setup]]` hook
 // runs — so an environment never has to ship its own hook whose whole job
 // is failing on purpose to print `pix secret set` commands (the pattern
-// this replaces). A secret name (env_keys) is never prompted for here: the
-// reviewed way in is `pix secret set`, and this only names the exact
-// command. A plain name (plain_keys) IS collected here, on a TTY only — it
-// is not a credential, so there is no reviewed-path reason to defer it to
-// a second command — and is recorded with secret.SetPlainValue, never as
-// an op:// reference. Either kind still missing after collection is a
-// concise, actionable refusal naming every remaining name and its exact
-// remedy, never a bare "setup failed".
+// this replaces), and a user is never told to stop, run a SEPARATE `pix
+// secret set` per missing name, then rerun this exact command to find the
+// next one. On a TTY, BOTH kinds are collected right here, in one screen,
+// in one pass: an env_keys name through the exact primitive `pix secret
+// set` itself uses (secret.SetRef — same op:// validation, same locked
+// atomic write), and a plain_keys name through secret.SetPlainValue,
+// recorded as a literal, never as an op:// reference. Neither loop invents
+// a new persistence path or a new validation rule. A blank answer, or a
+// value that primitive rejects, is not re-prompted — it falls through to
+// the exact remedy printed below, same as an entirely non-interactive run.
 func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nativeenv.BillOfMaterials) error {
 	refs, _ := secret.LoadRefs(home)
 	haveRef := map[string]bool{}
@@ -333,28 +335,51 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 	sort.Strings(missingSecrets)
 	sort.Strings(missingPlain)
 
-	// Collect plain (non-secret) values right here, on a TTY: there is
-	// nothing to review before recording an account address or a domain,
-	// unlike a credential.
-	if d.Interactive {
-		var stillMissing []string
+	// One requirements screen: every missing name, secret and plain alike,
+	// collected in this single pass — never a partial collection that
+	// still sends the user off to run something else and come back.
+	if d.Interactive && (len(missingSecrets)+len(missingPlain)) > 0 {
+		fmt.Fprintf(d.Out, "this environment needs %d value(s) before it's ready. Enter each now (blank to skip and record it later):\n", len(missingSecrets)+len(missingPlain))
 		reader := bufio.NewReader(d.In)
+
+		var stillMissingSecrets []string
+		for _, k := range missingSecrets {
+			fmt.Fprintf(d.Out, "  %s needs a 1Password reference (op://vault/item/field): ", k)
+			line, _ := reader.ReadString('\n')
+			line = strings.TrimSpace(line)
+			if line == "" {
+				stillMissingSecrets = append(stillMissingSecrets, k)
+				continue
+			}
+			// secret.SetRef is the SAME validated, locked write `pix
+			// secret set` performs: an op:// prefix, no control
+			// characters, one atomic upsert into secrets.env.
+			if serr := secret.SetRef(home, k, line); serr != nil {
+				fmt.Fprintf(d.Out, "    could not record %s: %v\n", k, serr)
+				stillMissingSecrets = append(stillMissingSecrets, k)
+				continue
+			}
+			fmt.Fprintf(d.Out, "    recorded %s in %s\n", k, home.SecretsEnv)
+		}
+		missingSecrets = stillMissingSecrets
+
+		var stillMissingPlain []string
 		for _, k := range missingPlain {
 			fmt.Fprintf(d.Out, "  %s is a non-secret value this environment needs. Enter it now (blank to skip): ", k)
 			line, _ := reader.ReadString('\n')
 			line = strings.TrimSpace(line)
 			if line == "" {
-				stillMissing = append(stillMissing, k)
+				stillMissingPlain = append(stillMissingPlain, k)
 				continue
 			}
 			if serr := secret.SetPlainValue(home, k, line); serr != nil {
 				fmt.Fprintf(d.Out, "    could not record %s: %v\n", k, serr)
-				stillMissing = append(stillMissing, k)
+				stillMissingPlain = append(stillMissingPlain, k)
 				continue
 			}
 			fmt.Fprintf(d.Out, "    recorded %s in %s\n", k, home.SecretsEnv)
 		}
-		missingPlain = stillMissing
+		missingPlain = stillMissingPlain
 	}
 
 	if len(missingSecrets) == 0 && len(missingPlain) == 0 {
