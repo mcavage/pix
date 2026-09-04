@@ -135,7 +135,7 @@ func RuntimeID(b Binding) string {
 // a provider key — e.g. "docker-anthropic, docker-openai (auth: sbx-session)"
 // — and is "" when a 1Password-held API key IS the credential.
 //
-// Non-empty is the launch gate's own condition (ConfiguredKeylessInference), so
+// Non-empty is the launch gate's own condition (KeylessInference), so
 // a surface that must SHOW why a key is not missing and a surface that merely
 // decides cannot drift apart. Also "" when no allowed binding resolves to a
 // backend the config defines: that is a host with no inference, not a host that

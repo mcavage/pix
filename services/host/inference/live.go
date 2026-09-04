@@ -119,9 +119,16 @@ func InferenceNeedsOnePassword(cfg *config.Config) bool {
 	return false
 }
 
-func ConfiguredKeylessInference() bool {
-	cfg, err := config.Load()
-	return err == nil && Configured(cfg) && !InferenceNeedsOnePassword(cfg)
+// KeylessInference reports whether cfg reaches every model it allows
+// WITHOUT a 1Password-held provider key. It takes the config from its
+// caller rather than loading machine config.toml itself, because the config
+// that decides this is per-RUN: `pix run` hands it the EFFECTIVE inference
+// config — machine config merged with the selected environment's own
+// [inference.*] declarations (workflow/launch.EffectiveInferenceConfig) —
+// so an environment reaching its models through an sbx-session gateway is
+// never asked for a personal API key it was never going to use.
+func KeylessInference(cfg *config.Config) bool {
+	return Configured(cfg) && !InferenceNeedsOnePassword(cfg)
 }
 
 // SynthesizeInferenceKit creates a create-time mixin containing only generated

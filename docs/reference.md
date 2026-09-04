@@ -386,7 +386,10 @@ written outside Pix, or by a v1 install) is never read as evidence and never
 removed automatically; `pix doctor` reports it in a separate, ignored row.
 
 `--env NAME` sets up one existing environment in addition to machine-level
-prerequisites; it does not select that environment as the default. When
+prerequisites. On success it offers, default-Yes and interactively only, to
+record that environment as the machine default (the same write `pix env
+default NAME` performs); a non-interactive run prints that command and writes
+nothing. When
 setup reaches an untrusted environment, it performs the same complete,
 default-No trust operation as `pix env trust NAME` before running any
 installer or authentication command; non-interactive setup refuses and names

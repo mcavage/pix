@@ -373,6 +373,39 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// in both the mount set and the pi argv on the second attempt.
 	o.Skills = append(o.Skills, envSkillDirs(selection)...)
 
+	// The config, and this run's EFFECTIVE inference, are resolved HERE —
+	// before the provider-key bootstrap below, not after it. The selected
+	// environment's OWN pix.toml [inference.*] declarations (Ollama,
+	// llmman/OpenAI-compatible, a plain native backend, or an sbx-session
+	// gateway) merge OVER machine config's inference into an EPHEMERAL
+	// snapshot for this run only: disk is never touched, and an
+	// environment-authored backend or model always wins over a machine one of
+	// the same name. Every inference decision from here on reads this SAME
+	// merged value — the provider-key gate, AllowsModel, roster validation,
+	// kit synthesis, and --models — so a model this environment declares can
+	// never pass one check and fail another. An unknown backend driver
+	// refuses here, before anything is created.
+	//
+	// The ORDER is the fix: an environment whose models are reached through a
+	// gateway with sbx-session credentials needs no personal provider key, so
+	// resolving it after the key gate meant `pix run --env work` opened the
+	// base "Set up model providers from 1Password?" interview for a run that
+	// was never going to use one.
+	cfg, _, err := workspace.LoadResolvedConfig()
+	if err != nil {
+		return runFail(d, 1, "%v", err)
+	}
+	cfg, err = launch.EffectiveInferenceConfig(cfg, selection.Sidecar)
+	if err != nil {
+		return runFail(d, 2, "%v", err)
+	}
+	// keyless is this RUN's credential mode, not this host's: true when every
+	// model the effective config allows is reached without a 1Password-held
+	// API key. It gates both the bootstrap below and the per-sandbox secret
+	// preparation further down, so the two can never disagree about whether a
+	// provider key was ever needed.
+	keyless := inference.KeylessInference(cfg)
+
 	// A pi session needs at least one provider key, and the evidence is THIS
 	// PIX_HOME's configured op:// refs — never `sbx secret ls`, whose global
 	// entries belong to the host rather than to this stack. Offer to write a
@@ -381,7 +414,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// The values themselves are resolved later, per sandbox, by the credential
 	// hook wired into SessionDeps below.
 	var keyResult health.Result
-	if _, lerr := defaultShellEnv().LookPath("sbx"); lerr == nil && !inference.ConfiguredKeylessInference() && !uatSmokeSkipsProviderKeyGate() {
+	if _, lerr := defaultShellEnv().LookPath("sbx"); lerr == nil && !keyless && !uatSmokeSkipsProviderKeyGate() {
 		env := defaultShellEnv()
 		launch.BootstrapProviderKeys(env, d.In, d.Err, d.Interactive)
 		keyResult = launch.ProbeModelKeys(env)
@@ -413,27 +446,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// There is no onboarding-proposal reconcile step here any more: an
 	// in-sandbox agent has no channel that mutates host config.toml (the
 	// whole `onboarding.json` -> config write path is deleted, not gated).
-	// Load the config for the rest of run (kits, mcp, gog, pack).
-	cfg, _, err := workspace.LoadResolvedConfig()
-	if err != nil {
-		return runFail(d, 1, "%v", err)
-	}
-	// The selected environment's OWN pix.toml [inference.*] declarations
-	// (Ollama, llmman/OpenAI-compatible, or a plain native backend) merge
-	// OVER machine config's inference into an EPHEMERAL snapshot for this
-	// run only — disk is never touched, and an environment-authored backend
-	// or model always wins over a machine one of the same name. Every
-	// inference decision from here on (the provider-key gate above already
-	// ran against the pre-merge machine cfg, which is correct: that gate is
-	// about THIS HOST's key material, not a per-environment concern) reads
-	// this SAME merged value — AllowsModel, roster validation, kit
-	// synthesis, and --models — so a model this environment declares can
-	// never pass one check and fail another. An unknown backend driver
-	// refuses here, before anything is created.
-	cfg, err = launch.EffectiveInferenceConfig(cfg, selection.Sidecar)
-	if err != nil {
-		return runFail(d, 2, "%v", err)
-	}
+	//
 	// D13/AC-59: the one quiet, negative-first nudge about an unregistered
 	// workspace `.sbxenv.yaml` — read-only, no prompt, no config mutation, at
 	// most once per canonical workspace ever (workflow/env.RunHint owns every
@@ -790,7 +803,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		// use a provider key); everything else refuses.
 		PrepareSecrets: func(name string) error {
 			return secret.PrepareSandboxSecrets(defaultShellEnv(), name, d.Err,
-				secret.ScopedSecretOptions{ModelKeyOptional: inference.ConfiguredKeylessInference()})
+				secret.ScopedSecretOptions{ModelKeyOptional: keyless})
 		},
 		// Teardown routes through the environment-scoped planner (E2.4), so
 		// the stable effective file this launch created is what removal names

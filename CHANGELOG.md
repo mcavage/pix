@@ -13,6 +13,30 @@ scored model router, `pix-host`, the pack system, and the custom memory RPC
 are deleted outright, not deprecated. There is no migration path and no
 compatibility shim — `~/.pix` from a v1 install is not read by this build.
 
+### Fixed — an environment's own inference decides whether a run needs a key
+
+`pix run --env NAME` resolved the selected environment's `[inference.*]`
+declarations AFTER the personal provider-key gate, so an environment that
+reaches every model through an sbx-session gateway still opened the base
+"Set up model providers from 1Password?" interview — and, non-interactively,
+refused the launch outright — for a key that run was never going to use. The
+effective inference config (machine config merged with the environment's own
+backends and models) is now resolved BEFORE that gate, and one per-run
+`keyless` fact derived from it gates both the bootstrap and the per-sandbox
+credential preparation. An environment that declares no inference of its own
+is unchanged: it still needs a provider key and still says so.
+
+### Added — a successful `pix setup --env NAME` offers to select it
+
+Setting up an environment never moved the machine default, so `pix setup
+--env work` could finish clean and a bare `pix` would keep launching
+`default` — the work environment's whole configuration silently absent, with
+no error to read. A successful named setup now ends with one default-Yes
+question ("Use work as the default environment for future pix runs?"), and
+records the answer through `config.SetDefaultEnvironmentAt`, the same single
+writer `pix env default NAME` owns. Declining changes nothing;
+a non-interactive run never writes and prints the exact command instead.
+
 ### Added — resident host services on the same status surface
 
 The `integrations:` section of `pix env show NAME` now also carries one row

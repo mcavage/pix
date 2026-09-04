@@ -458,7 +458,7 @@ type ProviderKeyProbe struct {
 	// from the host). Set means ready without asking the key store: here "no
 	// anthropic key" is not a gap, and `pix models add anthropic` would add a
 	// key nothing reads. It is the carve-out `pix run`'s launch gate already
-	// applies (inference.ConfiguredKeylessInference) — a host told it is broken
+	// applies (inference.KeylessInference) — a host told it is broken
 	// by one verb and started by the other teaches you to ignore both.
 	//
 	// Distinct from Callable, which answers "this key routes nowhere". Keyless

@@ -312,7 +312,12 @@ validates what an environment already declares; it never chooses on the
 user's behalf and never silently prefers or migrates between backends.
 
 `--env NAME` sets up one existing environment in addition to machine-level
-prerequisites. It does not select that environment as the default.
+prerequisites. On success it OFFERS to make that environment the machine
+default — a default-Yes question on an interactive terminal, the exact `pix
+env default NAME` command and no write at all on a non-interactive one — so a
+fully set-up environment cannot sit unused behind a bare `pix` that still
+launches the previous default. The write goes through the single named writer
+`pix env default NAME` owns; declining changes nothing.
 
 When setup reaches an untrusted environment, it performs the same complete,
 default-No trust operation as `pix env trust NAME` before running any installer

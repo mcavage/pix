@@ -24,6 +24,7 @@ import (
 	"pix/host/pixhome"
 	"pix/host/release"
 	"pix/host/secret"
+	"pix/host/sys"
 	nativeenv "pix/host/workflow/env"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/provision"
@@ -70,7 +71,7 @@ func (c *setupCmd) Help() string { return provision.Description }
 // no agent handoff: `pix run` is the only thing that starts a sandbox.
 type setupCmd struct {
 	Verbose bool   `help:"Show the pix-memory container and MCP registration detail, not just the summary."`
-	Env     string `help:"Also set up one existing environment: validate its declared requirements (docs/design/pix-v2-surface.md §3.6 step 7) and, if untrusted, run the same trust review pix env trust NAME does. It does not select that environment as the default."`
+	Env     string `help:"Also set up one existing environment: validate its declared requirements (docs/design/pix-v2-surface.md §3.6 step 7) and, if untrusted, run the same trust review pix env trust NAME does. On success it OFFERS (never assumes) to make it the machine default, so a bare pix launches it."`
 }
 
 func (c *setupCmd) Run(d *cli.Deps) error { return c.run(d, productionSetupSeams()) }
@@ -190,6 +191,7 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 		if eerr := setupSelectedEnvironment(d, home, c.Env); eerr != nil {
 			return eerr
 		}
+		offerDefaultEnvironment(d, home, c.Env)
 	}
 	if !res.Ready() {
 		return cli.SilentError{Code: 1}
@@ -380,6 +382,66 @@ func setupSelectedEnvironment(d *cli.Deps, home pixhome.Paths, name string) erro
 	}
 	fmt.Fprintf(d.Out, "environment %q declared requirements check passed.\n", name)
 	return runSetupHooks(d, name, loaded.Root, bom)
+}
+
+// offerDefaultEnvironment closes a SUCCESSFUL `pix setup --env NAME` with
+// the one question the user is otherwise left to discover: a bare `pix`
+// launches the MACHINE DEFAULT environment, so an environment that was just
+// set up but never selected silently keeps launching the old one — the
+// failure mode being fixed here is a fully working `work` environment whose
+// gateway inference never entered a launch because `default` was still
+// selected.
+//
+// It OFFERS, it never assumes: an interactive default-Yes prompt (this is
+// the environment the user just named on the command line, so Yes is the
+// answer that matches the request, and No leaves everything untouched), and
+// on a non-interactive terminal no write at all — just the exact command,
+// because a script that ran setup never asked for its machine default to
+// move. An environment that is ALREADY the default is confirmed, not
+// re-asked and not re-written.
+//
+// The write goes through config.SetDefaultEnvironmentAt, the same single
+// primitive `pix env default NAME` owns (invariant 2: one named writer per
+// config.toml field — this is that writer, reached from the verb the user
+// is already in, not a second one). A failed write is reported and never
+// fatal: the environment IS set up, which is what this command promised.
+func offerDefaultEnvironment(d *cli.Deps, home pixhome.Paths, name string) {
+	cfg, err := config.LoadFrom(config.PathAt(home.Home))
+	if err != nil {
+		fmt.Fprintf(d.Err, "pix setup: could not read the machine default environment: %v\n", err)
+		fmt.Fprintf(d.Out, "To launch %q with a bare pix: pix env default %s\n", name, sys.ShellQuote(name))
+		return
+	}
+	if strings.TrimSpace(cfg.DefaultEnvironment) == name {
+		fmt.Fprintf(d.Out, "environment %q is already the default; run pix to start.\n", name)
+		return
+	}
+	if !d.Interactive {
+		fmt.Fprintf(d.Out, "environment %q is set up but is not the default (a bare pix launches %s). To change that: pix env default %s\n",
+			name, defaultEnvironmentWord(cfg.DefaultEnvironment), sys.ShellQuote(name))
+		return
+	}
+	if !d.AskYN(fmt.Sprintf("Use %s as the default environment for future pix runs? [Y/n] ", name), true) {
+		fmt.Fprintf(d.Out, "keeping %s as the default; launch this one explicitly: pix run --env %s\n",
+			defaultEnvironmentWord(cfg.DefaultEnvironment), sys.ShellQuote(name))
+		return
+	}
+	if err := config.SetDefaultEnvironmentAt(home.Home, name); err != nil {
+		fmt.Fprintf(d.Err, "pix setup: could not record the default environment: %v\n", err)
+		fmt.Fprintf(d.Out, "Set it yourself: pix env default %s\n", sys.ShellQuote(name))
+		return
+	}
+	fmt.Fprintf(d.Out, "Default environment: %s. Run pix to start.\n", name)
+}
+
+// defaultEnvironmentWord renders the CURRENT default for a sentence: its
+// name, or an honest phrase when no default is recorded at all (where
+// "launches \"\"" would read as an environment named the empty string).
+func defaultEnvironmentWord(current string) string {
+	if strings.TrimSpace(current) == "" {
+		return "no environment"
+	}
+	return current
 }
 
 // validateDeclaredEnvironmentValues is the declared-requirements check
