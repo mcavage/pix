@@ -32,6 +32,10 @@ const gatewaySidecar = `schema = 1
 
 [models]
 main = "gateway/big"
+# The real work environment sets this: inference is narrowed to the
+# environment's OWN backends, so a machine-wide public-vendor binding stays
+# configured but is not callable. The keyless answer must hold under it.
+exclusive = true
 
 [inference.backends.gateway]
 driver = "openai-compatible"
