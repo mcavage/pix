@@ -24,6 +24,11 @@
 package env
 
 import (
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -42,6 +47,12 @@ type IntegrationStatus struct {
 	Name    string
 	URL     string
 	Command string
+
+	// Kind is MCPKind or ServiceKind. The two shapes share this struct
+	// because they share the one surface a user reads, but they do not share
+	// every field: a ServiceKind row has no Registered state at all, because
+	// pix registers and starts nothing for a [[host.services]] entry.
+	Kind string
 
 	Declared bool
 
@@ -117,7 +128,7 @@ func IntegrationStatuses(b BillOfMaterials, mcpOut string, mcpOK bool, run Probe
 	probes := probeArgsByServer(b.HostMCP)
 	out := make([]IntegrationStatus, 0, len(b.MCPServers))
 	for _, s := range b.MCPServers {
-		st := IntegrationStatus{Name: s.Name, URL: s.URL, Command: s.Command, Declared: true}
+		st := IntegrationStatus{Name: s.Name, Kind: MCPKind, URL: s.URL, Command: s.Command, Declared: true}
 		st.Registered, st.RegisteredDetail = registeredStatus(mcpOut, mcpOK, s.Name)
 		st.Reachable, st.ReachableDetail = reachableStatus(run, s.Name, probes[s.Name])
 		out = append(out, st)
@@ -169,4 +180,127 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// --- host services -----------------------------------------------------------
+//
+// A `[[host.services]]` entry is the OTHER half of what an environment
+// integrates with, and until this file it was absent from the one status
+// surface entirely: `pix env show` reported every declared MCP server's
+// declared/registered/reachable answer and said nothing at all about the
+// resident loopback service the same sidecar declares — even though that
+// entry is the only one carrying an explicit health endpoint (`probe`).
+// "Nothing printed" reads as "nothing to report", which for a warehouse proxy
+// that is not answering is the single most misleading thing this surface
+// could do.
+//
+// Registered is deliberately EMPTY for a service rather than faked into one
+// of the three MCP states: pix registers nothing here and starts nothing (an
+// environment's [[host.services]] is review-and-report only), so any value
+// would be a claim about a registry this row does not live in.
+
+// ServiceKind and MCPKind tag which of the two shapes an IntegrationStatus
+// describes, so a JSON consumer never has to infer it from which fields
+// happen to be set.
+const (
+	MCPKind     = "mcp"
+	ServiceKind = "service"
+)
+
+// HTTPProbe is the injectable seam a declared `probe` URL is fetched
+// through — bounded, and answering the same tri-state the rest of this file
+// speaks. A nil HTTPProbe reports every probe-bearing service
+// StatusUnknown, never StatusReady.
+type HTTPProbe func(url string) (ok bool, detail string)
+
+// HostServiceStatuses is the declared/reachable answer for every
+// `[[host.services]]` entry b declares, in b's own order.
+//
+// Reachability is the environment's OWN declared `probe` URL and nothing
+// else. It is not a bare TCP dial and not a guess from `docker ps`: this
+// package cannot run docker, and "a socket accepted" is exactly the
+// false-ready shape the MCP half of this file already refuses.
+func HostServiceStatuses(b BillOfMaterials, probe HTTPProbe) []IntegrationStatus {
+	if len(b.HostServices) == 0 {
+		return nil
+	}
+	out := make([]IntegrationStatus, 0, len(b.HostServices))
+	for _, svc := range b.HostServices {
+		st := IntegrationStatus{Name: svc.Name, Kind: ServiceKind, Command: svc.Command, Declared: true}
+		st.Reachable, st.ReachableDetail = serviceReachable(probe, svc)
+		out = append(out, st)
+	}
+	return out
+}
+
+// serviceReachable is the single definition of what "this service is up"
+// means on the pix side: the URL the environment itself declared, fetched
+// once, bounded.
+func serviceReachable(probe HTTPProbe, svc HostServiceItem) (health.Status, string) {
+	if strings.TrimSpace(svc.Probe) == "" {
+		return health.StatusUnknown, "no probe declared (pix.toml [[host.services]].probe)"
+	}
+	if err := checkLoopbackProbe(svc.Probe); err != nil {
+		return health.StatusUnknown, err.Error()
+	}
+	if probe == nil {
+		return health.StatusUnknown, "no host execution available to run the declared probe"
+	}
+	ok, detail := probe(svc.Probe)
+	if ok {
+		return health.StatusReady, "probe ok: " + svc.Probe + suffix(detail)
+	}
+	return health.StatusAbsent, "probe failed: " + svc.Probe + suffix(detail)
+}
+
+func suffix(detail string) string {
+	if d := strings.TrimSpace(detail); d != "" {
+		return " (" + firstLine(d) + ")"
+	}
+	return ""
+}
+
+// checkLoopbackProbe refuses to fetch anything that is not plain HTTP on
+// loopback. A `[[host.services]]` entry is a LOCAL process bound to a
+// loopback port by contract — that is the only shape pix's own trust bill
+// reviews it as — so an environment naming, say, https://example.com/ping
+// as its "health endpoint" would turn `pix env show` into an outbound
+// request made on the user's behalf, from a file whose whole job is to be
+// read rather than executed. Refusing it as Unknown says so instead of
+// making the request and calling the answer health.
+func checkLoopbackProbe(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errors.New("probe is not a URL: " + raw)
+	}
+	if u.Scheme != "http" {
+		return errors.New("probe is not http:// on loopback, so it was not fetched: " + raw)
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return errors.New("probe is not on loopback, so it was not fetched: " + raw)
+	}
+	return nil
+}
+
+// LoopbackHTTPProbe is the default HTTPProbe: one bounded GET, body
+// discarded, any 2xx is up. It is deliberately not a health-body parser —
+// the service decides what its own endpoint means, and this reports whether
+// the service answered it.
+func LoopbackHTTPProbe(url string) (bool, string) {
+	client := &http.Client{Timeout: reachableProbeTimeout}
+	resp, err := client.Get(url)
+	if err != nil {
+		return false, err.Error()
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return true, resp.Status
+	}
+	return false, resp.Status
 }

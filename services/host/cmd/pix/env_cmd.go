@@ -396,12 +396,21 @@ func renderCatalogSource(info inference.CatalogSourceInfo) string {
 // registration for every server (mcp.McpRegEvidenceFrom's own fail-open
 // rule) rather than aborting `env show` itself.
 func computeIntegrationStatuses(bom nativeenv.BillOfMaterials) []nativeenv.IntegrationStatus {
-	if len(bom.MCPServers) == 0 {
+	if len(bom.MCPServers) == 0 && len(bom.HostServices) == 0 {
 		return nil
 	}
-	lsOut, _, lsErr := runSbxCapturedOut("mcp", "ls")
-	run := nativeenv.RunnerFromEnv(defaultShellEnv())
-	return nativeenv.IntegrationStatuses(bom, lsOut, lsErr == nil, run)
+	var statuses []nativeenv.IntegrationStatus
+	if len(bom.MCPServers) > 0 {
+		lsOut, _, lsErr := runSbxCapturedOut("mcp", "ls")
+		run := nativeenv.RunnerFromEnv(defaultShellEnv())
+		statuses = nativeenv.IntegrationStatuses(bom, lsOut, lsErr == nil, run)
+	}
+	// The resident [[host.services]] entries belong on the SAME surface: they
+	// are the other half of what this environment integrates with, and they
+	// are the half carrying an explicit health endpoint. Omitting them made
+	// `pix env show` silent about a warehouse proxy that was not answering,
+	// which reads as "nothing to report".
+	return append(statuses, nativeenv.HostServiceStatuses(bom, nativeenv.LoopbackHTTPProbe)...)
 }
 
 // renderIntegrationStatuses is `pix env show`'s plain-text integrations
@@ -416,8 +425,16 @@ func renderIntegrationStatuses(w io.Writer, statuses []nativeenv.IntegrationStat
 	}
 	fmt.Fprintln(w, "integrations:")
 	for _, s := range statuses {
-		fmt.Fprintf(w, "  %-20s declared:yes registered:%-8s reachable:%-8s\n", s.Name, s.Registered, s.Reachable)
-		if s.Reachable == health.StatusUnknown && s.ReachableDetail != "" {
+		// A host service has no registration state to report — pix registers
+		// nothing and starts nothing for one — so the column is omitted
+		// rather than filled with a word that would be a claim about a
+		// registry this row does not live in.
+		if s.Kind == nativeenv.ServiceKind {
+			fmt.Fprintf(w, "  %-20s declared:yes service            reachable:%-8s\n", s.Name, s.Reachable)
+		} else {
+			fmt.Fprintf(w, "  %-20s declared:yes registered:%-8s reachable:%-8s\n", s.Name, s.Registered, s.Reachable)
+		}
+		if s.Reachable != health.StatusReady && s.ReachableDetail != "" {
 			fmt.Fprintf(w, "  %-20s   (%s)\n", "", s.ReachableDetail)
 		}
 	}
@@ -430,8 +447,9 @@ func renderIntegrationStatuses(w io.Writer, statuses []nativeenv.IntegrationStat
 func integrationStatusesJSON(statuses []nativeenv.IntegrationStatus) []map[string]any {
 	out := make([]map[string]any, 0, len(statuses))
 	for _, s := range statuses {
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"name":              s.Name,
+			"kind":              s.Kind,
 			"url":               s.URL,
 			"command":           s.Command,
 			"declared":          s.Declared,
@@ -439,7 +457,15 @@ func integrationStatusesJSON(statuses []nativeenv.IntegrationStatus) []map[strin
 			"registered_detail": s.RegisteredDetail,
 			"reachable":         string(s.Reachable),
 			"reachable_detail":  s.ReachableDetail,
-		})
+		}
+		// A service row carries no registration state; emitting empty strings
+		// for it would let a consumer read "" as a fourth status word.
+		if s.Kind == nativeenv.ServiceKind {
+			delete(entry, "registered")
+			delete(entry, "registered_detail")
+			delete(entry, "url")
+		}
+		out = append(out, entry)
 	}
 	return out
 }
