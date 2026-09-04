@@ -11,6 +11,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"pix/host/cli"
 	"pix/host/container"
@@ -261,5 +262,66 @@ func TestConfirmContainerReplace_VerboseShowsImagesAndFingerprints(t *testing.T)
 		if !strings.Contains(got, wantStr) {
 			t.Errorf("--verbose prompt missing %q:\n%s", wantStr, got)
 		}
+	}
+}
+
+// TestConfirmContainerReplace_BlankEnterDeclinesPromptly is the regression
+// for the bug this replaces: a bare Enter (blank answer) must decline
+// (default No) and return immediately, never block waiting for a token that
+// a blank line never supplies. The prompt used to read with a fresh
+// fmt.Fscanln(d.In, &line) instead of the command's one shared line reader,
+// which — same failure class LineIn's own doc comment describes — could
+// leave a raw read stuck on an input stream a buffered reader elsewhere had
+// already drained. Running the call on its own goroutine with a bounded
+// timeout is what actually proves "returns promptly", not just "returns the
+// right value eventually".
+func TestConfirmContainerReplace_BlankEnterDeclinesPromptly(t *testing.T) {
+	d := &cli.Deps{
+		Out:         &bytes.Buffer{},
+		Err:         &bytes.Buffer{},
+		In:          strings.NewReader("\n"),
+		Interactive: true,
+	}
+	confirm := confirmContainerReplace(d, false)
+	current := container.Info{Image: "pix-memory:old", Labels: map[string]string{container.FingerprintLabel: "fp-old"}}
+	want := container.Spec{Image: "pix-memory:new"}
+
+	done := make(chan bool, 1)
+	go func() { done <- confirm(current, want) }()
+	select {
+	case got := <-done:
+		if got {
+			t.Error("a blank Enter must decline (default No), got true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("confirmContainerReplace hung on a blank Enter instead of returning the default promptly")
+	}
+}
+
+// TestConfirmContainerReplace_SharesTheCommandsLineBuffer proves the prompt
+// reads through d.Line(), the SAME buffered reader every other prompt in
+// this command shares (prompt.go's LineIn doc), rather than a private read
+// straight off d.In. A raw per-call reader discards whatever it buffered
+// but did not consume when it goes out of scope, so anything typed ahead —
+// including the next prompt's own answer — would vanish. Answering "y" here
+// and then asking a second question through d.Ask must still see the line
+// typed ahead of it.
+func TestConfirmContainerReplace_SharesTheCommandsLineBuffer(t *testing.T) {
+	d := &cli.Deps{
+		Out:         &bytes.Buffer{},
+		Err:         &bytes.Buffer{},
+		In:          strings.NewReader("y\nafter\n"),
+		Interactive: true,
+	}
+	confirm := confirmContainerReplace(d, false)
+	current := container.Info{Image: "pix-memory:old", Labels: map[string]string{container.FingerprintLabel: "fp-old"}}
+	want := container.Spec{Image: "pix-memory:new"}
+
+	if !confirm(current, want) {
+		t.Fatal("y must confirm the replace")
+	}
+	got, ok := d.Ask(cli.Question{Label: "NEXT"})
+	if !ok || got != "after" {
+		t.Fatalf("Ask after confirm = (%q, %v), want the line typed ahead of the confirm prompt still there", got, ok)
 	}
 }

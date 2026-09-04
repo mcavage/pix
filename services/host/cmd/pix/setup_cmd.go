@@ -813,9 +813,6 @@ func confirmContainerReplace(d *cli.Deps, verbose bool) func(current container.I
 			fmt.Fprintf(d.Err, "pix setup: refusing to replace it on a non-interactive terminal; rerun interactively or remove it yourself: docker rm -f %s\n", want.ContainerName)
 			return false
 		}
-		fmt.Fprint(d.Err, "Replace it? [y/N] ")
-		var line string
-		fmt.Fscanln(d.In, &line)
-		return line == "y" || line == "Y"
+		return d.AskYN("Replace it? [y/N] ", false)
 	}
 }
