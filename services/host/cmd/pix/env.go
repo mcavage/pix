@@ -13,5 +13,5 @@ import (
 // defaultShellEnv returns a hostenv.Env backed by the real OS.
 func defaultShellEnv() hostenv.Env {
 	return hostenv.Env{
-		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, DirectInference: inference.LiveDirectInferenceProbe, OllamaInference: inference.LiveOllamaInferenceProbe}
+		System: sys.Real{}, DirectInference: inference.LiveDirectInferenceProbe, OllamaInference: inference.LiveOllamaInferenceProbe}
 }

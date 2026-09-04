@@ -1,5 +1,12 @@
 # Packs v2 — implementation design (BUILD-READY)
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: BUILD SPEC. Validated against the real tree (`pack.go`, `config/config.go`,
 `sbxargs.go`, `hostrun.go`, `mcp.go`, `knowledge.go`, `run.go`, `serve_plugin.go`,
 `extensions/memory-recall.ts`). North star: `docs/design/packs.md`. Delivery PRD:
@@ -109,7 +116,7 @@ Two facts that shape everything:
       │  cfg.Pack = root                                                     │
       │  swap MCP set:   remove oldPack.mcp from cfg.MCP; add newPack.mcp    │
       │  swap knowledge: RemoveKnowledgeBundle(old); AddKnowledgeBundle(new) │
-      │  swap config:    gog_account, ollama_bridge_model, routing overrides │
+      │  swap config:    gog_account, ollama_bridge_model, inference facet   │
       │  cfg.Save()  ── ONE write, source of truth                          │
       └─────────────────────────────────────────────────────────────────────┘
               │                              │                         │
@@ -144,9 +151,10 @@ ollama_bridge_model = "qwen3.5:9b"   # v1, unchanged
 # ── F4 context config (all optional, layered when the pack is active) ──
 gog_account = "you@company.com"      # swapped into cfg.GogAccount on `pack use`
 memory_scope = "work"                # → .pix/profile; default = pack name; "default" = shared
-[routing]                            # optional pack-level model routing override (P2/stretch)
-  policy    = "routing/policy.json"      # repo-relative; recompiled to routing.json when active
-  scorecard = "routing/scorecard.json"
+# HISTORICAL: a [routing] stanza (a pack-level policy/scorecard override) was
+# sketched here as a P2/stretch facet and never implemented. Wave F deleted the
+# router, so it never will be: a pack pins vendors through
+# inference.exclusive_backend/exclusive_source instead, at the binding layer.
 
 # ── F1 reference-only integrations (v1 shape — SUPERSEDED, see below) ──
 # HISTORICAL. This stanza no longer loads: an `mcp` name must declare exactly one
@@ -194,7 +202,6 @@ Go struct additions in `pack.go` (`packManifest`):
 ```go
 GogAccount   string           `toml:"gog_account,omitempty"`
 MemoryScope  string           `toml:"memory_scope,omitempty"`
-Routing      *packRouting     `toml:"routing,omitempty"`
 Integrations []packIntegration `toml:"integrations,omitempty"` // exists
 Proxies      []packProxy      `toml:"proxy,omitempty"`
 Bins         []packBin        `toml:"bin,omitempty"`

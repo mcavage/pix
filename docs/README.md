@@ -5,7 +5,12 @@ harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
 
 ## For adopters
 
-- [design/packs.md](design/packs.md) — the pack design: private company context
+- [design/pix-v2-surface.md](design/pix-v2-surface.md) and
+  [design/pix-v2-architecture.md](design/pix-v2-architecture.md) — the ACCEPTED
+  v2 product surface and code architecture. Start here.
+- [design/environments.md](design/environments.md) — environments: the native
+  `.sbxenv.yaml` + thin `pix.toml` an adopter actually authors.
+- HISTORICAL — [design/packs.md](design/packs.md) — the deleted pack design: private company context
   ships as a **pack** (plus container/host MCP integrations), never a
   forked/recompiled tree.
 - [gworkspace.md](gworkspace.md) — why Google Workspace is **not** a pix
@@ -23,24 +28,24 @@ harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
 These document the reasoning behind subsystems. They are reference, not
 tutorials.
 
-- [onboarding-v3.md](design/onboarding-v3.md) — the proposed one-path setup,
+- HISTORICAL — [onboarding-v3.md](design/onboarding-v3.md) — the proposed one-path setup,
   dependency, OAuth, pack, doctor, and provider-routing design.
 - [slack-setup.md](design/slack-setup.md) — MERGE-BLOCKED migration reference:
   Slack's built-in implementation was deleted (W2/U02a); this names the
   required pinned/on-demand posture for an external pack replacement and the
   per-user credential rules it must keep. Not evidence anything external works.
-- [routing.md](design/routing.md) — the model router: registry, scorecard,
-  policy, and how `pix-host route compile` (`make routing`) bakes `routing.json`.
-- [models-cli.md](design/models-cli.md) — the `pix models` noun rename and the
-  first-run "add a second provider key" fix.
 - [subagents-extension.md](design/subagents-extension.md) — the `subagent` tool
   (single / parallel / chain / trees) and the watchdog.
 - [subagent-pin-tracker.md](design/subagent-pin-tracker.md) — the pinned
   live tracker for running subagents.
 - [self-learning-loop.md](design/self-learning-loop.md) — the memory capture and
   recall loop.
-- [serve-lifecycle.md](design/serve-lifecycle.md) — the `pix serve` daemon
-  lifecycle: lazy auto-start, the managed login service, and the hardening addendum.
+- [serve-lifecycle.md](design/serve-lifecycle.md) — HISTORICAL: the pre-v2
+  host-daemon lifecycle (`serve`). `pix-host` and its supervision tree were
+  deleted outright in the Pix v2 cutover
+  (`docs/design/pix-v2-architecture.md` §14); memory is now the plain Docker
+  container `pix-memory`, see [runbooks/host-services.md](runbooks/host-services.md)
+  for its runbook.
 - [worktree-tasks.md](design/worktree-tasks.md) and
   [task-ux-decisions.md](design/task-ux-decisions.md) — the `pix task`
   parallel-work workflow.

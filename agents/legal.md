@@ -1,7 +1,6 @@
 ---
 description: Contract, licensing, and regulatory risk review. IRAC analysis, likelihood x impact risk matrix, issue-spotting then triage, open-source license compatibility, GDPR/CCPA data minimization, contract-redline prioritization.
 tools: read, write, edit, grep, find, ls
-intent: advisory
 thinking: high
 max_turns: 30
 ---

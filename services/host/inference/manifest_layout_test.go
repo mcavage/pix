@@ -24,8 +24,7 @@ import (
 // else in the agent dir) in the same test so a future rename cannot silently
 // reintroduce either half of the bug.
 func TestSynthesizeInferenceKitMixinLayout(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	cfg := &config.Config{Inference: config.InferenceConfig{
 		Backends: map[string]config.InferenceBackend{
@@ -36,7 +35,7 @@ func TestSynthesizeInferenceKitMixinLayout(t *testing.T) {
 		},
 	}}
 
-	dir, err := SynthesizeInferenceKit(cfg)
+	dir, err := SynthesizeInferenceKit(cfg, RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,8 +51,11 @@ func TestSynthesizeInferenceKitMixinLayout(t *testing.T) {
 		names[e.Name()] = true
 	}
 
-	// Positive: the exact two generated files, nothing else.
-	want := map[string]bool{"inference.json": true, "routing.json": true}
+	// Positive: the ONE generated file, nothing else. The mixin used to carry
+	// a compiled routing.json beside it; Wave F deleted the router, and a
+	// second generated artifact reappearing here is exactly the drift this
+	// exact-set assertion exists to catch.
+	want := map[string]bool{"inference.json": true}
 	if len(names) != len(want) {
 		t.Fatalf("agent dir has unexpected entries: got %v, want exactly %v", names, want)
 	}
@@ -87,15 +89,10 @@ func TestSynthesizeInferenceKitMixinLayout(t *testing.T) {
 		t.Fatalf("inference.json has no models: %+v", manifest)
 	}
 
-	// routing.json must also exist and parse — the mixin's other generated
-	// file, written by the same call, unaffected by the manifest bug but
-	// asserted here so this test is the one place the whole layout is pinned.
-	routingRaw, err := os.ReadFile(filepath.Join(agentDir, "routing.json"))
-	if err != nil {
-		t.Fatalf("routing.json unreadable: %v", err)
-	}
-	var routingDoc map[string]any
-	if err := json.Unmarshal(routingRaw, &routingDoc); err != nil {
-		t.Fatalf("routing.json did not parse: %v\ncontent: %s", err, routingRaw)
+	// And the artifact that is NOT here: a compiled routing.json. The mixin
+	// used to ship one beside the manifest, and a session that read a stale
+	// or disagreeing copy of it is precisely why the router is gone.
+	if _, err := os.Stat(filepath.Join(agentDir, "routing.json")); !os.IsNotExist(err) {
+		t.Fatalf("the mixin must not carry a compiled routing.json (err=%v)", err)
 	}
 }

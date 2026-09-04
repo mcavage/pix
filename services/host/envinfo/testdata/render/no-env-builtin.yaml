@@ -1,0 +1,14 @@
+schemaVersion: "1"
+name: pix-workspace-00000000
+workspace:
+  path: /home/user/workspace
+  clone: false
+additionalWorkspaces:
+  - path: /home/user/.local/share/pix/context
+    readOnly: false
+kits:
+  - /tmp/pix-mixin-00000000
+sandboxOptions:
+  pullPolicy: missing
+  template: docker.io/mcavage/pix:v0.0.0
+env: {}

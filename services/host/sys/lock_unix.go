@@ -46,7 +46,14 @@ func withFlock(lockPath string, notify func(string), fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return fmt.Errorf("create lock dir: %w", err)
 	}
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	// O_NOFOLLOW (security re-review MEDIUM): every lock file this package
+	// opens lives under a host-owned state directory a local attacker could
+	// otherwise pre-plant as a symlink to an arbitrary path — opening THAT
+	// target with O_CREATE|O_RDWR would create-or-truncate it under this
+	// process's own privileges. Refusing to follow a symlink at the lock
+	// path turns that into an open(2) ELOOP rather than a confused-deputy
+	// write, at the cost of nothing an ordinary lock file ever needed to be.
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return fmt.Errorf("open lock %s: %w", lockPath, err)
 	}

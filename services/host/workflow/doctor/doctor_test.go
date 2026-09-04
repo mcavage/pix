@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,28 +17,23 @@ import (
 
 	"pix/host/config"
 	"pix/host/health"
-	"pix/host/inference"
-	"pix/host/rpc"
+	"pix/host/hostenv"
+	"pix/host/sys/systest"
 )
 
 // These tests drive the REAL surfaces. Every exec probe runs a compiled
-// fixture executable, every service probe dials a real listener, and every
-// file probe reads a real directory. Nothing here stubs a probe: the failure
-// modes are produced by a process, a socket and a filesystem, so the
-// classification under test is the one a user's host runs.
+// fixture executable, so the classification under test is the one a user's
+// host runs. The v1 probe set this file used to exercise — pack, memory (via
+// the custom memory JSON-RPC identity call), launchd, MCP, daemons — was
+// deleted along with packs, the Suture-supervised `pix-host serve`, and Pix's
+// own MCP administration in the Pix v2 cutover
+// (docs/design/pix-v2-architecture.md §14, AC-16). What survives here is
+// sbx, provider keys (including the keyless-inference carve-out) and the
+// GitHub secret's scope — the whole of what `Probes` still builds.
 //
 // The fixture is health's, reached by relative path rather than copied: two
 // fixtures drifting apart is how two surfaces start disagreeing about what
-// "broken" looks like. Its source lives at
-// ../../health/testdata/fixture/main.go.txt — a .txt, not a .go file, on
-// purpose: it is a real, complete Go program, but naming it main.go would
-// make it a second copy of production Go source outside any *_test.go file,
-// indistinguishable from shipped code to a LOC/production-metrics scanner
-// (anything that globs *.go and excludes *_test.go, same as `go build ./...`
-// itself). Reading it as data and writing it into a temp dir as main.go right
-// before the compile keeps this a REAL compiled executable — same exec, same
-// classification under test — while its source counts as test fixture data,
-// not production Go.
+// "broken" looks like.
 
 var (
 	fixtureOnce sync.Once
@@ -81,65 +74,28 @@ func buildFixture(t *testing.T) string {
 	return fixtureBin
 }
 
-// memoryUnit serves the identity JSON-RPC on a real listener and returns its
-// port, so the memory probe makes a real call for a real answer.
-func memoryUnit(t *testing.T, name string, ready bool) int {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"jsonrpc": "2.0", "id": 1,
-			"result": map[string]any{"name": name, "port": 0, "ready": ready},
-		})
-	}))
-	t.Cleanup(srv.Close)
-	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	n, _ := strconv.Atoi(port)
-	return n
-}
-
-// deadPort returns a port nothing is listening on, so a probe gets a real
-// connection refused rather than a faked one.
-func deadPort(t *testing.T) int {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-	return port
-}
-
-func packDir(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "pack.toml"), []byte("name = \"fixture\"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
 // healthyHost is a host where every probe can prove something good.
 func healthyHost(t *testing.T) (*config.Config, Options) {
 	t.Helper()
 	bin := buildFixture(t)
-	cfg := &config.Config{Services: []string{"memory"}, Pack: packDir(t)}
+	cfg := &config.Config{}
 	return cfg, Options{
-		Budget:        5 * time.Second,
-		SbxBin:        bin,
-		SbxArgs:       []string{"healthy"},
-		KeyStoreBin:   bin,
-		KeyStoreArgs:  []string{"keys"},
-		LaunchctlBin:  bin,
-		LaunchctlArgs: []string{"healthy"},
-		MemoryPort:    memoryUnit(t, rpc.MemoryName, true),
-		UID:           501,
-		// A healthy host has a GLOBAL github secret. Left unset this would ask the
-		// real sbx and report whatever the developer's machine holds.
+		Budget:       5 * time.Second,
+		SbxBin:       bin,
+		SbxArgs:      []string{"healthy"},
+		KeyStoreBin:  bin,
+		KeyStoreArgs: []string{"keys"},
+		// A healthy host configures a GITHUB_TOKEN ref, so every sandbox pix
+		// launches is given a github credential. Left unset this would read
+		// the developer's own refs file.
 		GitHubScope: func() (int, []string) { return health.GitHubGlobal, nil },
+		// The provider verdict is THIS PIX_HOME's refs evidence now, not the
+		// global sbx store: a healthy host declares filled op:// refs for all
+		// three model providers.
+		ProviderRefs: func() ([]string, bool) { return []string{"anthropic", "openai", "google"}, true },
+		// ...and holds no host-global sbx secret for pix to ignore. Left unset
+		// this would ask the real sbx.
+		GlobalSecrets: func() ([]string, bool) { return nil, true },
 	}
 }
 
@@ -164,53 +120,16 @@ func TestProbes_CoverTheWholeHostSurface(t *testing.T) {
 	for _, p := range Probes(&config.Config{}, Options{}) {
 		names = append(names, p.Name())
 	}
-	want := []string{"sbx", "pack", "providers", "memory", "launchd", "mcp", "daemons", "github"}
+	want := []string{"sbx", "providers", "github", "sbx-globals", "ollama"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("probe set = %v, want %v", names, want)
-	}
-}
-
-// A capability the host did not enable is OPTIONAL, not absent from the
-// report: a line a reader cannot see is a fact they cannot act on.
-//
-// "Enabled" is serve's OWN resolution, and the load-bearing half of it is that
-// an EMPTY `services` means ALL, not none (resolveServices: "an empty result
-// means all"). Reading empty as none is how doctor came to call memory OPTIONAL
-// on a config where serve starts it — so a memory unit that was genuinely down
-// could not fail readiness on the commonest config there is.
-func TestProbes_RequirementFollowsTheConfiguredServices(t *testing.T) {
-	required := func(cfg *config.Config, name string) bool {
-		t.Helper()
-		for _, p := range Probes(cfg, Options{}) {
-			if p.Name() == name {
-				return p.Required()
-			}
-		}
-		t.Fatalf("no %q probe in the set", name)
-		return false
-	}
-	if !required(&config.Config{Services: []string{"memory"}}, "memory") {
-		t.Error("memory is optional on a host that explicitly enabled it")
-	}
-	// The regression: no `services` key at all is every service, because that is
-	// what `pix-host serve` does with it.
-	if !required(&config.Config{}, "memory") {
-		t.Error("memory is optional on a host with no `services` key, but serve starts it there")
-	}
-	if !required(&config.Config{Services: []string{"  "}}, "memory") {
-		t.Error("a whitespace-only services entry must resolve like empty (all), not like a named set")
-	}
-	// And a config that names a DIFFERENT service is the one case where memory
-	// is genuinely not enabled.
-	if required(&config.Config{Services: []string{"something-else"}}, "memory") {
-		t.Error("memory is required on a host whose services name something else")
 	}
 }
 
 func TestDoctor_HealthyHostIsReadyAndPrintsNoFixes(t *testing.T) {
 	cfg, o := healthyHost(t)
 	s := run(t, cfg, o)
-	for _, name := range []string{"sbx", "pack", "providers", "memory", "launchd"} {
+	for _, name := range []string{"sbx", "providers"} {
 		if r := result(t, s, name); !r.OK() {
 			t.Errorf("%s = %s (%s / %s), want ready", name, r.Effective(), r.Detail, r.Evidence)
 		}
@@ -218,31 +137,26 @@ func TestDoctor_HealthyHostIsReadyAndPrintsNoFixes(t *testing.T) {
 	if s.ExitCode() != health.ExitOK {
 		t.Errorf("exit = %d, want %d", s.ExitCode(), health.ExitOK)
 	}
-	// With the monitor retired, a host where every probe proved something good
-	// has NOTHING to repair: the one fix this report used to always carry was
-	// the optional monitor's, on a host that had not enabled it.
 	if fixes := s.Fixes(); len(fixes) != 0 {
 		t.Errorf("fixes = %v, want none on a fully healthy host", fixes)
 	}
 }
 
 // The load-bearing property of the whole model: a host nobody could inspect
-// is not a broken host. Inside the sandbox neither sbx nor launchctl exists,
-// and doctor exiting 1 there is how a team learns to ignore its exit code.
+// is not a broken host. Inside the sandbox sbx does not exist, and doctor
+// exiting 1 there is how a team learns to ignore its exit code.
 func TestDoctor_UnknownAloneIsNotAFailure(t *testing.T) {
 	bin := buildFixture(t)
-	cfg := &config.Config{Pack: packDir(t)}
+	cfg := &config.Config{}
 	o := Options{
 		Budget: 5 * time.Second,
 		// Every exec probe answers in a way nothing can be concluded from.
-		SbxBin: bin, SbxArgs: []string{"broken"},
+		SbxBin:      bin,
+		SbxArgs:     []string{"broken"},
 		KeyStoreBin: bin, KeyStoreArgs: []string{"crash"},
-		LaunchctlBin: bin, LaunchctlArgs: []string{"malformed"},
-		// A LIVE memory unit, deliberately: this test is about unknowns, and a
-		// refused port is not one. It is a verified gap, and on a host that runs
-		// memory (no `services` key = all) failing over it is correct — so a dead
-		// port here would prove something other than what the name claims.
-		MemoryPort: memoryUnit(t, rpc.MemoryName, true), UID: 501,
+		// The refs file exists and could not be read: UNKNOWN, never a
+		// no-key verdict.
+		ProviderRefs: func() ([]string, bool) { return nil, false },
 	}
 	s := run(t, cfg, o)
 	for _, name := range []string{"sbx", "providers"} {
@@ -271,22 +185,20 @@ func TestDoctor_UnknownAloneIsNotAFailure(t *testing.T) {
 func TestDoctor_VerifiedGapsFailWithTheExactFix(t *testing.T) {
 	bin := buildFixture(t)
 	missing := filepath.Join(t.TempDir(), "no-sbx-here")
-	cfg := &config.Config{Services: []string{"memory"}}
+	cfg := &config.Config{}
 	o := Options{
 		Budget: 5 * time.Second,
 		SbxBin: missing,
-		// The key store ANSWERED and listed no model key. That, and only
-		// that, is a no-key verdict.
+		// The refs file ANSWERED and declares no model provider ref. That,
+		// and only that, is a no-key verdict — a host-global sbx secret
+		// never earns one either way.
 		KeyStoreBin: bin, KeyStoreArgs: []string{"nokeys"},
-		LaunchctlBin: bin, LaunchctlArgs: []string{"notloaded"},
-		MemoryPort: deadPort(t), UID: 501,
+		ProviderRefs: func() ([]string, bool) { return nil, true },
 	}
 	s := run(t, cfg, o)
 	want := map[string]string{
 		"sbx":       health.SbxInstallFix,
 		"providers": health.ModelKeyFix,
-		"memory":    health.ServeStartFix,
-		"launchd":   health.ServeInstallFix,
 	}
 	for name, fix := range want {
 		r := result(t, s, name)
@@ -295,23 +207,6 @@ func TestDoctor_VerifiedGapsFailWithTheExactFix(t *testing.T) {
 		}
 		if r.Fix != fix {
 			t.Errorf("%s fix = %q, want %q", name, r.Fix, fix)
-		}
-	}
-	// pack is NOT among the verified gaps: cfg names no pack at all, which is a
-	// supported end state (StatusOff), not something to repair. Before the off
-	// status existed this asserted the opposite — a pack-less host was handed
-	// PackUseFix as a "verified gap", which is the exact bug this pins against
-	// regressing back into.
-	packResult := result(t, s, "pack")
-	if packResult.Effective() != health.StatusOff {
-		t.Errorf("pack = %s, want off (no pack configured is not a gap)", packResult.Effective())
-	}
-	if packResult.Fix != "" {
-		t.Errorf("pack fix = %q, want none: an off row carries no repair", packResult.Fix)
-	}
-	for _, g := range s.Gaps() {
-		if g.Name == "pack" {
-			t.Error("pack must not appear among the verified gaps when no pack is configured")
 		}
 	}
 	if s.ExitCode() != health.ExitNotReady {
@@ -326,49 +221,36 @@ func TestDoctor_VerifiedGapsFailWithTheExactFix(t *testing.T) {
 			t.Errorf("doctor omitted the exact fix %q:\n%s", fix, b.String())
 		}
 	}
-	// PackUseFix may still appear as pack's HINT (an invitation, indented under
-	// the row) — what must never happen is that command landing in the "Fix:"
-	// block, which is reserved for verified gaps.
-	if i := strings.Index(b.String(), "\nFix:\n"); i >= 0 && strings.Contains(b.String()[i:], health.PackUseFix) {
-		t.Errorf("doctor printed a repair for an off (unconfigured, not broken) pack in the Fix: block:\n%s", b.String())
-	}
 }
 
-// keylessPackConfig is the shape a pack with its own gateway backends writes:
-// every model is reached over a Docker login session the sbx proxy injects
-// inside the sandbox, so no anthropic/openai/google key is ever read.
-func keylessPackConfig(packRoot string) *config.Config {
+// keylessGatewayConfig is the shape a keyless inference backend writes: every
+// model is reached over a Docker login session the sbx proxy injects inside
+// the sandbox, so no anthropic/openai/google key is ever read.
+func keylessGatewayConfig() *config.Config {
 	backend := func(name string) config.InferenceBackend {
 		return config.InferenceBackend{Driver: "openai-compatible", BaseURL: "https://gw.example.com/" + name,
-			Auth: "sbx-session", KeyEnv: "DOCKER_TOKEN", CredentialService: "sbx-login", Source: packRoot}
+			Auth: "sbx-session", KeyEnv: "DOCKER_TOKEN", CredentialService: "sbx-login"}
 	}
 	return &config.Config{
-		Services: []string{"memory"}, Pack: packRoot,
 		Inference: config.InferenceConfig{
-			ExclusiveSource: packRoot,
-			Backends:        map[string]config.InferenceBackend{"gw-anthropic": backend("anthropic"), "gw-openai": backend("openai")},
+			Backends: map[string]config.InferenceBackend{"gw-anthropic": backend("anthropic"), "gw-openai": backend("openai")},
 			Models: []config.InferenceModelBinding{
-				{Model: "anthropic/claude-opus-5", Backend: "gw-anthropic", Upstream: "claude-opus-5", Available: true, Source: packRoot},
-				{Model: "openai/gpt-5.6-sol", Backend: "gw-openai", Upstream: "gpt-5.6-sol", Available: true, Source: packRoot},
+				{Model: "anthropic/claude-opus-5", Backend: "gw-anthropic", Upstream: "claude-opus-5", Available: true},
+				{Model: "openai/gpt-5.6-sol", Backend: "gw-openai", Upstream: "gpt-5.6-sol", Available: true},
 			},
 		},
 	}
 }
 
-// A host whose models need no provider key must not be told it has none. This
-// is the exact host a private inference pack produces: `pix run` launches it
-// (its gate skips the key probe on keyless inference), and doctor used to call
-// the same host broken and prescribe `pix models add anthropic` — a key that,
-// once added, nothing would read.
+// A host whose models need no provider key must not be told it has none.
 func TestDoctor_KeylessInferenceIsNotAMissingKey(t *testing.T) {
 	bin := buildFixture(t)
-	pack := packDir(t)
-	cfg := keylessPackConfig(pack)
+	cfg := keylessGatewayConfig()
 	// The key store ANSWERS, and lists no model key: the strongest possible
 	// no-key evidence. It still must not decide this axis.
 	o := Options{Budget: 5 * time.Second, SbxBin: bin, SbxArgs: []string{"healthy"},
-		KeyStoreBin: bin, KeyStoreArgs: []string{"nokeys"}, LaunchctlBin: bin, LaunchctlArgs: []string{"healthy"},
-		MemoryPort: memoryUnit(t, rpc.MemoryName, true), UID: 501}
+		KeyStoreBin: bin, KeyStoreArgs: []string{"nokeys"},
+		ProviderRefs: func() ([]string, bool) { return nil, true }}
 
 	s := run(t, cfg, o)
 	r := result(t, s, "providers")
@@ -378,7 +260,6 @@ func TestDoctor_KeylessInferenceIsNotAMissingKey(t *testing.T) {
 	if r.Fix != "" {
 		t.Errorf("providers fix = %q, want none: there is no key to add", r.Fix)
 	}
-	// The evidence must NAME what answers instead, or the green is unfalsifiable.
 	for _, want := range []string{"gw-anthropic", "gw-openai", "sbx-session"} {
 		if !strings.Contains(r.Evidence, want) {
 			t.Errorf("evidence %q omits %q", r.Evidence, want)
@@ -396,137 +277,28 @@ func TestDoctor_KeylessInferenceIsNotAMissingKey(t *testing.T) {
 	}
 }
 
-// The evidence doctor renders and the predicate `pix run`'s gate decides on
-// are one question, so they must answer together on every config shape —
-// including the ones where a provider key IS this host's credential. A
-// KeylessBackends non-empty where the gate is false would be doctor greening
-// an axis the same host would be refused a launch over.
-func TestKeylessInference_AgreesWithTheLaunchGate(t *testing.T) {
-	pack := packDir(t)
-	keyed := keylessPackConfig(pack)
-	keyed.Inference.Backends["gw-anthropic"] = config.InferenceBackend{Driver: "openai-compatible",
-		BaseURL: "https://api.anthropic.com", Auth: "1password", KeyEnv: "ANTHROPIC_API_KEY", Source: pack}
-
-	cases := map[string]*config.Config{
-		"keyless pack":      keylessPackConfig(pack),
-		"1password backend": keyed,
-		"no inference":      {Services: []string{"memory"}},
-		"nil":               nil,
+// TestUnreadableConfigSnapshot_IsABlockingRequiredGap pins the surviving
+// caller: `pix doctor` (cmd/pix/doctor_cmd.go) renders this snapshot when
+// workspace config will not load. Exit 1 is correct here (unlike the deleted
+// `pix status`, doctor is allowed to fail a shell on a verified gap), and the
+// evidence must show the parse error — there is no Fix command because
+// `pix config path` is not a real verb.
+func TestUnreadableConfigSnapshot_IsABlockingRequiredGap(t *testing.T) {
+	s := UnreadableConfigSnapshot(errors.New("boom"))
+	if s.ExitCode() != health.ExitNotReady {
+		t.Errorf("exit = %d, want %d", s.ExitCode(), health.ExitNotReady)
 	}
-	for name, cfg := range cases {
-		gate := inference.Configured(cfg) && !inference.InferenceNeedsOnePassword(cfg)
-		if got := inference.KeylessBackends(cfg) != ""; got != gate {
-			t.Errorf("%s: keyless evidence = %v, launch gate = %v", name, got, gate)
-		}
+	if len(s.Blocking()) != 1 {
+		t.Errorf("want exactly one blocking result, got %v", s.Blocking())
 	}
-}
-
-// A binding whose backend the config never defines resolves to nothing. That
-// is not a keyless host, and must fall through to the key store rather than
-// green-light the axis on an empty set.
-func TestKeylessInference_EmptyBackendSetIsNotKeyless(t *testing.T) {
-	pack := packDir(t)
-	cfg := keylessPackConfig(pack)
-	cfg.Inference.Backends = map[string]config.InferenceBackend{}
-	if got := inference.KeylessBackends(cfg); got != "" {
-		t.Errorf("KeylessBackends = %q, want empty when no backend backs a binding", got)
+	if fixes := s.Fixes(); len(fixes) != 0 {
+		t.Errorf("want no fix command (pix config path is not a real verb), got %v", fixes)
 	}
-}
-
-// The memory line reports the SUPERVISOR's unit, not "something holds the
-// port": a surviving daemon from an older install answers a dial perfectly.
-func TestDoctor_MemoryReportsTheUnitNotThePort(t *testing.T) {
-	bin := buildFixture(t)
-	cfg := &config.Config{Services: []string{"memory"}}
-	base := Options{Budget: 5 * time.Second, SbxBin: bin, SbxArgs: []string{"healthy"},
-		KeyStoreBin: bin, KeyStoreArgs: []string{"keys"}, LaunchctlBin: bin, LaunchctlArgs: []string{"healthy"},
-		UID: 501}
-
-	imposter := base
-	imposter.MemoryPort = memoryUnit(t, "something-else", true)
-	r := result(t, run(t, cfg, imposter), "memory")
-	if !r.Missing() || r.Fix != health.ServeRestartFix {
-		t.Errorf("a port held by another service = %s / %q, want a gap with %q", r.Effective(), r.Fix, health.ServeRestartFix)
+	var out strings.Builder
+	health.RenderDoctorWith(&out, s, health.DoctorOpts{})
+	if !strings.Contains(out.String(), "boom") {
+		t.Errorf("doctor must show the load error as evidence:\n%s", out.String())
 	}
-
-	notReady := base
-	notReady.MemoryPort = memoryUnit(t, rpc.MemoryName, false)
-	if r := result(t, run(t, cfg, notReady), "memory"); !r.Missing() {
-		t.Errorf("a unit answering ready=false = %s, want a gap", r.Effective())
-	}
-}
-
-func TestStatus_AlwaysExitsZeroAndSendsYouToDoctor(t *testing.T) {
-	bin := buildFixture(t)
-	cfg := &config.Config{Services: []string{"memory"}}
-	o := Options{Budget: 5 * time.Second, SbxBin: filepath.Join(t.TempDir(), "gone"),
-		KeyStoreBin: bin, KeyStoreArgs: []string{"nokeys"}, LaunchctlBin: bin, LaunchctlArgs: []string{"notloaded"},
-		MemoryPort: deadPort(t), UID: 501}
-
-	var b strings.Builder
-	code := RenderStatus(context.Background(), cfg, "default", &b, o, false)
-	if code != health.ExitOK {
-		t.Fatalf("status exit = %d; the landing screen must never fail a shell", code)
-	}
-	out := b.String()
-	if !strings.Contains(out, health.DoctorCommand) {
-		t.Errorf("status must point at doctor:\n%s", out)
-	}
-	if !strings.Contains(out, "issues") {
-		t.Errorf("status must count what is outstanding:\n%s", out)
-	}
-	for _, fix := range []string{health.SbxInstallFix, health.ModelKeyFix, health.ServeStartFix} {
-		if strings.Contains(out, fix) {
-			t.Errorf("status printed the repair %q; that is doctor's job:\n%s", fix, out)
-		}
-	}
-	if n := len(strings.Split(strings.TrimSpace(out), "\n")); n > 7 {
-		t.Errorf("status is the glance, got %d lines:\n%s", n, out)
-	}
-}
-
-// status and doctor may differ in DEPTH, never in FACTS. They ask the same
-// probes, so a gap one names is a gap the other names.
-func TestStatusAndDoctorTellTheSameStory(t *testing.T) {
-	bin := buildFixture(t)
-	cfg := &config.Config{Services: []string{"memory"}, Pack: packDir(t)}
-	o := Options{Budget: 5 * time.Second, SbxBin: bin, SbxArgs: []string{"healthy"},
-		KeyStoreBin: bin, KeyStoreArgs: []string{"nokeys"}, LaunchctlBin: bin, LaunchctlArgs: []string{"healthy"},
-		MemoryPort: deadPort(t), UID: 501}
-
-	var statusOut, doctorOut strings.Builder
-	RenderStatus(context.Background(), cfg, "p", &statusOut, o, true)
-	RunDoctor(context.Background(), cfg, "p", &doctorOut, o, true, false)
-
-	var st, dr ReportJSONView
-	if err := json.Unmarshal([]byte(statusOut.String()), &st); err != nil {
-		t.Fatalf("status --json: %v", err)
-	}
-	if err := json.Unmarshal([]byte(doctorOut.String()), &dr); err != nil {
-		t.Fatalf("doctor --json: %v", err)
-	}
-	if st.Exit != dr.Exit || st.Exit != health.ExitNotReady {
-		t.Errorf("status exit field %d, doctor %d; both must publish the verdict %d", st.Exit, dr.Exit, health.ExitNotReady)
-	}
-	if st.Verdict != dr.Verdict || st.Ready != dr.Ready {
-		t.Errorf("verdict/ready disagree: %+v vs %+v", st, dr)
-	}
-	if fmt.Sprint(names(st)) != fmt.Sprint(names(dr)) {
-		t.Errorf("check sets disagree: %v vs %v", names(st), names(dr))
-	}
-	for _, c := range st.Checks {
-		if c.Status != "absent" && c.Status != "denied" && c.Fix != "" {
-			t.Errorf("%s is %s and still carries the fix %q", c.Name, c.Status, c.Fix)
-		}
-	}
-}
-
-func names(v ReportJSONView) []string {
-	var out []string
-	for _, c := range v.Checks {
-		out = append(out, c.Name+"="+c.Status)
-	}
-	return out
 }
 
 func TestReportJSON_SchemaAndFixes(t *testing.T) {
@@ -550,6 +322,7 @@ func TestReportJSON_SchemaAndFixes(t *testing.T) {
 		t.Errorf("checks = %d, want one per probe (%d)", len(v.Checks), len(Probes(cfg, o)))
 	}
 }
+
 func TestDoctor_VerboseAddsEvidenceForReadyChecks(t *testing.T) {
 	cfg, o := healthyHost(t)
 	var concise, verbose strings.Builder
@@ -566,12 +339,104 @@ func TestDoctor_VerboseAddsEvidenceForReadyChecks(t *testing.T) {
 	}
 }
 
-// TestDoctor_SbxAloneIsARequiredGap: DX finding 7 — docs/reference.md used to
-// say exit 1 happens "only when a core requirement (a model provider key, or
-// the config file itself)" verified a gap, omitting sbx — but SbxProbe.
-// Required() is unconditionally true (health/probes.go), so a missing sbx
-// alone, with every other check healthy, is ALSO a required, exit-1-causing
-// gap. This pins that contract so the doc's list can be checked against it.
+// ollamaTagsEnv builds an Options.Env whose OLLAMA_HOST resolves to a fake
+// /api/tags server, so the ollama row in Probes() exercises the real
+// inference.DetectOllama path end to end rather than the zero-value
+// "not installed" default healthyHost otherwise gets.
+func ollamaTagsEnv(t *testing.T, hostOverride string, body string) hostenv.Env {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := hostOverride
+	if host == "" {
+		host = u.Host
+	}
+	fake := &systest.Fake{
+		LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil },
+		GetenvFn:   func(name string) string { return host },
+	}
+	return hostenv.Env{System: fake}
+}
+
+func TestDoctor_OllamaRow_LocalEndpointEmbedModelPresent(t *testing.T) {
+	cfg, o := healthyHost(t)
+	cfg.MemoryEmbedModel = "nomic-embed-text"
+	o.Env = ollamaTagsEnv(t, "", `{"models":[{"name":"nomic-embed-text","size":274000000}]}`)
+	s := run(t, cfg, o)
+	r := result(t, s, "ollama")
+	if !r.OK() {
+		t.Errorf("ollama = %s (%s), want ready: a local endpoint listing the configured embed model", r.Effective(), r.Detail)
+	}
+	if r.Fix != "" {
+		t.Errorf("Fix = %q, want none on a ready row", r.Fix)
+	}
+}
+
+func TestDoctor_OllamaRow_LocalEndpointMissingEmbedModelOffersPull(t *testing.T) {
+	cfg, o := healthyHost(t)
+	cfg.MemoryEmbedModel = "nomic-embed-text"
+	o.Env = ollamaTagsEnv(t, "", `{"models":[{"name":"qwen3.5:9b","size":6600000000}]}`)
+	s := run(t, cfg, o)
+	r := result(t, s, "ollama")
+	if r.Effective() != health.StatusAbsent {
+		t.Fatalf("ollama = %s, want absent (embed model not pulled)", r.Effective())
+	}
+	if r.Fix != "ollama pull nomic-embed-text" {
+		t.Errorf("Fix = %q, want the local pull command", r.Fix)
+	}
+	// Required() is false, so a missing embed model must never fail doctor's
+	// own exit code — Ollama is an optional capability.
+	if s.ExitCode() != health.ExitOK {
+		t.Errorf("exit = %d, want %d: an optional row must never block", s.ExitCode(), health.ExitOK)
+	}
+}
+
+// TestDoctor_OllamaRow_RemoteEndpointModeDetected proves the row's MODE
+// classification is wired end to end off the real OLLAMA_HOST string — the
+// Fix-suppression behavior itself (a reachable remote host with a missing
+// model gets no pull command) is unit-tested directly against OllamaProbe in
+// health/ollama_test.go, where the endpoint can be injected without a real
+// network hop.
+func TestDoctor_OllamaRow_RemoteEndpointModeDetected(t *testing.T) {
+	cfg, o := healthyHost(t)
+	cfg.MemoryEmbedModel = "nomic-embed-text"
+	// team-ollama.internal never actually answers in this test, so the row
+	// reports absent (unreachable) — but it must still report absent, never
+	// a false ready, and its Fix must never claim this host can start a
+	// daemon on someone else's machine.
+	o.Env = ollamaTagsEnv(t, "team-ollama.internal:11434", `{"models":[]}`)
+	s := run(t, cfg, o)
+	r := result(t, s, "ollama")
+	if r.OK() {
+		t.Fatalf("ollama = %s, want NOT ready against an address nothing answers", r.Effective())
+	}
+	if strings.Contains(r.Fix, "start Ollama") {
+		t.Errorf("Fix = %q, must not tell the user to start a daemon they do not own", r.Fix)
+	}
+}
+
+func TestDoctor_OllamaRow_NotInstalledIsOptionalNotAGap(t *testing.T) {
+	cfg, o := healthyHost(t)
+	s := run(t, cfg, o)
+	r := result(t, s, "ollama")
+	if r.Effective() != health.StatusOff {
+		t.Errorf("ollama = %s, want off (no host env wired — zero-value \"not installed\")", r.Effective())
+	}
+	if r.Required {
+		t.Error("ollama row must never be required")
+	}
+}
+
+// TestDoctor_SbxAloneIsARequiredGap: SbxProbe.Required() is unconditionally
+// true (health/probes.go), so a missing sbx alone, with every other check
+// healthy, is ALSO a required, exit-1-causing gap.
 func TestDoctor_SbxAloneIsARequiredGap(t *testing.T) {
 	cfg, o := healthyHost(t)
 	o.SbxBin = filepath.Join(t.TempDir(), "no-sbx-here")

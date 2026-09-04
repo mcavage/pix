@@ -9,9 +9,10 @@ import (
 	"fmt"
 	"os"
 	"pix/host/cli"
+	"pix/host/pixhome"
+	"pix/host/stack"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/task"
-	"pix/host/workspace"
 	"strings"
 )
 
@@ -19,18 +20,20 @@ const taskDescription = `Run parallel tasks on one repo: each task is a checkout
 or a linked worktree with --worktree) with its own branch, so tasks never
 collide. 'rm' persists the branch back into the main repo before the
 checkout goes away, and refuses a dirty/unpushed/live one without --force.
-'pix run --task NAME' is a shorthand for 'pix task run NAME'.`
+'pix run --task NAME' launches an existing task's sandbox directly.`
 
 func (c *taskCmd) Help() string { return taskDescription }
 
-// taskCmd is the verb tree; `list`/`remove` are kong aliases.
+// taskCmd is the v2 four-verb tree: new | ls | path | rm
+// (docs/design/pix-v2-surface.md §3.3). There is no separate 'task run':
+// launch an existing task with 'pix run "$(pix task path NAME)"', or the
+// 'pix run --task NAME' shorthand.
 type taskCmd struct {
 	Usage taskUsageCmd `cmd:"" default:"1" hidden:"" help:"Bare 'pix task' prints the group's usage."`
 	New   taskNewCmd   `cmd:"" help:"Create + launch a new task checkout."`
-	Run   taskRunCmd   `cmd:"" help:"(Re)launch an existing task's sandbox."`
-	Ls    taskLsCmd    `cmd:"" aliases:"list" help:"Tasks, branch, git + sandbox state."`
+	Ls    taskLsCmd    `cmd:"" help:"Tasks, branch, git + sandbox state."`
 	Path  taskPathCmd  `cmd:"" help:"Print the task's checkout dir (for cd)."`
-	Rm    taskRmCmd    `cmd:"" aliases:"remove" help:"Tear down sandbox + checkout (guarded)."`
+	Rm    taskRmCmd    `cmd:"" help:"Tear down sandbox + checkout (guarded)."`
 }
 
 // taskUsageCmd is what bare `pix task` selects: the group's usage, exit 0.
@@ -52,7 +55,11 @@ func taskRepo() (mainroot, stateRoot string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("not a git repository: %w", err)
 	}
-	return mainroot, workspace.TaskStateRoot(), nil
+	home, herr := pixhome.Resolve()
+	if herr != nil {
+		return "", "", herr
+	}
+	return mainroot, home.StateTasks, nil
 }
 
 func taskProbe() func(string) task.SandboxDisposition {
@@ -143,17 +150,6 @@ func taskNew(d *cli.Deps, c *taskNewCmd) error {
 	return dispatchRun(d, runArgv)
 }
 
-// resolveTaskRunArgv resolves an existing task NAME to the argv `pix run` needs to
-// (re)launch its sandbox. argv-in/argv-out rather than a kong struct, because
-// run_cmd.go's `--task` shorthand shares the resolution.
-func resolveTaskRunArgv(name string, rest []string) ([]string, error) {
-	co, sandboxName, err := resolveTaskTarget(name)
-	if err != nil {
-		return nil, err
-	}
-	return append([]string{co, "--name", sandboxName}, rest...), nil
-}
-
 // resolveTaskTarget resolves an existing task NAME to the two facts a launch
 // needs: its checkout directory and its sandbox name. Shared with `pix run
 // --task`, which fills them straight into RunOpts.
@@ -167,22 +163,6 @@ func resolveTaskTarget(name string) (dir, sandboxName string, err error) {
 		return "", "", err
 	}
 	return co, m.Sandbox, nil
-}
-
-// taskRunCmd (re)launches an existing task's sandbox. Rest forwards VERBATIM,
-// including a literal leading "--": that is what `pix run`'s argv parser expects
-// to introduce its pi passthrough.
-type taskRunCmd struct {
-	Name string   `arg:"" help:"Task to (re)launch."`
-	Rest []string `arg:"" optional:"" passthrough:"" help:"Forwarded to 'pix run' as-is."`
-}
-
-func (c *taskRunCmd) Run(d *cli.Deps) error {
-	runArgv, err := resolveTaskRunArgv(c.Name, c.Rest)
-	if err != nil {
-		return err
-	}
-	return dispatchRun(d, runArgv)
 }
 
 type taskListRow struct {
@@ -323,7 +303,16 @@ func taskRm(d *cli.Deps, name string, force bool) error {
 		return err
 	}
 	if disposition != task.SandboxAbsent {
-		if err := launch.RemovePixSandbox(defaultShellEnv(), m.Sandbox); err != nil {
+		// m.Sandbox is a RECORDED name: whichever PIX_HOME created this task
+		// wrote it. On a host where two stacks coexist that may be another
+		// stack's sandbox, and the forced seam alone would happily remove it
+		// (it can only check "is it pix-*"). Validate against THIS stack
+		// first, so `pix task rm` can never reach outside its own namespace.
+		stackID, serr := stack.Current()
+		if serr != nil {
+			return fmt.Errorf("could not resolve this pix stack's identity; leaving %s and the checkout intact: %w", m.Sandbox, serr)
+		}
+		if err := launch.RemoveScopedPixSandbox(defaultShellEnv(), stackID, m.Sandbox); err != nil {
 			return fmt.Errorf("could not remove sandbox %s; leaving the checkout intact: %w", m.Sandbox, err)
 		}
 	}

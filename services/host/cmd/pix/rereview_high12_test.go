@@ -20,13 +20,10 @@ package main
 //     rejected registration.
 
 import (
-	"bytes"
 	"fmt"
 	"pix/host/hostenv"
-	"pix/host/secret"
 	"pix/host/sys/systest"
 	"pix/host/workflow/launch"
-	"strings"
 	"testing"
 	"time"
 )
@@ -82,29 +79,6 @@ func TestProbeTaskSandbox_UsesBoundedSeam(t *testing.T) {
 	}
 }
 
-// TestSetupHandoff_HangingSbxFailsClosed: setup's agent phase probes the
-// sandbox state before any handoff; a hanging sbx is launch.SbxUnknown, which must
-// FAIL CLOSED (never launch) and must not hang.
-func TestSetupHandoff_HangingSbxFailsClosed(t *testing.T) {
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
-	start := time.Now()
-	state := launch.ProbeTaskSandbox(env, "pix-ws")
-	if state != launch.SbxUnknown {
-		t.Fatalf("hanging probe must be launch.SbxUnknown, got %v", state)
-	}
-	var out bytes.Buffer
-	err := runSetupHandoff(".", "pix-ws", state, &out, func([]string) error {
-		t.Fatal("setup must never launch on an indeterminate sandbox state")
-		return nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "cannot determine the state") {
-		t.Errorf("setup with an unknown sandbox state must fail closed, got: %v", err)
-	}
-	if el := time.Since(start); el > 10*time.Second {
-		t.Fatalf("setup state path took %s — unbounded", el)
-	}
-}
-
 // TestLocalImageLoaded_HangingSbxBounded: `pix run --dev`'s image-loaded
 // preflight (`sbx template ls`) is read-only; a hang is bounded and degrades
 // to the documented fail-open "no signal" answer — never a wedge, and never
@@ -123,27 +97,6 @@ func TestLocalImageLoaded_HangingSbxBounded(t *testing.T) {
 	}
 }
 
-// TestEnsureProviderKeysFromRefs_HangingSbxBoundedNoMutation: the secret-sync
-// read probe (`sbx secret ls`) is bounded; on a hang the sync returns without
-// guessing — it must never reach op or `sbx secret set`.
-func TestEnsureProviderKeysFromRefs_HangingSbxBoundedNoMutation(t *testing.T) {
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, GetenvFn: func(string) string { return "" }, HomeDirFn: func() string { return "/home/u" }, ReadFileFn: func(string) (string, error) {
-		return "ANTHROPIC_API_KEY=op://Vault/Anthropic/api key\n", nil
-	}, RunFn: func(name string, args ...string) (string, error) {
-		t.Fatalf("a hung `sbx secret ls` must abort the sync before any op/sbx mutation: %s %v", name, args)
-		return "", nil
-	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
-	var out bytes.Buffer
-	start := time.Now()
-	secret.EnsureProviderKeysFromRefsLocked(env, &out)
-	if el := time.Since(start); el > 10*time.Second {
-		t.Fatalf("secret.EnsureProviderKeysFromRefsLocked took %s — unbounded", el)
-	}
-	if strings.Contains(out.String(), "resolved") {
-		t.Errorf("a hung probe must not claim any key was resolved, got:\n%s", out.String())
-	}
-}
-
 // TestBuildTrustedHostState_HangingSbxBounded: setup's trusted host-state
 // payload reads `sbx secret ls`; a hang must leave every key un-claimed
 // (sbxOK=false semantics) and complete quickly.
@@ -155,7 +108,7 @@ func TestBuildTrustedHostState_HangingSbxBounded(t *testing.T) {
 		return "", fmt.Errorf("no fake output")
 	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
-	hs := launch.BuildTrustedHostState(defaultCfg(), env, "")
+	hs := launch.BuildTrustedHostState(defaultCfg(), env)
 	if el := time.Since(start); el > 10*time.Second {
 		t.Fatalf("launch.BuildTrustedHostState took %s — unbounded", el)
 	}

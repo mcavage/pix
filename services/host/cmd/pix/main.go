@@ -1,8 +1,8 @@
-// pix — the user-facing launcher for the pix sandbox: a standalone binary a
-// consumer installs without cloning the repo. It reads ~/.config/pix config and
-// shells out to `sbx run pix`, pinning the git-hosted kit to this build's stamped
-// version, and shares pix-host's config package so the two agree on config
-// location.
+// pix — the only host binary and the only user-facing CLI (there is no
+// separate pix-host binary in v2). A consumer installs it without cloning
+// the repo; it resolves PIX_HOME (default ~/.pix, no XDG split) and shells
+// out to `sbx run` against the pinned pix-agent image and kit
+// (pi-kit/spec.yaml), stamped to this build's version.
 //
 // The verb tree is root.go's rootCmd — the one parser, the one dispatcher, and (via
 // `pix help --all`) the one listing. main owns only what comes BEFORE a parse: what
@@ -31,39 +31,55 @@ func init() { launcher.Version = version }
 
 func main() {
 	args := os.Args[1:]
+	deps := newRootDeps()
+	exitCode := 0
 
 	if len(args) == 0 {
-		// On a fresh host with no config, onboarding comes before anything else.
-		if provision.MaybeFirstRun(os.Stdout) {
-			return
+		interactive := cli.IsTTY(os.Stdin)
+		firstRun := provision.FirstRunNeeded()
+		if interactive && firstRun {
+			fmt.Fprintln(os.Stdout, "pix: first run; setting up this PIX_HOME before launch")
 		}
-		args = bareArgs(cli.IsTTY(os.Stdin))
+		exitCode = runBareInvocation(interactive, firstRun, func(args []string) int {
+			return dispatch(args, deps)
+		})
+	} else {
+		exitCode = dispatch(args, deps)
 	}
 
-	// Everything else is the root's: one parser, one dispatch, one exit map.
-	if code := dispatch(args, newRootDeps()); code != 0 {
-		os.Exit(code)
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }
 
-// bareArgs decides what plain `pix` means. At a terminal it is the thing you
-// almost always wanted: `run` here, which attaches to this directory's sandbox if
-// one is already up and creates it otherwise. Typing the tool's name to be told
-// what is up, and then having to type a second command to actually work, is a
-// toll on every single session.
-//
-// It stays STATUS when stdin is not a terminal, and that half is load-bearing: an
-// implicit launch is only ever safe when a human is sitting there to have meant
-// it. `pix` in a script, a pipe, a CI step, or an editor task must never create or
-// attach a sandbox as a side effect of someone asking for a status line, so the
-// non-interactive answer stays the read-only one. This mirrors the identical rule
-// on a bare positional (`pix DIR`, see dispatch): bare launches need a TTY, the
-// explicit `pix run` never does.
-func bareArgs(interactive bool) []string {
-	if interactive {
-		return []string{"run"}
+// runBareInvocation executes the complete bare-pix sequence. Keeping setup and
+// run in this one function makes a successful first-run setup structurally
+// unable to return to the shell before the launch dispatch occurs.
+func runBareInvocation(interactive, firstRun bool, run func([]string) int) int {
+	if !interactive {
+		return run([]string{"ls"})
 	}
-	return []string{"status"}
+	if firstRun {
+		if code := run([]string{"setup"}); code != 0 {
+			return code
+		}
+	}
+	return run([]string{"run"})
+}
+
+// planBareInvocation preserves the implicit-launch safety boundary while making
+// the interactive first run real: setup must succeed before the ordinary run.
+// Explicit `pix run` never passes through here and remains the setup opt-out.
+func planBareInvocation(interactive, firstRun bool, setup func() int) (args []string, code int, stop bool) {
+	if !interactive {
+		return []string{"ls"}, 0, false
+	}
+	if firstRun {
+		if code := setup(); code != 0 {
+			return nil, code, true
+		}
+	}
+	return []string{"run"}, 0, false
 }
 
 // looksLikePath reports whether a non-flag token is meant as a filesystem path (so
@@ -110,33 +126,25 @@ func classifyBareArg(a string) (msg string, launch bool) {
 	return msg, false
 }
 
-// hostBinaryResolver locates pix-host. "Which pix-host am I paired with" is an
-// identity question the launcher package answers; the var exists so a test can
-// inject a fake `pix-host mcp --list` responder for setup's MCP partition.
-var hostBinaryResolver = launcher.FindHostBinary
-
 const helpText = `pix: a personal, multi-model pi coding agent in a Docker sandbox.
 
 Usage:  pix <command> [args]
 
 New here?   pix setup      one-time guided setup (a few minutes, resumable)
 
-Workflow
+Workflow & parallel work
   run [DIR]        launch or re-attach DIR's sandbox (default: .) — plain "pix"
   ls               list your pix sandboxes;  rm <name>  removes one
-  serve            start the host services (memory); ` + "`serve stop|status`" + `
-  status           what is up, what is down, what is next
+  task             parallel task checkouts: new | ls | path | rm
 
 Setup & health
-  setup            guided setup: keys, memory, pack (integrations optional)
+  setup            guided setup: PIX_HOME, images, the memory container
   doctor           diagnose problems and print the exact fix commands
+  reset            clean slate: remove sandboxes + memory container, back up ~/.pix
 
-Data, models & observability
-  memory           recall | remember | forget | stats
-  models           which models pix can use, and which are wired up
-  agent            the subagent roster: each agent's resolved model, and why
+Environments & credentials
+  env              named environments under ~/.pix/envs: list | add | show | default | trust
+  secret           1Password references: list | set | rm | check
 
-More             config, pack, mcp, secret, task, reset, version   (see ` + "`pix help --all`" + `)
-
-Learn a command:  pix help run     ·     pix <command> -h
+Learn a command:  pix help run     ·     pix <command> -h     ·     pix help --all
 `

@@ -1,0 +1,78 @@
+fast gate (non-race) — budget 0.000s absolute, target 120.000s
+
+  go-build       0.924s  ok
+  go-vet         0.379s  ok
+  go-test       14.432s  ok
+  node-test      9.977s  ok
+  typecheck      0.885s  ok
+  open-core      0.666s  ok
+  recall-xport   0.021s  ok
+  secret-scan    1.235s  ok
+  arch-metrics   0.353s  ok
+  deadcode       6.278s  ok
+  rename-guard   0.469s  ok
+
+go packages:
+  ok  	pix/host	2.942s
+  ok  	pix/host/cli	0.008s
+  ok  	pix/host/cmd/pix	7.760s
+  ok  	pix/host/cmd/pix/corpus	0.788s
+  ok  	pix/host/config	0.043s
+  ok  	pix/host/envinfo	0.016s
+  ok  	pix/host/health	3.654s
+  ?   	pix/host/hostenv	[no test files]
+  ok  	pix/host/hosttrust	0.017s
+  ok  	pix/host/inference	0.005s
+  ?   	pix/host/launcher	[no test files]
+  ok  	pix/host/lease	0.887s
+  ok  	pix/host/mcp	0.038s
+  ok  	pix/host/memory	0.005s
+  ok  	pix/host/packinfo	0.005s
+  ok  	pix/host/plugin	0.003s
+  ok  	pix/host/recreatelog	0.285s
+  ok  	pix/host/routing	0.007s
+  ?   	pix/host/rpc	[no test files]
+  ok  	pix/host/sandbox	0.011s
+  ok  	pix/host/secret	0.195s
+  ok  	pix/host/service	0.477s
+  ok  	pix/host/supervise	13.429s
+  ok  	pix/host/sys	0.568s
+  ?   	pix/host/sys/systest	[no test files]
+  ok  	pix/host/uat	0.273s
+  ok  	pix/host/uatenvmatrix	1.108s
+  ok  	pix/host/uatmatrix	0.003s
+  ok  	pix/host/unitreport	0.002s
+  ?   	pix/host/unitreport/unitreporttest	[no test files]
+  ok  	pix/host/workflow/doctor	0.118s
+  ok  	pix/host/workflow/env	0.236s
+  ok  	pix/host/workflow/launch	0.674s
+  ok  	pix/host/workflow/models	0.086s
+  ok  	pix/host/workflow/pack	0.537s
+  ok  	pix/host/workflow/provision	0.135s
+  ok  	pix/host/workflow/reset	0.024s
+  ok  	pix/host/workflow/task	0.375s
+  ok  	pix/host/workflow/uat	7.080s
+  ok  	pix/host/workspace	0.040s
+
+total: 35.622s
+budget: ok — under the 120.000s target
+
+reviewable findings (over 1.000s — comment, not a block):
+  go-test      5.020s  TestVerifyOllamaInferenceUsesResolvedEndpoint
+  go-test      3.030s  TestDaemonRefusesWhenAnotherProcessOwnsThePort
+  go-test      2.730s  TestHolderUseNeverMissesInflightBeforeDrain
+  go-test      2.110s  TestSbxVersionGate_MissingOrDeniedNeverBlocks
+  go-test      2.020s  TestAdapters_MCPAuthDeadlineOutranksTheKilledProcess
+  go-test      2.009s  TestDaemonWedgedIsEvicted
+  go-test      1.660s  TestDaemonSlowStartIsNotAFailure
+  go-test      1.300s  TestDaemonNeverBindingFailsWithinTheBudget
+  go-test      1.130s  TestBrowserAllocatorArgv
+  go-test      1.050s  TestRunner_CandidateBuildConcurrency
+  go-test      1.000s  TestCheckEnvironmentCreateThenExecInvocation_FreshProbeFailureFailsTheCheck
+  node-test    5.098s  multi-shell FIFO holds (behavioral): two real background sessions stay alive with zero bytes sent, released one then the other, deterministically — even with a delayed create/attach, proving the waits actually wait rather than winning a timing race
+  node-test    1.919s  multi-shell FIFO holds (behavioral): readiness needing MORE than 30 polls still succeeds under the cold-pull windows (180s create / 90s attach), proven via shrunk injectable poll-interval/window constants rather than real minutes of sleep
+  node-test    1.326s  a silent TOOL call outliving the short idle budget is not killed
+  node-test    1.274s  the tool budget never demotes an explicit longer per-agent idle_ms
+  node-test    1.051s  scripts/check-third-party-notices.sh passes on the real tree
+
+timing artifact: out/gate/timing.json (logs in out/gate/logs/)

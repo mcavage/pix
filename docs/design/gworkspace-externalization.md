@@ -1,5 +1,12 @@
 # Google Workspace externalization (W2/U02B)
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: **SUPERSEDED — historical record only.** This unit shipped while still
 marked merge-blocked, and the half-finished rip it left behind is the subject of
 `docs/design/integrations-remediation.md`, which is the state of record now. Read

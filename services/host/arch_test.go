@@ -10,7 +10,7 @@ package main
 //	L3  workflow/*     orchestrate L1+L2
 //	L2  health         L1 probes -> a Snapshot
 //	L1  capability/*   one domain each; MAY NOT import each other
-//	L0  foundation     sys, config, routing, rpc, cli, hostenv
+//	L0  foundation     sys, config, rpc, cli, hostenv
 //
 // The sideways ban on L1 is the load-bearing clause. The 40,905-line package
 // this architecture replaces was a web precisely because capabilities called
@@ -57,8 +57,6 @@ var pkgLayer = map[string]int{
 	// caller.
 	"sys/systest": layerFoundation,
 	"config":      layerFoundation,
-	"routing":     layerFoundation,
-	"rpc":         layerFoundation,
 	"cli":         layerFoundation,
 	// hostenv, unlike sys/systest, is genuinely production L0: pack, provision,
 	// launch, doctor, models, secret, inference and mcp all import it from
@@ -77,30 +75,22 @@ var pkgLayer = map[string]int{
 	// mis-read that made two legitimate users (memory, knowledge) look like
 	// sibling violations.
 	"workspace": layerFoundation,
-	// unitreport is the SERIALIZED supervision snapshot and nothing else: no
-	// process, no lifecycle, no imports outside the stdlib. It is L0 because
-	// supervise (L2) writes it while service (L1) and workflow/doctor (L3) read
-	// it — a shape shared by three layers cannot live in any one of them.
-	"unitreport": layerFoundation,
-	// unitreport/unitreporttest is placed and layer-checked like sys/systest: a
-	// shared table of supervision-snapshot scenarios that `service` and
-	// `workflow/doctor` both classify (see its doc comment). Its every importer
-	// is a _test.go file; it stays production-shaped for the same reason
-	// sys/systest does — a package built only from _test.go files cannot be
-	// imported by another package's tests.
-	"unitreport/unitreporttest": layerFoundation,
 
 	// L1 — capability. One domain each, siblings invisible to each other.
 	//
-	// okf and knowledge (the built-in OKF knowledge service, :11436) are
-	// deliberately ABSENT from this map: W2/U03A deleted the package outright,
-	// not merely its callers. A placement entry for a package that no longer
-	// exists on disk is a GHOST — see TestArchitecture_NoGhostPlacements below,
-	// which fails the day one lingers instead of relying on someone noticing.
+	// okf and knowledge (the built-in OKF knowledge service, :11436), and
+	// `unitreport`/`unitreport/unitreporttest`, `service`, `supervise`, `plugin`,
+	// `memory` (the pre-v2 host memory CLI + custom JSON-RPC), `rpc`,
+	// `packinfo`, `uat`/`uatmatrix`/`uatenvmatrix`, `workflow/pack` and
+	// `workflow/uat` are deliberately ABSENT from this map: the Pix v2 deletion
+	// sweep (docs/design/pix-v2-architecture.md §14, AC-16) removed
+	// `pix-host serve`'s Suture supervision tree, the pack system, the
+	// self-development UAT candidate harness, and the custom memory JSON-RPC
+	// daemon outright, not merely their callers. A placement entry for a
+	// package that no longer exists on disk is a GHOST — see
+	// TestArchitecture_NoGhostPlacements below, which fails the day one lingers
+	// instead of relying on someone noticing.
 	"inference": layerCapability,
-	"plugin":    layerCapability,
-	"service":   layerCapability,
-	"memory":    layerCapability,
 	"secret":    layerCapability,
 	"mcp":       layerCapability,
 	// sandbox is U04b's focused L1 sandbox domain: naming, the tolerant sbx-
@@ -108,13 +98,22 @@ var pkgLayer = map[string]int{
 	// non-force removal planning. Pure and dependency-free (see sandbox/doc.go),
 	// same tier as its capability siblings, invisible to them.
 	"sandbox": layerCapability,
-	// packinfo is the READ-ONLY pack model — pack.toml's schema, the fail-closed
-	// loader, active-root resolution and the facts derived from them. It exists
-	// because launch, doctor and provision all need "what pack is active and what
-	// does it declare" and NONE of them may import workflow/pack to ask: that was
-	// the L3-to-L3 web this file now forbids outright. Trust and adoption stay at
-	// L3; this package reads, validates, and decides nothing.
-	"packinfo": layerCapability,
+	// session is the v2 session tree (docs/design/pix-v2-architecture.md
+	// §7): tree/node records plus the flock reference holders that decide
+	// whether a sandbox is still claimed. Like sandbox and lease it is pure
+	// mechanism over the filesystem — stdlib only, no sibling imports — so
+	// launch can build the holder census on it without dragging a workflow
+	// dependency down into a capability.
+	"session": layerCapability,
+	// hosttrust is E1.4's launcher-owned host-exec trust mechanism, extracted
+	// from the (now-deleted) pack system: canonical identity, the fingerprint
+	// engine, the one Record/AcceptanceStore shape keyed by an opaque
+	// Subject{Kind,Root}, the flock-serialized fresh-load->mutate->save shape,
+	// symlink-refused atomic document I/O, and content hashing. Pure mechanism
+	// only — it has no knowledge of environments or anything else that HAS a
+	// host-exec surface — so, like every other L1 capability, it imports no
+	// sibling.
+	"hosttrust": layerCapability,
 	// workflow/task is Story06's L1 task-checkout capability: naming, metadata,
 	// the clone/worktree mechanism, and the git-hygiene removal guard, with NO
 	// import of workflow/launch, any sandbox runner, or lease (see its doc
@@ -122,20 +121,72 @@ var pkgLayer = map[string]int{
 	// surface it backs, but it is a leaf capability, not a workflow: it composes
 	// nothing below it and orchestrates no other capability.
 	"workflow/task": layerCapability,
-	"uat":           layerCapability,
-	// uatmatrix is the host-backed candidate-memory probe: subprocess, RPC and
-	// fixture mechanics only. workflow/uat supplies run-local paths and invokes
-	// it; the probe imports no capability sibling and owns no orchestration.
-	"uatmatrix": layerCapability,
+	// envinfo is Story 1's L1 native-environment capability (docs/design/
+	// environments.md §5.1): strict `.sbxenv.yaml` v1 parsing, upstream's
+	// documented multi-file merge semantics, local relative kit-path
+	// resolution against the SOURCE FILE's own directory, and the
+	// PRE-COMPOSITION semantic tree (stable identity key paths, host-exec
+	// facets, surfaced-never-resolved `${VAR}` interpolation references).
+	// It imports no sibling capability — see envinfo/doc.go — and it takes
+	// no dependency on `sandbox`: a caller supplies any rendered `pix-*`
+	// name itself. It is the ONE package allowed to decode a struct tagged
+	// `yaml:"schemaVersion"` for this schema; see
+	// TestOnlyEnvinfoDecodesNativeEnvYAML below.
+	"envinfo": layerCapability,
+	// recreatelog is E1.6's local-only bounded diagnostic log of environment
+	// recreate-boundary drift (docs/design/environments.md section 10.2):
+	// timestamp, environment name, and canonical changed key paths only, never
+	// facet values, credential names, argv, or a path outside the environment
+	// root (see its doc.go). It has NO L1 siblings in the load-bearing sense —
+	// it imports nothing from this module at all (recreatelog/guard_test.go's
+	// F10 pins that from inside the package too) and nothing else in L1 imports
+	// it; wiring it into a reader (doctor or otherwise) is explicitly deferred
+	// past this unit.
+	"recreatelog": layerCapability,
+	// container is this unit's Docker adapter + reconciliation for the one
+	// named pix-memory container (docs/design/pix-v2-architecture.md §9.1):
+	// docker inspect/create/start/stop/rm argv, the config fingerprint that
+	// decides adopt vs start vs replace, and the injectable post-reconcile
+	// readiness Prober. Pure docker-CLI + HTTP mechanism, no sibling import,
+	// same tier as sandbox and session.
+	"container": layerCapability,
 
-	// supervise sits ABOVE the capabilities on purpose: it is the process
-	// lifecycle that RUNS one (plugin), not a domain of its own. Filing it at L1
-	// would make its plugin import a sideways call; filing it at L2 states the
-	// truth — it composes the plugin capability into supervised units, and only
-	// the daemon entry point (package main) consumes it.
-	"supervise": layerReadiness,
+	// pixhome is Pix v2 U1's PIX_HOME resolution + home-directory layout and
+	// idempotent initialization (docs/design/pix-v2-architecture.md §5): where
+	// is the one root, what lives under it, and how `git init -b main` plus
+	// the fixed directory/README/.gitignore set get created without ever
+	// overwriting something already there. It is L0 like config and workspace
+	// — pure path/location resolution, no domain knowledge — but it imports
+	// nothing from this module at all, unlike config's still-XDG-aware
+	// StateDir/DataDir. It is deliberately independent of config: collapsing
+	// the REST of the launcher's paths onto PIX_HOME is a later cutover step
+	// (architecture §13 step 4), not U1.
+	"pixhome": layerFoundation,
+	// stack is Wave A U1's foundation package ("one PIX_HOME = one stack"):
+	// the single producer of a PIX_HOME's stable stack ID (sha256 of its
+	// canonicalized path, first IDLen hex characters) and every resource
+	// name a later capability derives from it — a scoped sandbox prefix, the
+	// per-stack pix-memory container/MCP names, and the per-stack local
+	// image tag grammar. Like pixhome and release it takes no intra-module
+	// dependency other than pixhome itself (Current derives from
+	// pixhome.Dir), so it sits in L0 beside them, not among the L1
+	// capabilities its naming helpers exist to feed.
+	"stack": layerFoundation,
+	// unitreport, unitreport/unitreporttest, plugin, service, memory (the
+	// pre-v2 host memory CLI), and the custom memory JSON-RPC package rpc are
+	// deleted — see the L1 comment above.
+	// release is Pix v2 U1's release-manifest schema (docs/design/
+	// pix-v2-architecture.md §3, §12): the one document binding a Pix version
+	// to the pix-agent digest, pix-memory digest, runtime archive digest, and
+	// kit revision, its parser/validation, and the on-disk install-state
+	// location. It takes a home path as a plain string parameter rather than
+	// importing pixhome, so it has no intra-module imports either.
+	"release": layerFoundation,
 
 	// L2 — the shared model of "is this working".
+	//
+	// supervise (the Suture process supervisor that ran `plugin` capability
+	// units) is deleted with `pix-host serve` — see the L1 comment above.
 	//
 	// The readiness/axis pair that used to live here is GONE (W5/U11r): a
 	// Requirement × Verdict matrix, a lazy axis registry, four exit codes and two
@@ -145,7 +196,15 @@ var pkgLayer = map[string]int{
 	// only by history went to the domains that own them (model resolution,
 	// endpoint resolution and machine sizing to inference; "is a model key
 	// present" to secret; the launch gate and its warnings to workflow/launch).
-	"health": layerReadiness,
+	// envsetup is the environment `[[setup]]` hook runner: check, apply,
+	// check again, against ONE already-reviewed hook list a caller hands it.
+	// It sits at L2 beside health for the same reason health does — it
+	// PROVES readiness and owns no verb — and it deliberately does not
+	// import workflow/env: it OWNS the resolved-hook type (envsetup.Hook,
+	// aliased there as SetupHookFact) so the workflow that fingerprints a
+	// hook and the runner that executes it cannot disagree about it.
+	"envsetup": layerReadiness,
+	"health":   layerReadiness,
 
 	// L3 — workflow. A user-facing verb's logic. Allowed to compose L1+L2;
 	// may not contain a capability.
@@ -160,8 +219,8 @@ var pkgLayer = map[string]int{
 	// archive format, and not this launcher package.
 	//
 	// workflow/reset is `pix reset`, BACK after U11r cut it: the manual,
-	// evidence-first walk that replaced it (`pix doctor` -> `pix config path` ->
-	// move things aside by hand -> `pix setup`) is the right RECOVERY story but
+	// evidence-first walk that replaced it (`pix doctor` -> open <PIX_HOME>/config.toml
+	// by hand -> move things aside -> `pix setup`) is the right RECOVERY story but
 	// was never a clean-slate story, and "start over" is a thing users ask for
 	// on its own. What U11r was actually right about is preserved in the shape,
 	// not the absence: nothing durable is hard-deleted, and the sandbox half is
@@ -187,8 +246,16 @@ var pkgLayer = map[string]int{
 	// its headless-spawn probing) was externalized the same way in W2/U02B — see
 	// docs/design/gworkspace-externalization.md — so that package is gone too;
 	// gog is registered generically through `pix mcp register`.
-	"workflow/pack":   layerWorkflow,
 	"workflow/doctor": layerWorkflow,
+	// workflow/env is E1.7's new L3 workflow (native-environment registry,
+	// exact-name resolution, location/symlink refusals — docs/design/
+	// environments.md §5.3/§8.1). It is filed under workflow/ like
+	// workflow/task, but unlike that leaf capability it IS a workflow: it
+	// composes config (L0) with the hosttrust and envinfo L1 capabilities
+	// and orchestrates nothing beneath it directly. It imports no other
+	// workflow/* package (the sibling-workflow rule below) and carries no
+	// `pix env` verb yet — that is E1.9-E1.13's cmd/pix wiring.
+	"workflow/env":    layerWorkflow,
 	"workflow/launch": layerWorkflow,
 	// workflow/models is `pix models add`: the inference selection, live
 	// verification and roster machinery that used to be welded into setup's
@@ -201,7 +268,6 @@ var pkgLayer = map[string]int{
 	// no domain knowledge of its own.
 	"workflow/provision": layerWorkflow,
 	"workflow/reset":     layerWorkflow,
-	"workflow/uat":       layerWorkflow,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,
@@ -212,34 +278,36 @@ var pkgLayer = map[string]int{
 	// skips packages with no production .go files for exactly this reason —
 	// a package that is entirely tests has no layer to place, the same way it
 	// has no budget to track in scripts/arch-metrics/budgets.json.
-
-	// "." is the pix-host daemon binary's own root package — a separate program
-	// from cmd/pix, but the same shape: argv/RPC in, dispatch out. It was
-	// exempted (-1) as a placeholder; it earns L4 honestly — its production
-	// imports (config, cli, routing, inference, plugin, supervise,
-	// workflow/pack) are all L0-L3, so it satisfies the down-only rule without
-	// help. Its examples/ tree is gone with the MCP plugin transport it
-	// demonstrated (U11j).
-	".": layerCommand,
+	//
+	// "." (the pix-host daemon binary's own root package) is gone the same
+	// way: the Pix v2 cutover deleted pix-host outright (AC-16), so services/
+	// host's root directory carries no production .go file any more — only
+	// this file and arch_effective_test.go, which scanPackages already
+	// excludes. A ghost "." entry here would fail
+	// TestArchitecture_NoGhostPlacements the same as any other deleted package.
 }
 
 // l0Order breaks ties inside L0, which is the one layer with internal
-// structure: sys and config are the true bottom, and cli/hostenv are allowed to
-// build on them. Without this, "equal layers may not import each other" would
-// forbid cli from importing sys, which is nonsense.
-// Ranks, lowest first: config and routing are pure file formats with no
-// dependencies at all; sys sits above them because sys.Real.StateDir delegates
-// to config, which is correct — the OS seam should not re-derive the launcher's
-// data layout.
+// structure: pixhome, sys, and config are the true bottom, and cli/hostenv
+// are allowed to build on them. Without this, "equal layers may not import
+// each other" would forbid cli from importing sys, which is nonsense.
+// Ranks, lowest first: pixhome is PIX_HOME resolution with no dependencies at
+// all (stdlib only, docs/design ledger item "old config XDG fallback" — QA
+// F5); stack sits one rank above it for the same reason config does — its
+// only intra-module import is pixhome (Current derives from pixhome.Dir) —
+// and shares config's rank because neither imports the other; config is a
+// pure file format that also delegates its own path resolution to pixhome
+// (config.Path/StateDir/DataDir all route through PIX_HOME, never a second
+// XDG root); sys sits above that because sys.Real.StateDir delegates to
+// config, which is correct — the OS seam should not re-derive the
+// launcher's data layout.
 var l0Order = map[string]int{
-	"config": 0, "routing": 0, "unitreport": 0,
-	"sys": 1, "rpc": 1, "launcher": 1,
-	"workspace":   2,
-	"sys/systest": 2, "hostenv": 3,
-	"cli": 4,
-	// unitreporttest imports only unitreport (rank 0), so any rank above that
-	// satisfies the strictly-lower-rank rule; parked alongside cli.
-	"unitreport/unitreporttest": 4,
+	"pixhome": 0,
+	"config":  1, "stack": 1,
+	"sys": 2, "launcher": 2,
+	"workspace":   3,
+	"sys/systest": 3, "hostenv": 4,
+	"cli": 5,
 }
 
 // drainingPackages was the ONLY exemption, and it is now EMPTY: cmd/pix was
@@ -352,6 +420,77 @@ func TestArchitecture_SiblingWorkflowRuleIsEnforced(t *testing.T) {
 	checkImports(clean, map[string][]string{from: nil, to: nil})
 	if clean.Failed() {
 		t.Errorf("two workflows importing nothing must satisfy the rule; the check is over-broad")
+	}
+}
+
+// TestArchitecture_UatenvmatrixNeverImportsEnvinfo (the uatenvmatrix host-
+// backed native-environment probe never importing envinfo's own renderer,
+// ADR-ENV-003) was deleted along with the uatenvmatrix package itself: the
+// self-development UAT candidate-testing harness it backed went with
+// `pix-host` in the Pix v2 cutover (AC-16). There is no longer a second
+// prover of the upstream `.sbxenv.yaml` contract to keep independent of
+// envinfo's own renderer.
+
+// TestOnlyEnvinfoDecodesNativeEnvYAML (F3) is the import-graph guard the
+// implementation plan asks for: envinfo/document.go is the ONE place in
+// this module allowed to declare a struct field tagged
+// `yaml:"schemaVersion"` — the exact tag a native `.sbxenv.yaml` v1
+// decode target must carry (envinfo/document.go's own Document.SchemaVersion
+// field). A second package growing that tag would be a second, silently
+// diverging native-env parser/loader, which is precisely the "one package
+// owns native sbx env grammar" fitness function docs/design/environments.md
+// section 14 lists. This scans Go SOURCE TEXT rather than only import
+// edges, because uatenvmatrix's own fixtures.go legitimately contains the
+// literal bytes `schemaVersion:` inside hand-authored YAML string
+// constants (never a struct tag) — a decode-target guard must tell
+// "declares a field for this" apart from "embeds these bytes as data",
+// which an import-graph check alone cannot.
+func TestOnlyEnvinfoDecodesNativeEnvYAML(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const tag = `yaml:"schemaVersion"`
+	var offenders []string
+	scanned := 0
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); name == "testdata" || strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if rel == "envinfo/document.go" {
+			return nil
+		}
+		content, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		scanned++
+		if strings.Contains(string(content), tag) {
+			offenders = append(offenders, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned < 50 {
+		t.Fatalf("walk scanned only %d production .go files; that is implausibly few and means this guard is scanning nothing", scanned)
+	}
+	sort.Strings(offenders)
+	if len(offenders) > 0 {
+		t.Fatalf("only services/host/envinfo/document.go may declare a %s struct field; also found in: %v\n"+
+			"envinfo is the one package that decodes native `.sbxenv.yaml` — see envinfo/doc.go", tag, offenders)
 	}
 }
 

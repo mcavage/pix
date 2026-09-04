@@ -1,0 +1,17 @@
+=== 59. pix status: run hint should appear once (workspace has .sbxenv.yaml, not registered) ===
+pix dev
+✗ 2 of 3 required checks failed
+  missing  sbx memory
+  unknown  providers launchd github
+  2 issues. Run `pix doctor` for the exact fix commands.
+exit=0
+
+=== 60. pix status again: hint suppressed (shown once) ===
+pix dev
+✗ 2 of 3 required checks failed
+  missing  sbx memory
+  unknown  providers launchd github
+  2 issues. Run `pix doctor` for the exact fix commands.
+exit=0
+
+=== 61. pix doctor: no-env-row when no environments registered ===

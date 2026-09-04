@@ -25,39 +25,30 @@ tells you it works. No step is optional; skipping one and marking it OK is a
 false signal.
 
 ### A1. Inference availability
-```bash
-cat ~/.pi/agent/inference.json
-cat ~/.pi/agent/routing.json
-```
-The generated inference manifest and compiled routes are authoritative. One
-working route is sufficient; every vendor is not required. Never classify
-missing native env keys as failures when a custom gateway or Ollama supplies
-the resolved models. `proxy-managed` is a sentinel, not secret evidence and not
-a direct API key. Exercise the session model plus the three-agent routing smoke
-test in A5; do not independently fan out across every model or agent.
+The active session model answering a real turn is the primary evidence. A
+runtime `inference.json` may exist when Pix synthesized custom providers, but
+its absence is normal for a native provider. **NEVER mark a missing
+`inference.json` degraded and NEVER recommend configuring an inference roster
+for a native provider.**
+`models-store.json` is Pi state, not proof that every listed provider is callable.
+One working model is sufficient; every vendor is not required. `proxy-managed`
+is a sentinel, not secret evidence. Exercise the current session plus the agent
+smoke test in A5; do not fan out across every model.
 
 ### A2. Memory service
-This raw curl is an explicit **harness diagnostic**, it hits the daemon directly
-to verify the service itself is up, separate from whether any memory has been
-captured yet. It is NOT how a normal agent workflow reads memory; that's the
-`memory_recall`/`memory_stats` tools (or `/recall`/`/remember`/`/forget` in the
-sandbox, `pix memory stats` on the host), which is the path to point
-someone at for actually using memory.
-```bash
-curl -s -m3 -X POST "${MEMORY_URL:-http://host.docker.internal:11435}" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"health"}' || echo "no memory service"
-```
-Reads as `{"ok":true,"vector":<bool>,"capture":<bool>,"captureReason":"<string>","watcherModel":"<name>"}`.
-`ok` means the daemon answered at all, "no memory service" (a failed curl)
-means the host hasn't started it (`make memory-serve` / `pix serve` on the
-host); the harness still works, recall is just empty. Given `ok`, report the
-other fields as **daemon-reported state**, not proof of a live inference:
-`vector:true` means the startup embedding probe succeeded, but a later failure
-can still force keyword-only fallback; `capture:true` means the watcher is not
-currently latched unavailable, but it does not prove the next chat request will
-finish. `capture:false` plus `captureReason` is a confirmed degraded state, so
-quote that reason. A full end-to-end check requires an actual recall/capture
-operation; do not certify those paths from `health` alone.
+Memory is MCP through the sbx Gateway. Do not curl `host.docker.internal`, the
+Gateway URL, or a guessed `/healthz`; the sandbox does not own the container's
+loopback endpoint. Call `memory_status`, `memory_stats`, and one small
+`memory_recall` instead. A successful zero-count response proves the service is
+reachable and the store is empty.
+
+`embed_model` is the service's built-in candidate name, not proof that the
+selected environment configured an embedding backend. `embed_healthy:false`
+means recall is keyword-only; by itself it does not make overall harness health
+degraded. Call it a degradation only when independent environment evidence
+proves the user configured or required semantic recall and that backend failed.
+In that case point only to host-side `pix doctor`.
+`capture_mode: explicit` is the normal default, not a failure.
 
 ### A3. MCP servers
 ```
@@ -84,26 +75,19 @@ done
 ```
 For each present CLI, run a cheap live probe and read the output: `gh --version`
 (`gh auth status` saying "not logged in" is expected, the proxy injects creds at
-the network layer, NOT a fail). `gh` is always baked. Any pack-provided
-wrapper CLI (set `EXTRA_CLIS` from memory or a pack) is optional: absent is fine,
-present-but-erroring on its cheapest read-only probe IS a failure. Wrapper CLIs
-often reject `--help`/`--version`, so probe a real read-only subcommand, not the
-flag.
+the network layer, NOT a fail). `gh` is always baked. Any environment-provided
+wrapper CLI is optional: absent is fine, present-but-erroring on its cheapest
+read-only probe is a failure. Wrappers may reject `--help`/`--version`, so probe
+a real read-only subcommand when one is documented.
 
-A pack-provided MCP server that the gateway spawns on the host (Google Workspace
-via `google-workspace` is the usual one) is checked the same way as any other
-backend in A3, and **a tool LIST is not evidence.** Most such servers can
-enumerate their tools with no credentials at all and exit clean, so a non-empty
-list proves only that the process starts. Call one cheap read-only tool with a
-tiny limit — `gmail_search` or `drive_search` for Workspace — and read what comes
-back. A credential or keyring failure shows up on the CALL, never on the list.
+An environment-declared MCP server is checked like any other backend in A3, and
+a tool list is not evidence. Call one cheap read-only tool with a tiny limit and
+read the result. A credential failure appears on the call, not the list.
 
-If the tools are missing from this session entirely, that is host state, not a
-sandbox problem you can fix from in here: the user runs `pix doctor` on the host,
-which reports whether the server is declared by an active pack, registered,
-resolvable on PATH, and passing its own health probe. When registration is
-healthy but this sandbox lacks the tools, `pix rm BOX && pix run` recreates it
-with the full preload set. There is no live-attach.
+If expected tools are missing, that is host/environment state. The user runs
+`pix doctor` on the host to check the selected environment and Gateway
+registration. A changed MCP declaration reaches a new sandbox after the normal
+proof-gated recreate; there is no live attach.
 
 ### A5. Agent roster
 ```bash
@@ -112,13 +96,17 @@ ls ~/.pi/agent/agents/*.md 2>/dev/null | xargs -n1 basename | sed 's/\.md$//' | 
 Expect the presets (fanout, deep, review) plus the specialists (architect,
 engineer, designer, product-manager, qa-lead, security-lead, sre-lead, devrel,
 dx-consultant, legal, finance-analyst, growth-marketing, ux-copywriter,
-enterprise-admin). Then smoke-test one agent per model tier in parallel via the
-`subagent` tool (`{tasks:[{agent, task}, …]}`, a trivial task each): a cheap/fast
-tier role (`qa-lead`→Gemini Flash / `fanout`→Flash-Lite), an Opus-5 tier role
-(`architect`/`deep`), and the cross-vendor `review` (→Gemini Pro). Report each:
-role, model, ok/slow/fail. Three proves every model family and the dispatch path.
-Do not launch the entire roster: that adds cost and noisy concurrency failures
-without improving coverage.
+enterprise-admin). Smoke-test three representative agents in parallel through
+the `subagent` tool with trivial tasks. Report each role, resolved model, and
+ok/slow/fail. Do not claim fixed model tiers: v2 resolves an explicit agent
+model, then the environment's agent mapping, then the selected main model.
+Agents resolving to the same vendor or model as the parent is the documented
+fallback, not degraded. A retired model is always **FAIL**. When there is no
+explicit agent model or environment roster, a child resolving to a different
+model than the parent is also **FAIL**: inheritance broke and Pi selected an
+unrelated fallback. Otherwise call routing degraded only when an authored
+explicit agent model or environment `[agents]` mapping fails to resolve. Do not
+launch the whole roster.
 
 ### A6. Skills + tool routing
 ```bash
@@ -132,7 +120,7 @@ no write/edit in its `tools:`, a builder (`engineer`) does, read the frontmatter
 A table per check: OK / FAIL / optional + a one-line note, covering inference, memory,
 MCP (per backend), CLIs (per CLI), roster, skills, routing. Verdict is ALL CLEAR
 only when inference, roster, skills, and every present MCP backend + CLI are healthy. A
-missing memory service, alternate model vendor, MCP server, or pack CLI is optional; a
+missing alternate model vendor or optional environment integration is fine; a
 present-but-erroring backend or CLI IS a failure. If you skipped a subsystem, say
 so; do not imply coverage you didn't run.
 

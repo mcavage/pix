@@ -2,19 +2,39 @@ package doctor
 
 import (
 	"context"
-	"os"
+	"strings"
 	"time"
 
 	"pix/host/config"
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/mcp"
-	"pix/host/packinfo"
-	"pix/host/rpc"
 	"pix/host/secret"
-	"pix/host/service"
 )
+
+// memoryEmbedModel is the tag OllamaProbe checks for: THIS PIX_HOME's own
+// cfg.MemoryEmbedModel, defaulting exactly like config.applyDefaults would
+// (a nil cfg, or one that skipped Load, must still name the real default —
+// never an empty string, which OllamaProbe reads as "nothing to check").
+func memoryEmbedModel(cfg *config.Config) string {
+	if cfg == nil || strings.TrimSpace(cfg.MemoryEmbedModel) == "" {
+		return config.DefaultMemoryEmbedModel
+	}
+	return cfg.MemoryEmbedModel
+}
+
+// ollamaDetect is the OllamaProbe seam: THIS host's real detection through
+// o.Env, or a zero OllamaStatus (renders as "not installed") when no host
+// environment was wired at all — the same fail-open shape providerRefScan
+// uses for an unwired Options.
+func ollamaDetect(o Options) func() inference.OllamaStatus {
+	return func() inference.OllamaStatus {
+		if o.Env.System == nil {
+			return inference.OllamaStatus{}
+		}
+		return inference.DetectOllama(o.Env)
+	}
+}
 
 // probes.go is where a config becomes a list of things to go and check. It is
 // the whole of doctor's and status's knowledge of WHAT a healthy host is; both
@@ -30,46 +50,32 @@ import (
 type Options struct {
 	// Budget bounds a single probe. Zero picks health.DefaultBudget.
 	Budget time.Duration
-	// PackOverride is `--pack`, which wins over the configured pack.
-	PackOverride string
-	// SbxBin, KeyStoreBin and LaunchctlBin name the executables. Empty means
-	// the real ones, found on PATH.
-	SbxBin       string
-	KeyStoreBin  string
-	LaunchctlBin string
-	// SbxArgs, KeyStoreArgs and LaunchctlArgs override each probe's argv
-	// (defaults: `--version`, `secret ls`, `print gui/<uid>/<label>`). They are
-	// the seam the tests drive: a probe still execs a REAL process, it is just
-	// pointed at a fixture that can be made to fail on purpose.
-	SbxArgs       []string
-	KeyStoreArgs  []string
-	LaunchctlArgs []string
-	// MemoryPort overrides the memory service port.
-	MemoryPort int
-	// LaunchdLabel and UID address the LaunchAgent. Zero UID means this
-	// process's own.
-	LaunchdLabel string
-	UID          int
-	// Credentials is the host's 1Password setup, used to wrap a server's
-	// health probe in the SAME op-run command the gateway will spawn it with.
-	// Zero means no 1Password, which leaves probes unwrapped.
-	Credentials mcp.Credentials
-	// Env and HostResolver are how the MCP probe learns what kind of server
-	// each configured name is (the pack's declarations plus `pix-host mcp
-	// --list`). A zero Env means the real host; a nil HostResolver means the
-	// local inventory is UNKNOWN, which the classification fails closed on.
+	// SbxBin and KeyStoreBin name the executables. Empty means the real ones,
+	// found on PATH.
+	SbxBin      string
+	KeyStoreBin string
+	// SbxArgs and KeyStoreArgs override each probe's argv (defaults:
+	// `--version`, `secret ls`). They are the seam the tests drive: a probe
+	// still execs a REAL process, it is just pointed at a fixture that can be
+	// made to fail on purpose.
+	SbxArgs      []string
+	KeyStoreArgs []string
+	// Env is the host environment a probe may need (e.g. to ask sbx for the
+	// GitHub secret's scope).
 	Env hostenv.Env
-	// GitHubScope overrides how the github row is answered. Nil means ask sbx.
-	GitHubScope  func() (int, []string)
-	HostResolver func() (string, error)
+	// GitHubScope overrides how the github row is answered. Nil means read
+	// this PIX_HOME's configured refs.
+	GitHubScope func() (int, []string)
+	// GlobalSecrets overrides the read-only enumeration of host-global sbx
+	// secrets Pix ignores. Nil means ask sbx.
+	GlobalSecrets func() ([]string, bool)
+	// ProviderRefs overrides the provider-key evidence. Nil means read THIS
+	// PIX_HOME's own secrets.env refs (secret.ConfiguredModelRefs) — never
+	// the host-global sbx secret store.
+	ProviderRefs func() ([]string, bool)
 	// Workspace is the directory whose sandbox the attachment answer is
 	// about. Empty means "no sandbox context", and attachment is unknown.
 	Workspace string
-	// MCPBin, MCPListArgs and MCPAuthArgs are the MCP probe's exec seams,
-	// same contract as the others: a real process, pointed at a fixture.
-	MCPBin      string
-	MCPListArgs []string
-	MCPAuthArgs []string
 }
 
 // Probes builds the host's probe set, in the order a report reads best:
@@ -87,13 +93,8 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 	if len(keyArgs) == 0 {
 		keyArgs = []string{"secret", "ls"}
 	}
-	uid := o.UID
-	if uid == 0 {
-		uid = os.Getuid()
-	}
 	return []health.Probe{
 		health.SbxProbe{Bin: sbxBin, Args: o.SbxArgs},
-		health.PackProbe{Root: packinfo.ActivePackRoot(packOf(cfg), o.PackOverride)},
 		// The model keys are ANY-OF: one of anthropic/openai/google is enough
 		// to launch, which is the same definition `run`'s launch gate uses.
 		// Reporting the other two as gaps would hand a working host two repair
@@ -102,18 +103,31 @@ func Probes(cfg *config.Config, o Options) []health.Probe {
 		// can call that vendor": those are different facts, and only reporting the
 		// first is how a host with three green providers routes every role to one.
 		// Keyless is the prior question to both: whether a key is this host's
-		// credential at all. A pack's sbx-session backends need none.
+		// credential at all.
+		// The EVIDENCE is this PIX_HOME's own configured op:// refs, not the
+		// host-global `sbx secret ls` store. Pix writes provider credentials
+		// sandbox-scoped at launch and never reads a global as proof a key
+		// exists (secret/scoped.go), so grading doctor's provider row off the
+		// global store would report another stack's leftovers as this host's
+		// keys. Globals still get their own honest row below — as IGNORED.
 		health.ProviderKeyProbe{Bin: keyBin, Args: keyArgs, Want: secret.ModelProviders, AnyOf: true,
-			Label: "providers", Callable: inference.CallableProviders(cfg), Keyless: inference.KeylessBackends(cfg)},
-		health.MemoryUnitProbe{Port: portOr(o.MemoryPort, rpc.PortFromEnv("MEMORY_PORT", rpc.MemoryPortDefault)),
-			Enabled: config.ServiceEnabled(cfg, "memory")},
-		health.LaunchdProbe{Bin: o.LaunchctlBin, Label: orElse(o.LaunchdLabel, service.LaunchdLabel), UID: uid, Args: o.LaunchctlArgs},
-		mcpProbe(cfg, o, sbxBin),
-		health.DaemonProbe{Servers: DaemonServers(cfg)},
+			Label: "providers", Callable: inference.CallableProviders(cfg), Keyless: inference.KeylessBackends(cfg),
+			Configured: providerRefScan(o)},
 		// A sandbox holds no GitHub credential of its own, so without a global
 		// secret the agent commits and then cannot push. Reported here rather
 		// than discovered at the end of a task.
 		health.GitHubSecretProbe{Fix: secret.GitHubSecretFix, Scope: githubScope(o)},
+		// Read-only, and deliberately not a repair: a host can hold GLOBAL sbx
+		// secrets (an older pix, another stack, a hand-run `sbx secret set`)
+		// that Pix ignores entirely. Saying so is the difference between "my
+		// key is right there" and understanding why it does nothing.
+		health.IgnoredGlobalSecretsProbe{Fix: secret.GlobalSecretRemoveFix, Scan: globalSecretScan(o)},
+		// Ollama is an OPTIONAL local capability (surface.md §7): a cloud-only
+		// host reports StatusOff here, never a gap. The SAME detection
+		// (inference.DetectOllama) that decides the memory container's own
+		// OLLAMA_HOST feeds this row, so the two can never disagree about
+		// what this host's Ollama integration looks like.
+		health.OllamaProbe{Detect: ollamaDetect(o), EmbedModel: memoryEmbedModel(cfg)},
 	}
 }
 
@@ -125,52 +139,39 @@ func githubScope(o Options) func() (int, []string) {
 		return o.GitHubScope
 	}
 	return func() (int, []string) {
-		state, boxes := secret.ProbeGitHubSecret(o.Env)
+		state, boxes := secret.ProbeGitHubCredential(o.Env)
 		return int(state), boxes
 	}
 }
 
-// DaemonServers resolves the active pack's supervised daemons into the shape
-// health.DaemonProbe checks. Pure data from the manifest, like the MCP
-// classification beside it — a pack that declares none yields none, and a pack
-// that will not load yields none rather than a guess.
-func DaemonServers(cfg *config.Config) []health.DaemonServer {
-	if cfg == nil {
-		return nil
+// providerRefScan answers the provider row from this PIX_HOME's refs file,
+// through the Options seam when a test supplies one. The tri-state is
+// preserved end to end: secret.RefsUnreadable becomes answered=false, which
+// the probe renders as UNKNOWN rather than as a missing key.
+func providerRefScan(o Options) func() ([]string, bool) {
+	if o.ProviderRefs != nil {
+		return o.ProviderRefs
 	}
-	var out []health.DaemonServer
-	for _, root := range packinfo.ActivePackRoots(cfg, "") {
-		p, err := packinfo.LoadPack(root)
-		if err != nil {
-			continue
+	return func() ([]string, bool) {
+		if o.Env.System == nil {
+			// No host environment to read secrets.env through (a zero-value
+			// Options): UNKNOWN, the same fail-open answer an unreadable refs
+			// file gets. Never "no key" — absence of a reader is not absence
+			// of a key.
+			return nil, false
 		}
-		for _, svc := range p.Manifest.Services {
-			if svc.Runtime != packinfo.ServiceRuntimeDaemon || svc.Activation != "always" {
-				continue
-			}
-			out = append(out, health.DaemonServer{
-				Name: svc.Name, Listen: svc.Listen, Port: svc.Port, Health: svc.Health,
-				Unpinned: svc.Command != "",
-				// The supervisor owns the daemon's lifecycle, so the honest
-				// repair is to restart the thing that supervises it — not to
-				// go poking at the daemon directly.
-				Fix: "pix serve stop && pix serve   # the supervisor restarts a pack daemon",
-			})
-		}
+		present, state := secret.ConfiguredModelRefs(o.Env)
+		return present, state == secret.RefsAnswered
 	}
-	return out
 }
 
-// mcpProbe assembles the MCP probe from the one thing only this layer can
-// resolve: the per-server classification, which decides which repair command
-// is honest. An unclassifiable server degrades to "unknown", never to a guess.
-func mcpProbe(cfg *config.Config, o Options, sbxBin string) health.MCPProbe {
-	return health.MCPProbe{
-		Servers:  MCPServers(cfg, o.Credentials),
-		Bin:      orElse(o.MCPBin, sbxBin),
-		ListArgs: o.MCPListArgs,
-		AuthArgs: o.MCPAuthArgs,
+// globalSecretScan enumerates the global secrets Pix ignores, through the
+// Options seam when a test supplies one.
+func globalSecretScan(o Options) func() ([]string, bool) {
+	if o.GlobalSecrets != nil {
+		return o.GlobalSecrets
 	}
+	return func() ([]string, bool) { return secret.ProbeGlobalSecrets(o.Env) }
 }
 
 // Check runs the whole set and returns the one Snapshot both verbs render.
@@ -178,23 +179,9 @@ func Check(ctx context.Context, cfg *config.Config, o Options) health.Snapshot {
 	return health.Run(ctx, o.Budget, Probes(cfg, o)...)
 }
 
-func packOf(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	return cfg.Pack
-}
-
 func orElse(s, def string) string {
 	if s == "" {
 		return def
 	}
 	return s
-}
-
-func portOr(port, def int) int {
-	if port > 0 {
-		return port
-	}
-	return def
 }

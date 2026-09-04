@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sandbox"
 )
 
 // argvEqual is a small, local helper — this package's tests intentionally
@@ -49,7 +50,7 @@ func TestBuildAttachArgv_TTY(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAttachArgv: %v", err)
 	}
-	argvEqual(t, got, []string{"exec", "-it", "pix-t", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
+	argvEqual(t, got, []string{"exec", "-it", "pix-t", "--", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
 }
 
 // TestBuildAttachArgv_NonTTY: a piped/scripted attach composes `exec -i NAME
@@ -60,7 +61,7 @@ func TestBuildAttachArgv_NonTTY(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAttachArgv: %v", err)
 	}
-	argvEqual(t, got, []string{"exec", "-i", "pix-t", "pi", "--resume"})
+	argvEqual(t, got, []string{"exec", "-i", "pix-t", "--", "pi", "--resume"})
 }
 
 // TestFindPositivelyIdentifiedRunning_TTYAndNonTTY_RealFixture drives the
@@ -98,13 +99,13 @@ exit 1
 	if err != nil {
 		t.Fatalf("BuildAttachArgv (tty): %v", err)
 	}
-	argvEqual(t, ttyArgs, []string{"exec", "-it", "pix-demo", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
+	argvEqual(t, ttyArgs, []string{"exec", "-it", "pix-demo", "--", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
 
 	nonTTYArgs, err := BuildAttachArgv("pix-demo", false, invocation)
 	if err != nil {
 		t.Fatalf("BuildAttachArgv (non-tty): %v", err)
 	}
-	argvEqual(t, nonTTYArgs, []string{"exec", "-i", "pix-demo", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
+	argvEqual(t, nonTTYArgs, []string{"exec", "-i", "pix-demo", "--", "pi", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5"})
 }
 
 // TestFindPositivelyIdentifiedRunning_NoStoredInvocation_SafeDefault: an
@@ -140,7 +141,7 @@ exit 1
 	// The personal skill tree is always loaded, so the safe default carries it
 	// too: a re-attach must load the same skill layer the original launch did,
 	// or a resumed session quietly loses the user's own skills.
-	argvEqual(t, execArgs, []string{"exec", "-it", "pix-legacy", "pi",
+	argvEqual(t, execArgs, []string{"exec", "-it", "pix-legacy", "--", "pi",
 		"--skill", PersonalSkillsDir(), "--model", "anthropic/claude-sonnet-5"})
 }
 
@@ -160,6 +161,45 @@ exit 1
 `)
 	if _, ok := FindPositivelyIdentifiedRunning(realEnv(), "pix-demo"); ok {
 		t.Fatal("a stopped sandbox must not be treated as positively-identified-running")
+	}
+}
+
+// TestFindPositivelyIdentified_Stopped_IsPositivelyIdentified: review round
+// 1 blocker #2. Unlike the RUNNING-only predicate above, the general
+// FindPositivelyIdentified DOES recognize a schema-verified stopped row —
+// the reattach gate's identity check, which must not refuse a stopped
+// sandbox outright, uses this one instead of FindPositivelyIdentifiedRunning.
+func TestFindPositivelyIdentified_Stopped_IsPositivelyIdentified(t *testing.T) {
+	isolateState(t)
+	installFakeSbx(t, `
+if [ "$1" = "ls" ] && [ "$2" = "--json" ]; then
+  echo '[{"name":"pix-demo","state":"stopped","instance_id":"inst-1"}]'
+  exit 0
+fi
+exit 1
+`)
+	found, ok := FindPositivelyIdentified(realEnv(), "pix-demo")
+	if !ok || found == nil {
+		t.Fatalf("expected a positively identified stopped row, got ok=%v found=%v", ok, found)
+	}
+	if found.State != sandbox.StateStopped {
+		t.Fatalf("state = %v, want stopped", found.State)
+	}
+}
+
+// TestFindPositivelyIdentified_Absent_RefusesEither: an absent sandbox
+// authorizes neither predicate.
+func TestFindPositivelyIdentified_Absent_RefusesEither(t *testing.T) {
+	isolateState(t)
+	installFakeSbx(t, `
+if [ "$1" = "ls" ] && [ "$2" = "--json" ]; then
+  echo '[]'
+  exit 0
+fi
+exit 1
+`)
+	if _, ok := FindPositivelyIdentified(realEnv(), "pix-demo"); ok {
+		t.Fatal("an absent sandbox must not be positively identified")
 	}
 }
 

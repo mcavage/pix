@@ -1,0 +1,82 @@
+
+=== 19. emitted retry roundtrip: literal suggested command ===
+Environment "work" runs code on your host and hands it credentials.
+
+  1 host command       secret:db
+  1 credential target  command: echo secret-value      -> (unbound)
+
+  full argv and content digests: pix env review work --verbose
+
+Accept this host-execution footprint? [y/N]:
+consent supplied via --yes
+pix: recorded acceptance for environment "work" (fingerprint e1c36de1193a).
+pix: environment "work" registered at /tmp/wave-c-run/xdg-data/pix/envs/work.
+
+pix env use work
+exit=0
+
+=== 20. env show work (now accepted tier1) ===
+environment "work"
+  root:      /tmp/wave-c-run/xdg-data/pix/envs/work
+  files:     .sbxenv.yaml
+  declares:  0 models, 0 mounts, 0 MCP servers
+  review:    accepted (fingerprint e1c36de1193a)
+  sandbox:   unknown (live-launch drift lands with a later wave)
+
+full rendered environment: pix env show work --effective
+exit=0
+
+=== 21. env show work --json (accepted, review_state) ===
+{
+  "schema_version": 1,
+  "environment": "work",
+  "root": "/tmp/wave-c-run/xdg-data/pix/envs/work",
+  "sbxenv_present": true,
+  "accepted": true,
+  "review_state": "accepted",
+  "fingerprint": "e1c36de1193ab7eec14b0f7f01ab01cc7b4bb3a12208c5cfb3b1678ee5e6a972"
+}
+exit=0
+
+=== 22. env use work (accepted tier1 -> succeeds) ===
+pix: environment "work" is now the default.
+exit=0
+
+=== 23. env ls (tier1 accepted, default) ===
+NAME  DEFAULT  REVIEW    ROOT
+home           n/a       /tmp/wave-c-run/xdg-data/pix/envs/home
+work  *        accepted  /tmp/wave-c-run/xdg-data/pix/envs/work
+exit=0
+
+=== 24. tamper the footprint (changed) then use -> refused ===
+pix: environment "work" changed what it runs on your host.
+     review it: pix env review work
+exit=2
+
+=== 25. env show work --json (changed) ===
+{
+  "schema_version": 1,
+  "environment": "work",
+  "root": "/tmp/wave-c-run/xdg-data/pix/envs/work",
+  "sbxenv_present": true,
+  "accepted": false,
+  "review_state": "changed"
+}
+exit=0
+
+=== 26. review re-accept after change ===
+Environment "work" runs code on your host and hands it credentials.
+
+  1 host command       secret:db
+  1 credential target  command: echo CHANGED-value     -> (unbound)
+
+  full argv and content digests: pix env review work --verbose
+
+Accept this host-execution footprint? [y/N]:
+consent supplied via --yes
+pix: recorded acceptance for environment "work" (fingerprint 210c1f08ff64).
+exit=0
+
+=== 27. use after re-accept succeeds ===
+pix: environment "work" is now the default.
+exit=0

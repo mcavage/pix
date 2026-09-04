@@ -1,5 +1,12 @@
 # Sandbox lifecycle and pack trust
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Two related but separate mechanisms answer two different questions: "is this
 sandbox still needed" (lifecycle) and "should this pack's host-executing code
 run on my machine" (trust). Both fail closed, and both are designed so a human

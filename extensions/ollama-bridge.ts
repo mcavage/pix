@@ -25,14 +25,17 @@ import { createServer, request } from "node:http";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { parseRoster, type Roster } from "../lib/inference-roster.ts";
 
-// The bridge model is configured on the HOST (`pix config set
-// ollama_bridge_model <tag>`); `pix run` writes the resolved value into
+// The bridge model is configured on the HOST, in config.toml's
+// ollama_bridge_model key (there is no dedicated CLI verb for it in v2; it
+// is set by the in-sandbox onboarding proposal, or by hand-editing the
+// key); `pix run` writes the resolved value into
 // <workspace>/.pix/ollama-bridge.model, and pi runs with the workspace as
 // cwd, so we read it here — the same host-writes-file / VM-reads-file seam the
 // profile + knowledge-scope files use. This is why you do NOT hand-edit sandbox
-// env: set it once with `pix config set` and every `pix run` picks it
-// up. A literal OLLAMA_BRIDGE_MODEL env var still wins (power-user override).
+// env: change the host config and every `pix run` picks it up. A literal
+// OLLAMA_BRIDGE_MODEL env var still wins (power-user override).
 function bridgeModelFromWorkspace(): string | undefined {
 	try {
 		const raw = readFileSync(".pix/ollama-bridge.model", "utf8").trim();
@@ -49,8 +52,9 @@ const HOST_PORT = Number(process.env.OLLAMA_BRIDGE_HOST_PORT ?? 11434);
 // Which local model to expose in the cycle. It MUST match a tag pulled on the
 // HOST (`ollama pull <tag>`), or the call 404s. Default: qwen3.5:9b — the current
 // all-rounder that still fits a 16GB box (loads on demand, not resident). This is
-// the SAME id the router registers as its local option (models.json), so routing
-// to local and the interactive cycle agree. Override via env (e.g. in the
+// the SAME id the shipped catalog carries as its local rung
+// (services/host/inference/catalog/models.json), so the generated manifest and
+// the interactive cycle agree on how local is spelled. Override via env (e.g. in the
 // sandbox's /etc/sandbox-persistent.sh) for a bigger/smaller model — no code edit:
 //   OLLAMA_BRIDGE_MODEL, OLLAMA_BRIDGE_CONTEXT (and OLLAMA_BRIDGE_MODEL_NAME to
 // override the auto-derived display label). contextWindow is what pi will fill; a
@@ -98,7 +102,7 @@ function bridgeTagModel(): BridgeModel {
 }
 
 // manifestModels reads the ollama models the HOST decided this sandbox can
-// call, from the inference.json the launcher generates beside routing.json.
+// call, from the inference.json the launcher generates.
 //
 // Why this exists: `pix run` passes pi a `--models` cycle built from every
 // callable binding in config, which today includes each probed Ollama model —
@@ -118,7 +122,7 @@ function bridgeTagModel(): BridgeModel {
 // pre-manifest world, and falling back to the bridge tag is exactly right there.
 // modelsFromManifest is the PURE half: parsed manifest in, provider model list
 // out, with the configured bridge tag guaranteed present. The tag must survive
-// a manifest that omits it — it is what `pix config set ollama_bridge_model`
+// a manifest that omits it — it is what config.toml's ollama_bridge_model key
 // promises and what the interactive cycle offers. Exported for tests.
 export function modelsFromManifest(
 	parsed: any,
@@ -159,25 +163,42 @@ export function modelsFromManifest(
 // Best-effort by design — a missing, unreadable, or malformed manifest is the
 // pre-manifest world, where the bridge tag alone is exactly right.
 function bridgeModels(): BridgeModel[] {
+	return modelsFromManifest(readManifest(), bridgeTagModel());
+}
+
+// readManifest parses <agentDir>/inference.json once so both the model-list
+// builder above and the roster reader below work from the identical parsed
+// document, never two independent reads that could observe different bytes
+// mid-write. Absent/unparseable is the pre-manifest world (null); a present
+// but unparseable file is diagnosed loudly, the same guard
+// extensions/inference.ts's readManifest applies.
+function readManifest(): any {
 	const manifestPath = join(getAgentDir(), "inference.json");
 	let raw: string | undefined;
 	try {
 		raw = readFileSync(manifestPath, "utf8");
 	} catch {
 		/* absent -> bridge tag only, the expected pre-manifest world */
+		return null;
 	}
-	let parsed: any = null;
-	if (raw !== undefined) {
-		// Present but unparseable is loud: this is the failure mode that let
-		// the "json" vs. "inference.json" filename bug ship silently (see
-		// extensions/inference.ts's readManifest for the same guard).
-		try {
-			parsed = JSON.parse(raw);
-		} catch (err) {
-			process.stderr.write(`[ollama-bridge] ${manifestPath} is present but failed to parse as JSON: ${err}\n`);
-		}
+	try {
+		return JSON.parse(raw);
+	} catch (err) {
+		process.stderr.write(`[ollama-bridge] ${manifestPath} is present but failed to parse as JSON: ${err}\n`);
+		return null;
 	}
-	return modelsFromManifest(parsed, bridgeTagModel());
+}
+
+// readRoster resolves the additive roster (docs/design/environments.md §7)
+// from the same manifest bridgeModels() just read. Never used to pick THIS
+// bridge's own default model: the local-model transport limitation (§4.1)
+// means the parent-Ollama inheritance exception stays a subagents.ts
+// concern, not a roster-driven one, until native custom-agent local-model
+// transport lands. Exported so a test can assert this file resolves the
+// identical roster shape extensions/inference.ts and extensions/subagents.ts
+// do, from the identical file.
+export function readRoster(): Roster | undefined {
+	return parseRoster(readManifest());
 }
 
 export default async function (pi: any): Promise<void> {

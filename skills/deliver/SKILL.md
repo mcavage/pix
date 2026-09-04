@@ -57,6 +57,13 @@ The only exceptions are the three legit stop conditions. "Done", "should work",
 "this should be it", a partial handoff, or stopping to ask permission for
 something verifiable are all violations.
 
+**TODO(harness-continuation):** A final response ends the active agent turn. Do
+not say "I’ll continue" or equivalent after a final response unless an
+independent, observable background worker is actually running. When delivery is
+incomplete, report the exact paused stage and resume from it on the next turn;
+the harness should eventually make that state visible rather than encouraging a
+false continuation claim.
+
 **Law 1. No claim without fresh evidence.**
 Every "green", "passing", "works", "fixed" is backed by actual command output
 from a run this turn. Not a remembered run. Not a subagent's "done" report.

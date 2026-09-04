@@ -32,6 +32,7 @@ package launch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -74,7 +75,20 @@ func leaseRoot() (string, error) {
 	return filepath.Join(state, "sandboxes"), nil
 }
 
-func SessionName(workspace string) string { return sandbox.Name(workspace) }
+// SessionName is a test/legacy-shim convenience only — no production caller
+// resolves a sandbox name through here (see cmd/pix's resolveSandboxName for
+// the real launch path, which threads stack-scoped errors properly). It
+// panics on a resolution failure rather than degrading to an unscoped name:
+// a test environment that cannot resolve its own stack identity (see
+// sandbox.Name/stack.Current) is broken in a way no caller here should
+// paper over.
+func SessionName(workspace string) string {
+	name, err := sandbox.Name(workspace)
+	if err != nil {
+		panic(fmt.Sprintf("launch: SessionName(%q): %v", workspace, err))
+	}
+	return name
+}
 
 func leaseDirFor(sessionKey string) (string, error) {
 	root, err := leaseRoot()
@@ -105,12 +119,22 @@ func setSessionKeep(sessionKey string) error {
 
 func SessionFingerprint(cfg *config.Config, o RunOpts) sandbox.Fingerprint {
 	mcpSet := o.StaticMCP
-	if len(mcpSet) == 0 && cfg != nil {
-		mcpSet = mcp.AllPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
+	if len(mcpSet) == 0 {
+		mcpSet = mcp.AllPreloadedMCP(append([]string(nil), o.MCP...))
 	}
 	sorted := append([]string(nil), mcpSet...)
 	sort.Strings(sorted)
 	fp := sandbox.Fingerprint{"static_mcp": strings.Join(sorted, ",")}
+	// The stamped launcher build is part of a sandbox's creation identity: a
+	// sandbox built by 0.1.71 and one built by 0.1.72-beta.gabc1234 are
+	// different constructions even when every other pin matches, because the
+	// baked runtime, the resolved kit reference and the Pix-managed env block
+	// all move with the version. An UNSTAMPED build contributes no key at all
+	// rather than an empty one, so a fingerprint recorded before this
+	// component existed does not read as drift on the next attach.
+	if v := strings.TrimSpace(o.LauncherVersion); v != "" {
+		fp["launcher_version"] = v
+	}
 	switch {
 	case o.Template != "":
 		fp["template"] = o.Template
@@ -175,7 +199,17 @@ func readSessionInvocation(sessionKey string) (invocation []string, found bool) 
 	return invocation, true
 }
 
-func sbxEntry(env hostenv.Env, name string, within time.Duration) (entry *sandbox.Entry, trusted bool) {
+// sbxListing is the module's ONE parser of `sbx ls --json` (slim_test.go's
+// TestLifecycle_OneParserPerSbxListing pins that), and the ONE bounded read
+// every environment-scoped question (live holders, effective-file release,
+// the create receipt) is answered from. trusted means the listing itself
+// was READ and parsed into a documented shape inside within; per-row
+// identity stays the caller's own check (sandbox.Entry.IdentityVerified),
+// because one unowned row in a shared listing must not invalidate the
+// answer about a different, positively identified sandbox. An untrusted
+// answer is never downgraded into "absent" by any caller — that is the
+// fail-closed half of each of those questions.
+func sbxListing(env hostenv.Env, within time.Duration) (entries []sandbox.Entry, trusted bool) {
 	var out string
 	var err error
 	if within > 0 {
@@ -194,15 +228,82 @@ func sbxEntry(env hostenv.Env, name string, within time.Duration) (entry *sandbo
 	if perr != nil {
 		return nil, false
 	}
-	return sandbox.FindByName(parsed.Entries, name), true
+	return parsed.Entries, true
 }
 
-func FindPositivelyIdentifiedRunning(env hostenv.Env, name string) (*sandbox.Entry, bool) {
+func sbxEntry(env hostenv.Env, name string, within time.Duration) (entry *sandbox.Entry, trusted bool) {
+	entries, ok := sbxListing(env, within)
+	if !ok {
+		return nil, false
+	}
+	return sandbox.FindByName(entries, name), true
+}
+
+// FindPositivelyIdentified reports the schema-verified, RUNNING-OR-STOPPED
+// row for name — the identity check a reattach gate needs regardless of
+// which of the two live states the sandbox is actually in (a stopped
+// sandbox is still a legitimate reattach target, docs/getting-started.md:
+// "A sandbox already exists -> reattach, running or stopped, as-is"). An
+// absent, unverified, or unreadable row authorizes nothing, exactly like
+// FindPositivelyIdentifiedRunning.
+func FindPositivelyIdentified(env hostenv.Env, name string) (*sandbox.Entry, bool) {
 	found, _ := sbxEntry(env, name, 0)
-	if found == nil || !found.IdentityVerified || found.State != sandbox.StateRunning {
+	if found == nil || !found.IdentityVerified {
+		return nil, false
+	}
+	if found.State != sandbox.StateRunning && found.State != sandbox.StateStopped {
 		return nil, false
 	}
 	return found, true
+}
+
+// FindPositivelyIdentifiedRunning is the RUNNING-only predicate a caller
+// authorizing `sbx exec` needs (exec has no "start" of its own — it fails
+// outright against a stopped sandbox). A stopped, schema-verified row is
+// deliberately NOT positively-identified-running here: the caller must fall
+// back to the legacy `sbx run --name` reattach path instead, which is what
+// actually starts a stopped sandbox (see BuildReattachArgs).
+func FindPositivelyIdentifiedRunning(env hostenv.Env, name string) (*sandbox.Entry, bool) {
+	found, ok := FindPositivelyIdentified(env, name)
+	if !ok || found.State != sandbox.StateRunning {
+		return nil, false
+	}
+	return found, true
+}
+
+// PromoteSessionCreation is the cutover's create-receipt step: a bounded,
+// schema-verified probe must positively identify the sandbox and its
+// instance id, and only then is the bounded create intent PROMOTED into the
+// instance-bound, write-once lease record (E2.3's PromoteCreateIntent),
+// followed by this session's fingerprint and exact invocation.
+//
+// The returned warning is the promotion's CleanupWarning: the lease record
+// is already durable and only the redundant intent file survived. It is
+// reported, never treated as a failed create — the exact false-abort
+// PromotionResult was shaped to make unreachable.
+func PromoteSessionCreation(env hostenv.Env, sessionKey, name string, fp sandbox.Fingerprint, invocation []string) (recorded bool, warning error, err error) {
+	found, _ := sbxEntry(env, name, 0)
+	if found == nil || !found.IdentityVerified || found.InstanceID == nil || *found.InstanceID == "" {
+		return false, nil, nil // present but unowned: no verifiable instance id to promote against
+	}
+	dir, derr := leaseDirFor(sessionKey)
+	if derr != nil {
+		return false, nil, derr
+	}
+	res, perr := PromoteCreateIntent(dir, CreateReceipt{InstanceID: *found.InstanceID, SandboxName: found.Name})
+	if perr != nil {
+		return false, nil, fmt.Errorf("launch: could not record %s's creation lease: %w", name, perr)
+	}
+	if !res.Promoted() {
+		return false, nil, fmt.Errorf("launch: %s's creation lease was not recorded", name)
+	}
+	if werr := writeSessionState(sessionKey, sessionFingerprintFileName, fp); werr != nil {
+		return false, res.CleanupWarning, fmt.Errorf("launch: could not record %s's session fingerprint: %w", name, werr)
+	}
+	if werr := writeSessionState(sessionKey, sessionInvocationFileName, invocation); werr != nil {
+		return false, res.CleanupWarning, fmt.Errorf("launch: could not record %s's session invocation: %w", name, werr)
+	}
+	return true, res.CleanupWarning, nil
 }
 
 func RecordSessionCreation(env hostenv.Env, sessionKey, name string, fp sandbox.Fingerprint, invocation []string) (recorded bool, err error) {
@@ -249,7 +350,19 @@ type SessionSpec struct {
 	// look for a persisted session beside it and say how to resume.
 	Workspace string
 
-	CreateArgs []string
+	// EnvCreateArgs, when non-empty, makes a CREATE two-phase — E2.5's
+	// cutover shape (docs/design/environments.md §10.1): `sbx env create
+	// <effective>` runs to completion FIRST, the positively identified
+	// instance is recorded (lease promoted to that instance id), and only
+	// THEN is the session started as a name-based `sbx exec -it <name> --
+	// pi <exact invocation>`. There is no second selectable create path:
+	// this is the ONLY create shape: an `sbx run`-style create argv is not
+	// a field on this type at all after the cutover, so no crash, lease
+	// failure or unset flag can select one (PRD §8; envargv_sentinel_test.go).
+	EnvCreateArgs []string
+	// AttachArgs is the ONE non-exec attach argv a caller may supply (the
+	// pre-cutover `run --name` re-attach). It is NEVER used for a create.
+	AttachArgs []string
 	// AttachTTY selects `sbx exec -it` (interactive) vs `-i` (piped).
 	AttachTTY bool
 	// AttachExec is true when the pre-lock probe positively identified a RUNNING,
@@ -257,9 +370,19 @@ type SessionSpec struct {
 	AttachExec bool
 
 	Fingerprint sandbox.Fingerprint // recorded on create, validated on attach
-	Invocation  []string            // the exact pi argv this create sends
-	// DefaultInvocation is the "safe default" pi argv an attach uses when nothing
-	// was ever recorded — the same BuildPiInvocation a create would have sent.
+	// Invocation is the exact pi argv a CREATE sends and records for audit
+	// (PromoteSessionCreation persists it as sessionInvocationFileName); it
+	// is never read back to decide what a LATER attach execs.
+	Invocation []string
+	// DefaultInvocation is the pi argv THIS session actually execs, on both
+	// a create and an attach: the current, freshly resolved invocation this
+	// call built (model/resume/skills as requested THIS run), never a
+	// replay of a prior create's stored one (QA re-review F1). The command
+	// layer sets this to the SAME value as Invocation on every call
+	// (run_cmd.go builds one invocation and uses it for both fields), so
+	// the two names exist to document the two different questions
+	// ("what got recorded" vs "what gets exec'd"), not to carry two
+	// different values.
 	DefaultInvocation []string
 }
 
@@ -272,6 +395,34 @@ type SessionDeps struct {
 	// Spawn builds the child process for argv. The command layer owns stdio and
 	// environment wiring; this package owns only WHEN it starts and its argv.
 	Spawn func(argv []string) *exec.Cmd
+	// SpawnCreate is Spawn's counterpart for the ONE non-interactive child
+	// this lifecycle runs: `sbx env create --auto-approve <effective>`. It
+	// exists as its own seam because that child needs the opposite stdio from
+	// a session: sbx 0.41 otherwise prints a second plan/approval for a document
+	// Pix already rendered and trust-gated, including the token-bearing memory
+	// URL. The command layer supplies the explicit flag and captures its output;
+	// this package still owns WHEN it starts, its argv, and the receipt/poll
+	// ordering around it. nil falls back to Spawn, so a caller (or a test)
+	// that wants one stdio wiring for both children keeps it.
+	SpawnCreate func(argv []string) *exec.Cmd
+	// PrepareSecrets gives THIS sandbox the credentials this PIX_HOME
+	// configures, scoped to it (secret.PrepareSandboxSecrets). It is called
+	// on BOTH transitions, once each, and never before the sandbox is known
+	// to exist: on a create, after the positive instance receipt has been
+	// promoted and before the session is exec'd; on an attach, after the
+	// identity and fingerprint checks and before the child is spawned. That
+	// placement is what makes a rotated ref take effect on the next run
+	// rather than at the next recreate.
+	//
+	// A failure is fatal to the transition. On a CREATE that means the
+	// sandbox this call just made is torn down (RunSession, below): a box
+	// that exists but has no credentials is an orphan the user did not ask
+	// for. On an ATTACH the existing sandbox is retained — it was not ours
+	// to remove, and the previous run's credentials may still be in it.
+	//
+	// nil means "no credential preparation wired" (tests, and any caller
+	// that has none to do).
+	PrepareSecrets func(sandbox string) error
 	// LockTimeout bounds the lifecycle-lock acquire; zero means
 	// SessionLockTimeout.
 	LockTimeout time.Duration
@@ -285,20 +436,46 @@ type SessionRefused struct{ Err error }
 func (e *SessionRefused) Error() string { return e.Err.Error() }
 func (e *SessionRefused) Unwrap() error { return e.Err }
 
+// SecretPrepFailed is the ONE refusal that leaves a sandbox behind: the create
+// succeeded and was recorded, and then the credentials that sandbox exists to
+// use could not be given to it. RunSession answers it by handing the sandbox
+// to the same proof-gated teardown a normal exit uses, once the lifecycle lock
+// is released — so a credential-less box is never left for a later orphan
+// sweep to find. It wraps a *SessionRefused so the command layer's existing
+// "decided under the lock, nothing is running" rendering still applies.
+type SecretPrepFailed struct {
+	Refusal *SessionRefused
+	// Created is true when THIS transition created the sandbox (the only case
+	// that may remove it). An attach sets it false and the sandbox is kept.
+	Created bool
+}
+
+func (e *SecretPrepFailed) Error() string { return e.Refusal.Error() }
+func (e *SecretPrepFailed) Unwrap() error { return e.Refusal }
+
+// prepareSessionSecrets runs the credential hook, if one is wired.
+func prepareSessionSecrets(spec SessionSpec, deps SessionDeps) error {
+	if deps.PrepareSecrets == nil {
+		return nil
+	}
+	return deps.PrepareSecrets(spec.Name)
+}
+
 // RunSession is the whole create/attach lifecycle for one session, in the one
 // order that is safe (see this file's header):
 func RunSession(spec SessionSpec, deps SessionDeps) error {
 	if deps.Spawn == nil {
 		return fmt.Errorf("launch: RunSession needs a Spawn (the command layer owns stdio wiring)")
 	}
+	// A lease/state-dir failure is a HARD refusal, not a degraded launch.
+	// Before the cutover this fell back to spawning the old create argv
+	// without any lease at all; after it there is no second create path to
+	// fall back TO, and "create a sandbox nothing on this host can prove it
+	// owns" is precisely what the create-intent/receipt machinery exists to
+	// prevent (PRD §8, §9.3).
 	dir, derr := leaseDirFor(spec.Key)
 	if derr != nil {
-		fmt.Fprintf(deps.Warn, "pix: warning: running without %s's lifecycle lease (%v); a future orphan sweep could not see this session\n", spec.Key, derr)
-		child, err := StartSbxSession(deps.Spawn(spec.CreateArgs), deps.Poll, spec.Creating, spec.Name)
-		if err != nil {
-			return err
-		}
-		return child.Wait()
+		return &SessionRefused{Err: fmt.Errorf("cannot take %s's lifecycle lease (%v); refusing to create or attach without one", spec.Key, derr)}
 	}
 
 	timeout := deps.LockTimeout
@@ -317,6 +494,20 @@ func RunSession(spec SessionSpec, deps SessionDeps) error {
 	if err != nil {
 		if child != nil {
 			killUnreferencedAndTeardown(spec, deps, child, err)
+			return err
+		}
+		// The one transition failure that leaves a sandbox behind: the create
+		// succeeded, its receipt was promoted, and the credential preparation
+		// that runs before the session starts failed. No child was ever
+		// started and no reference lease was taken, so the moment
+		// AttachRefUnderLifecycle returned (above) the lifecycle lock was
+		// released — which is exactly when the proof-gated teardown may run.
+		var prep *SecretPrepFailed
+		if errors.As(err, &prep) && prep.Created {
+			fmt.Fprintf(deps.Warn, "pix: %s was created but could not be given its credentials; removing it rather than leaving a credential-less sandbox behind\n", spec.Name)
+			res := TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown)
+			reportTeardown(deps.Warn, res, spec.Workspace)
+			releaseEffectiveAfterTeardown(deps, spec.Name, res)
 		}
 		return err
 	}
@@ -328,8 +519,25 @@ func RunSession(spec SessionSpec, deps SessionDeps) error {
 		fmt.Fprintf(deps.Warn, "pix: warning: releasing %s's reference lease: %v; skipping teardown\n", spec.Key, cerr)
 		return werr
 	}
-	reportTeardown(deps.Warn, TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown), spec.Workspace)
+	res := TeardownSandbox(deps.Env, spec.Key, spec.Name, TriggerSession, deps.Teardown)
+	reportTeardown(deps.Warn, res, spec.Workspace)
+	releaseEffectiveAfterTeardown(deps, spec.Name, res)
 	return werr
+}
+
+// releaseEffectiveAfterTeardown clears the retained effective document only
+// after a removal, and then only on a POSITIVE absent probe (§10.3). Every
+// other outcome — kept, failed, or a listing that could not be read —
+// retains the file, because it is what a later environment-scoped removal
+// recomposes and deleting it early strands that path on the name-based
+// fallback.
+func releaseEffectiveAfterTeardown(deps SessionDeps, name string, res TeardownResult) {
+	if !res.Removed() {
+		return
+	}
+	if _, err := ReleaseEffectiveEnv(deps.Env, name); err != nil && deps.Warn != nil {
+		fmt.Fprintf(deps.Warn, "pix: warning: %v\n", err)
+	}
 }
 
 // killUnreferencedAndTeardown is RunSession's failed-ref path: the transition
@@ -382,10 +590,81 @@ func reportTeardown(warn io.Writer, res TeardownResult, _ string) {
 	}
 }
 
+// startEnvCreateTransition is the E2.5 create: `sbx env create <effective>`
+// is a CREATE, not a session — it returns as soon as the sandbox exists —
+// so it is run to completion under the lifecycle lock, its receipt is
+// demanded POSITIVELY (a bounded poll that must see a schema-verified row
+// whose instance id is recordable), the lease/fingerprint/invocation are
+// promoted against that instance, and only then is the actual session
+// started as `sbx exec -it <name> -- pi <exact invocation>`. A create that
+// fails, or that leaves nothing positively identifiable behind, refuses
+// here: it never falls through to an exec against a sandbox this host
+// cannot prove it made.
+// spawnCreate picks the create child builder: the dedicated one when the
+// command layer wired it, else the ordinary Spawn. Nothing here inspects
+// argv to decide — an argv sniff would silently re-route the day a create
+// argv changes shape, and the caller already knows which child it is
+// building.
+func spawnCreate(deps SessionDeps) func(argv []string) *exec.Cmd {
+	if deps.SpawnCreate != nil {
+		return deps.SpawnCreate
+	}
+	return deps.Spawn
+}
+
+func startEnvCreateTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, error) {
+	creator, err := StartSbxSession(spawnCreate(deps)(spec.EnvCreateArgs), deps.Poll, true, spec.Name)
+	if err != nil {
+		return nil, err
+	}
+	if werr := creator.Wait(); werr != nil {
+		return nil, werr
+	}
+	if !creator.Appeared && !settleAfterExit(deps.Poll, spec.Name) {
+		return nil, &SessionRefused{Err: fmt.Errorf("`sbx env create` exited successfully but %q never appeared in sbx ls — nothing was attached to", spec.Name)}
+	}
+	// PROMOTE, don't merely record: the bounded create intent written before
+	// the spawn is replaced by the instance-bound lease record (E2.3), which
+	// is the ONE thing that ever counts as a positive create receipt. A
+	// cleanup warning means the record IS durable and only the now-redundant
+	// intent file survived — informational, never a reason to abort a create
+	// that already succeeded (PromotionResult's own contract).
+	recorded, warning, rerr := PromoteSessionCreation(deps.Env, spec.Key, spec.Name, spec.Fingerprint, spec.Invocation)
+	if rerr != nil {
+		return nil, rerr
+	}
+	if warning != nil {
+		fmt.Fprintf(deps.Warn, "pix: warning: %v\n", warning)
+	}
+	if !recorded {
+		return nil, &SessionRefused{Err: fmt.Errorf("%q was created but reports no verifiable instance id — refusing to attach to a sandbox this host cannot prove it owns", spec.Name)}
+	}
+	// The credentials come next, and BEFORE the keep marker: a create whose
+	// credentials could not be prepared is torn down by RunSession, and a keep
+	// marker bound first would be a proof that refuses that removal.
+	if perr := prepareSessionSecrets(spec, deps); perr != nil {
+		return nil, &SecretPrepFailed{Created: true, Refusal: &SessionRefused{
+			Err: fmt.Errorf("%q was created but its credentials could not be prepared: %w", spec.Name, perr)}}
+	}
+	if spec.Keep {
+		if kerr := setSessionKeep(spec.Key); kerr != nil {
+			fmt.Fprintf(deps.Warn, "pix: warning: -k/--keep could not be recorded: %v\n", kerr)
+		}
+	}
+	execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, spec.Invocation)
+	if aerr != nil {
+		return nil, &SessionRefused{Err: aerr}
+	}
+	// The session itself is an ATTACH to a sandbox that already exists, so it
+	// is started with creating=false: the create receipt was already demanded
+	// above, and re-polling for it here would only re-answer a settled question.
+	return StartSbxSession(deps.Spawn(execArgs), deps.Poll, false, spec.Name)
+}
+
 // startSessionTransition is the body that runs UNDER the lifecycle lock. It
 // returns as soon as the transition is recorded, with the child still running:
 func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, error) {
-	argv := spec.CreateArgs
+	argv := spec.AttachArgs
 	if spec.Creating {
 		// A create that finds the sandbox already there lost the race: another
 		// process created it while this one was resolving kits. Refuse — the
@@ -405,36 +684,57 @@ func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, 
 				spec.Name, strings.Join(diverged, ", "), RecreateGuidance(spec.Name))}
 		}
 		if spec.AttachExec {
-			invocation, hasRecord := readSessionInvocation(spec.Key)
-			if !hasRecord {
-				invocation = spec.DefaultInvocation
-			}
-			execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, invocation)
+			// QA re-review F1: an attach must use THIS launch's own current,
+			// freshly resolved invocation (spec.DefaultInvocation — the exact
+			// pi argv BuildPiInvocation just composed from --model/--resume/
+			// whatever was requested for THIS run), never a replay of
+			// whatever a prior create happened to store. The stored
+			// invocation (readSessionInvocation) remains an AUDIT trail only
+			// — reap.go still reads it to confirm a sandbox has a verifiable
+			// creation record — and is never again consulted to decide what
+			// an attach actually execs. Verified live: a re-attach with a new
+			// --model/--resume must carry it into the exec argv, not replay
+			// the create-time one (docs/design/pix-v2-surface.md §3.1: "both
+			// options apply to every attach").
+			execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, spec.DefaultInvocation)
 			if aerr != nil {
 				return nil, &SessionRefused{Err: aerr}
 			}
 			argv = execArgs
 		}
+		// Identity and fingerprint are settled; this sandbox is the one this
+		// launch means to enter. Refresh its scoped credentials BEFORE the
+		// child is spawned, so a rotated ref takes effect on this attach
+		// rather than at the next recreate. A failure refuses the attach and
+		// RETAINS the sandbox: this transition did not create it.
+		if perr := prepareSessionSecrets(spec, deps); perr != nil {
+			return nil, &SecretPrepFailed{Created: false, Refusal: &SessionRefused{
+				Err: fmt.Errorf("%q was left running; its credentials could not be prepared: %w", spec.Name, perr)}}
+		}
+	}
+
+	if spec.Creating {
+		// THE create path, and the only one: `sbx env create <effective>`.
+		if len(spec.EnvCreateArgs) == 0 {
+			return nil, &SessionRefused{Err: fmt.Errorf("%q has no effective environment to create from; refusing to create a sandbox outside the environment path", spec.Name)}
+		}
+		return startEnvCreateTransition(spec, deps)
+	}
+	if len(argv) == 0 {
+		return nil, &SessionRefused{Err: fmt.Errorf("%q has no attach argv; refusing to spawn sbx with nothing to do", spec.Name)}
 	}
 
 	child, err := StartSbxSession(deps.Spawn(argv), deps.Poll, spec.Creating, spec.Name)
 	if err != nil {
 		return nil, err
 	}
-	// Everything a later attach — or a future reaper — reads is written HERE,
-	// before the lifecycle lock is released and before the session is waited
-	// for: a creator killed mid-session still leaves a complete record.
-	recorded := SessionRecorded(spec.Key)
-	if spec.Creating && child.Appeared {
-		var rerr error
-		recorded, rerr = RecordSessionCreation(deps.Env, spec.Key, spec.Name, spec.Fingerprint, spec.Invocation)
-		if rerr != nil {
-			fmt.Fprintf(deps.Warn, "pix: warning: %v\n", rerr)
-		}
-	}
+	// An attach records nothing new: the create-time facts are already on
+	// disk (a create wrote them under this same lock before the lock was
+	// released). Only the keep marker, which is this shell's own request,
+	// is bound here.
 	if spec.Keep {
 		switch {
-		case !recorded:
+		case !SessionRecorded(spec.Key):
 			fmt.Fprintf(deps.Warn, "pix: warning: -k/--keep not recorded: %q has no verified creation record to bind a keep to\n", spec.Name)
 		default:
 			if kerr := setSessionKeep(spec.Key); kerr != nil {

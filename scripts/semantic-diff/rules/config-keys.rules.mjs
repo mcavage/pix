@@ -1,7 +1,5 @@
-// W0 pin: the top-level ~/.config/pix/config.toml key surface (AGENTS.md's
-// config.toml row: "Declares `services`, `mcp`,
-// and the Ollama model names"). config.toml is managed exclusively through
-// `pix config set`/`unset` (safety invariant #1) — the Go struct's `toml:"…"`
+// W0 pin: the top-level PIX_HOME/config.toml key surface. The file is written
+// only by named mutations such as `pix env default`; the Go struct's `toml:"…"`
 // tags ARE the on-disk contract, so a rename here is a silent breaking change
 // for every user's existing file (an unknown key becomes `unknownKeys`, a
 // dropped default becomes an unexplained behavior change) with no compiler or
@@ -9,7 +7,7 @@
 export default [
 	{
 		id: "config-keys.top-level.surface",
-		description: "Config's top-level toml tags, from the Services field through GogAccount, still name exactly this key set.",
+		description: "Config's top-level toml tags still name exactly this key set. Runtime state such as the memory port lives under PIX_HOME/.state, while config.toml remains the sparse explicit-choice schema.",
 		checks: [
 			{
 				file: "services/host/config/config.go",
@@ -23,7 +21,7 @@ export default [
 				// the same struct) are real keys too but are out of scope for this W0
 				// pin — Story-scoped follow-up, not this guard's job to enumerate the
 				// entire struct.
-				region: { start: 'Services []string `toml:"-"`', end: "\n\tKits struct {" },
+				region: { start: "type Config struct {", end: "\n\tKits struct {" },
 				pattern: 'toml:"([^",]+)',
 				// "-" (Services' own tag, deliberately un-serialized — ServicesRaw is
 				// the TOML-facing field) sits ON the start-anchor line itself and is
@@ -42,15 +40,25 @@ export default [
 				// travels as that integration's env_keys in op-refs.env. A core
 				// config key for one vendor's account was the last piece of the
 				// special case — see docs/design/integrations-remediation.md.
+				//
+				// environment / environments added E1.5 (Story 1, native sandbox
+				// environments, docs/design/environments.md §5.3): the machine
+				// default environment NAME and the name -> canonical absolute
+				// local path registry. Both are real on-disk keys with no
+				// hand-edit path at all — `pix config set/unset` refuses them
+				// outright (workflow/provision/config.go's environmentKeyRefusal);
+				// `pix env use`/`pix env add`/`pix env rm` (Wave C) are the only
+				// writers.
 				expected: [
-					"services",
-					"mcp",
+					"version_pin",
 					"memory_watcher_model",
 					"memory_embed_model",
 					"memory_capture",
 					"ollama_bridge_model",
-					"run_intent",
 					"inference",
+					"environment",
+					"environments",
+					"default_environment",
 				],
 			},
 		],

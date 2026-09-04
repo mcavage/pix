@@ -11,40 +11,41 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
+	"strings"
 	"time"
 
 	"pix/host/config"
 	"pix/host/health"
-	"pix/host/rpc"
+	"pix/host/hostenv"
 	"pix/host/secret"
 )
 
-// ProbeModelKeys runs the ONE launch-gate probe: does the key store list at
-// least one model provider key. bin/args default to `sbx secret ls`; a test
-// points them at a fixture executable so the real exec path still runs.
-// Production always pays health.StatusBudget (2s); ProbeModelKeysBudget is the
-// seam a test uses to prove the TIMEOUT arm of the tri-state WITHOUT waiting
-// out that real production window.
-func ProbeModelKeys(ctx context.Context, bin string, args ...string) health.Result {
-	return ProbeModelKeysBudget(ctx, health.StatusBudget, bin, args...)
-}
-
-// ProbeModelKeysBudget is ProbeModelKeys with an explicit per-probe budget. It
-// exists for exactly one caller outside this file: a test that must prove a
-// timed-out key store reads as unknown (never a refusal) without depending on
-// a real subprocess actually surviving the full production health.StatusBudget
-// — a dependency that is both slow (every CI run pays the full timeout) and
-// environment-sensitive (a loaded box can blow past it before the process is
-// even killed). Production has exactly one caller of this budget knob:
-// ProbeModelKeys itself, always with health.StatusBudget.
-func ProbeModelKeysBudget(ctx context.Context, budget time.Duration, bin string, args ...string) health.Result {
-	if bin == "" {
-		bin, args = "sbx", []string{"secret", "ls"}
+// ProbeModelKeys runs the ONE launch-gate probe: does THIS PIX_HOME configure
+// at least one model provider op:// ref. It reads the refs file and nothing
+// else — no `sbx secret ls`, because a host-wide sbx secret is not this
+// launcher's credential (see bootstrap.go) and answering the gate with one is
+// how a stack with no keys of its own launched on another stack's.
+//
+// TRI-STATE, unchanged in meaning: a refs file that exists and could not be
+// read is StatusUnknown and PROCEEDS; only a positively answered "no model ref
+// is configured" is StatusAbsent, and only that refuses.
+func ProbeModelKeys(env hostenv.Env) health.Result {
+	names, state := secret.ConfiguredModelRefs(env)
+	if state != secret.RefsAnswered {
+		return health.Result{Name: "providers", Status: health.StatusUnknown, Required: true,
+			Detail:   "could not read the configured refs",
+			Evidence: "reading " + secret.DefaultOpRefsPath() + " failed"}
 	}
-	snap := health.Run(ctx, budget, health.ProviderKeyProbe{
-		Bin: bin, Args: args, Want: secret.ModelProviders, AnyOf: true, Label: "providers",
-	})
-	return snap.Results[0]
+	if len(names) == 0 {
+		return health.Result{Name: "providers", Status: health.StatusAbsent, Required: true,
+			Detail:   "no model provider ref is configured",
+			Fix:      fmt.Sprintf(health.SecretSetFix, "ANTHROPIC_API_KEY"),
+			Evidence: secret.DefaultOpRefsPath() + " configures none of " + strings.Join(secret.ModelProviders, ", ")}
+	}
+	return health.Result{Name: "providers", Status: health.StatusReady, Required: true,
+		Detail:   strings.Join(names, ", ") + " configured",
+		Evidence: "op:// refs in " + secret.DefaultOpRefsPath() + ", resolved into each sandbox at launch"}
 }
 
 // RefusesLaunch reports whether the key probe POSITIVELY established that this
@@ -52,15 +53,47 @@ func ProbeModelKeysBudget(ctx context.Context, budget time.Duration, bin string,
 // could not be asked) are not that answer and never stop a launch.
 func RefusesLaunch(r health.Result) bool { return r.Effective() == health.StatusAbsent }
 
+// memoryLivenessProbe is a plain TCP dial to the pix-memory container's
+// published loopback port — evidence that SOMETHING is listening, not a
+// version- or identity-verified answer. `pix doctor`'s
+// health.MemoryContainerProbe is the thorough, Docker-state-verified check;
+// this one only needs to be fast and cheap enough to run on every `pix run`.
+// The custom memory JSON-RPC identity call this used to make was deleted in
+// the Pix v2 cutover along with the daemon that answered it (AC-16).
+type memoryLivenessProbe struct {
+	Port    int
+	Enabled bool
+}
+
+func (memoryLivenessProbe) Name() string     { return "memory" }
+func (p memoryLivenessProbe) Required() bool { return false }
+
+func (p memoryLivenessProbe) Check(ctx context.Context) health.Result {
+	if !p.Enabled {
+		return health.Result{Name: p.Name(), Status: health.StatusOff, Detail: "not enabled"}
+	}
+	d := net.Dialer{Timeout: 500 * time.Millisecond}
+	conn, err := d.DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", p.Port))
+	if err != nil {
+		return health.Result{Name: p.Name(), Status: health.StatusAbsent, Required: false,
+			Detail: fmt.Sprintf("not reachable on :%d", p.Port), Fix: "pix doctor",
+			Evidence: fmt.Sprintf("dialing 127.0.0.1:%d: %v", p.Port, err)}
+	}
+	_ = conn.Close()
+	return health.Result{Name: p.Name(), Status: health.StatusReady, Detail: fmt.Sprintf("listening on :%d", p.Port)}
+}
+
 // FastSnapshot is the small snapshot the daily path renders: the key evidence
 // `run` already paid for, plus the one host service whose absence silently
 // degrades a session (recall). Everything else belongs to `pix doctor`, whose
 // job is to be thorough. A zero-value keys Result (the gate did not run) is
 // omitted rather than rendered: absence of evidence is not a row.
 func FastSnapshot(ctx context.Context, cfg *config.Config, keys health.Result) health.Snapshot {
-	snap := health.Run(ctx, health.StatusBudget, health.MemoryUnitProbe{
-		Port:    rpc.PortFromEnv("MEMORY_PORT", rpc.MemoryPortDefault),
-		Enabled: config.ServiceEnabled(cfg, "memory"),
+	snap := health.Run(ctx, health.StatusBudget, memoryLivenessProbe{
+		// This PIX_HOME's OWN configured port, never a fixed literal: see
+		// memoryPort's comment in hoststate.go.
+		Port:    memoryPort(cfg),
+		Enabled: true, // pix-memory is a reserved built-in in v2, never an opt-in service list entry
 	})
 	if keys.Name != "" {
 		snap.Results = append([]health.Result{keys}, snap.Results...)

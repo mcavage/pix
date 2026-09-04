@@ -13,35 +13,9 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/inference"
 	"pix/host/sys"
 	"pix/host/workspace"
 )
-
-// ApplyConfiguredSessionModel gives every interactive entry point (`run` and
-// `task new`) the same top-level model, so a task sandbox cannot silently
-// inherit pi's provider default. The bool reports whether a configured intent
-// (including the explicit none/off opt-out) applied; callers decide how to
-// present resolver errors.
-func ApplyConfiguredSessionModel(o *RunOpts, cfg *config.Config) (bool, error) {
-	if o == nil || cfg == nil || o.Model != "" || o.Intent != "" {
-		return false, nil
-	}
-	intent := strings.TrimSpace(cfg.RunIntent)
-	if intent == "" {
-		return false, nil
-	}
-	if strings.EqualFold(intent, "none") || strings.EqualFold(intent, "off") {
-		return true, nil
-	}
-	model, err := inference.ResolveSessionModel(intent)
-	if err != nil {
-		return true, err
-	}
-	o.Intent = intent
-	o.Model = model
-	return true, nil
-}
 
 type CreatePoll struct {
 	// Probe answers "does a sandbox by this name exist yet".

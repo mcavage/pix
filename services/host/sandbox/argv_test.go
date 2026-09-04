@@ -41,7 +41,7 @@ func TestExecArgv_TTYAndNonTTY(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecArgv: %v", err)
 	}
-	if want := []string{"exec", "-it", "pix-demo", "pi"}; !reflect.DeepEqual(argv, want) {
+	if want := []string{"exec", "-it", "pix-demo", "--", "pi"}; !reflect.DeepEqual(argv, want) {
 		t.Fatalf("ExecArgv(tty) = %v, want %v", argv, want)
 	}
 
@@ -49,7 +49,7 @@ func TestExecArgv_TTYAndNonTTY(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecArgv: %v", err)
 	}
-	if want := []string{"exec", "-i", "pix-demo", "pi", "-p", "hi"}; !reflect.DeepEqual(argv, want) {
+	if want := []string{"exec", "-i", "pix-demo", "--", "pi", "-p", "hi"}; !reflect.DeepEqual(argv, want) {
 		t.Fatalf("ExecArgv(non-tty) = %v, want %v", argv, want)
 	}
 }

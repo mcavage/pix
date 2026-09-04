@@ -1,5 +1,12 @@
 # Onboarding redesign
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 > **Historical, superseded.** This doc's concrete write-back mechanism (the
 > in-sandbox agent writing `<workspace>/.pix/onboarding.json`, `onboard.go`'s
 > `runOnboardNonInteractive`/`applyOnboardingResult`, and `setup.go` being torn

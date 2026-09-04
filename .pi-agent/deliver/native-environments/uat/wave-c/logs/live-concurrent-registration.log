@@ -1,0 +1,31 @@
+=== 57. live concurrent registration: 5 parallel disjoint 'env add' ===
+-- race1 --
+pix: environment "race1" registered at /tmp/wave-c-run/xdg-data/pix/envs/race1.
+
+pix env use race1
+-- race2 --
+pix: environment "race2" registered at /tmp/wave-c-run/xdg-data/pix/envs/race2.
+
+pix env use race2
+-- race3 --
+pix: environment "race3" registered at /tmp/wave-c-run/xdg-data/pix/envs/race3.
+
+pix env use race3
+-- race4 --
+pix: environment "race4" registered at /tmp/wave-c-run/xdg-data/pix/envs/race4.
+
+pix env use race4
+-- race5 --
+pix: environment "race5" registered at /tmp/wave-c-run/xdg-data/pix/envs/race5.
+
+pix env use race5
+
+=== 58. env ls after concurrent adds (all 5 registered, no lost update) ===
+NAME    DEFAULT  REVIEW    ROOT
+home             accepted  /tmp/wave-c-run/xdg-data/pix/envs/home
+other2  *        n/a       /tmp/wave-c-run/xdg-data/pix/envs/other
+race1            n/a       /tmp/wave-c-run/xdg-data/pix/envs/race1
+race2            n/a       /tmp/wave-c-run/xdg-data/pix/envs/race2
+race3            n/a       /tmp/wave-c-run/xdg-data/pix/envs/race3
+race4            n/a       /tmp/wave-c-run/xdg-data/pix/envs/race4
+race5            n/a       /tmp/wave-c-run/xdg-data/pix/envs/race5

@@ -12,8 +12,7 @@
       "contains": [
         "Usage: pix reset",
         "REVERSIBLE: nothing is deleted",
-        "--keep-memory",
-        "--keep-sandboxes"
+        "--yes"
       ]
     },
     {

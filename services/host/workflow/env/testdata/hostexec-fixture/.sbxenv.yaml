@@ -1,0 +1,21 @@
+schemaVersion: "1"
+agent: pix
+
+mcp:
+  servers:
+    - name: github-mcp
+      command: github-mcp-server
+      args:
+        - --stdio
+    - name: warehouse-mcp
+      command: warehouse-mcp-server
+
+secrets:
+  anthropic:
+    ref: op://Personal/Anthropic/api-key
+
+bindings:
+  anthropic:
+    apiKey:
+      domains:
+        - api.anthropic.com

@@ -16,6 +16,19 @@ test("the publish version comes from committed package.json, not the run number"
 	assert.doesNotMatch(workflow, /version=0\.0\.\$\{\{\s*github\.run_number/);
 });
 
+// scripts/release/derive-build-version.sh derives the LOCAL (dev-stack)
+// build identity (LAUNCHER_VERSION's default, Makefile) — a next-patch
+// -beta.g<sha7>[.dirty.<12hex>] prerelease so a release stack and a dev stack
+// coexist. Release CI must keep computing and committing the clean X.Y.Z
+// itself, the same way it always has: it never shells out to the local
+// derivation script, and the version it stamps/tags/commits stays plain
+// semver.
+test("release CI still computes and commits a CLEAN semver, never the local derived prerelease", () => {
+	assert.doesNotMatch(workflow, /derive-build-version\.sh/, "publish.yml must not delegate its version identity to the LOCAL build derivation script");
+	assert.match(workflow, /version=\$version/, "the version job must still emit a plain X.Y.Z via GITHUB_OUTPUT");
+	assert.doesNotMatch(workflow, /-beta\./, "release CI must never stamp a prerelease identifier");
+});
+
 test("later publishes select an unused patch tag without overwriting a release", () => {
 	assert.match(workflow, /fetch-depth:\s*0/);
 	assert.match(workflow, /refs\/tags\/v\$\{version\}/);
@@ -30,11 +43,13 @@ test("later publishes select an unused patch tag without overwriting a release",
 
 // The manpage (pix.1) was retired along with `pix man`/`--man` (`pix help
 // --all` is the one verb map now), so the Homebrew archive stopped bundling
-// it — the tarball carries just the two binaries plus the third-party notices.
-test("Homebrew archives are additive and contain both binaries, no manpage", () => {
+// it — the tarball carries just the pix binary plus the third-party notices.
+// pix-host is gone too: services/host/cmd/pix is the only build target.
+test("Homebrew archives are additive and contain the pix binary, no pix-host, no manpage", () => {
 	assert.match(workflow, /pix_\$\{V\}_darwin_\$\{arch\}\.tar\.gz/);
-	assert.match(workflow, /tar -C "\$stage" -czf .* pix pix-host THIRD_PARTY_NOTICES\.md NOTICE\.md/);
+	assert.match(workflow, /tar -C "\$stage" -czf .* pix THIRD_PARTY_NOTICES\.md NOTICE\.md/);
 	assert.doesNotMatch(workflow, /tar -C "\$stage" -czf .*pix\.1/);
+	assert.doesNotMatch(workflow, /tar -C "\$stage" -czf .*pix-host/);
 	// Only the notice-bearing tarballs are hashed and published now: the loose
 	// pix-<os>-<arch> assets were a notice-less distribution of the same
 	// binaries (see tests/install.test.mjs, AC-REL-02). They still get BUILT as

@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"pix/host/cli"
+	"pix/host/envinfo"
 	"pix/host/health"
 	"pix/host/hostenv"
 	"pix/host/lease"
 	"pix/host/mcp"
 	"pix/host/sandbox"
+	"pix/host/stack"
 	"pix/host/workspace"
 )
 
@@ -158,7 +160,7 @@ func Ls(env hostenv.Env, out io.Writer, jsonOut bool) error {
 		// answer to whether the word was right.
 		fmt.Fprintln(out, "A held box has a live `pix` session on this host; it is removed when the last one exits.")
 	}
-	fmt.Fprintln(out, "Remove one:  pix rm <name>   (or `sbx rm -f <name>` for non-pix boxes)")
+	fmt.Fprintln(out, "Remove this stack:  pix rm <scoped-name>\nLegacy/foreign names: use their owning PIX_HOME, or explicitly `sbx rm -f <name>`")
 	return nil
 }
 
@@ -183,7 +185,17 @@ type RmOptions struct {
 	Teardown TeardownOptions
 }
 
-// Rm removes pix sandboxes, in one of four explicitly-chosen shapes:
+// Rm removes pix sandboxes, in one of four explicitly-chosen shapes. Every
+// shape is scoped to THIS process's current stack (stack.Current, i.e. this
+// PIX_HOME): `sbx ls` is a HOST-GLOBAL listing, not scoped to any one
+// PIX_HOME, so --all/--orphans discovery is narrowed to this stack's own
+// names (workspace.ParseScopedBoxes / the orphan sweep's own lease-scoped
+// candidates) before anything is ever considered for removal, and even an
+// EXPLICITLY named target is refused when it names a DIFFERENT stack's
+// sandbox — a foreign-stack name is skipped/refused, never reported
+// removed. sandbox.PlanRemove/PlanForceRemove remain the lower-level,
+// general pix-* safety net underneath this; this function is the stack-scope
+// narrowing a caller of THIS package gets on top of it.
 func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 	if err := validateRmShape(opts); err != nil {
 		return err
@@ -191,8 +203,12 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 	if _, err := env.LookPath("sbx"); err != nil {
 		return SbxUnavailableErr("remove sandboxes")
 	}
+	stackID, err := stack.Current()
+	if err != nil {
+		return fmt.Errorf("launch: resolve this stack's identity: %w", err)
+	}
 	if opts.Orphans {
-		results, err := sweepOrphans(env, out, opts.Teardown)
+		results, err := sweepOrphans(env, out, stackID, opts.Teardown)
 		if err != nil {
 			return err
 		}
@@ -216,7 +232,11 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 		for _, k := range opts.Except {
 			keep[k] = true
 		}
-		for _, b := range workspace.ParsePixBoxes(raw) {
+		// ParseScopedBoxes, not ParsePixBoxes: --all discovers only sandboxes
+		// SCOPED TO THIS STACK. A foreign stack's own pix-* sandbox never
+		// enters names at all, so it can never be reported removed by a
+		// bulk sweep run from a different PIX_HOME sharing this host.
+		for _, b := range workspace.ParseScopedBoxes(raw, stackID) {
 			if !keep[b.Name] {
 				names = append(names, b.Name)
 			}
@@ -229,13 +249,17 @@ func Rm(env hostenv.Env, out, errOut io.Writer, opts RmOptions) error {
 
 	failed := false
 	for _, n := range names {
-		if !strings.HasPrefix(n, "pix-") {
-			fmt.Fprintf(errOut, "refusing %q: not a pix sandbox (use `sbx rm -f %s` for that)\n", n, n)
+		if !stack.IsScopedSandboxName(stackID, n) {
+			if strings.HasPrefix(n, "pix-") {
+				fmt.Fprintf(errOut, "refusing %q: not this pix stack's sandbox (a different PIX_HOME, or a pre-scoping name)\n", n)
+			} else {
+				fmt.Fprintf(errOut, "refusing %q: not a pix sandbox (use `sbx rm -f %s` for that)\n", n, n)
+			}
 			failed = true
 			continue
 		}
 		if opts.Force {
-			if err := RemovePixSandbox(env, n); err != nil {
+			if err := removePixSandbox(env, n); err != nil {
 				fmt.Fprintf(errOut, "failed to remove %s: %v\n", n, err)
 				failed = true
 				continue
@@ -288,20 +312,38 @@ func validateRmShape(opts RmOptions) error {
 	return nil
 }
 
-// RemovePixSandbox is the ONE forced seam: an explicitly-named `pix rm
+// removePixSandbox is the ONE forced seam: an explicitly-named `pix rm
 // --force` (or a task-checkout removal already cleared by its own git-hygiene
 // guard) that skips pix's own zero-holder-reference proof entirely — a human
 // (or an equivalent already-proven guard) is vouching for this ONE name, not
 // a wildcard. It routes through sandbox.PlanForceRemove for the exact same
 // pix-* scope/name-safety check every other removal path uses, so this seam
 // cannot reach a name PlanRemove would have refused either.
-func RemovePixSandbox(env hostenv.Env, name string) error {
+func removePixSandbox(env hostenv.Env, name string) error {
 	argv, err := sandbox.PlanForceRemove(name)
 	if err != nil {
 		return err
 	}
 	_, err = env.Run("sbx", argv...)
 	return err
+}
+
+// RemoveScopedPixSandbox is the ONLY EXPORTED forced seam (removePixSandbox
+// above is deliberately unexported, so no package outside this one can reach
+// the forced argv without passing a stack id first). It is for a caller
+// holding a RECORDED name rather than one it just derived: a task's metadata carries whatever
+// sandbox name the PIX_HOME that created the task composed, and on a host
+// where two Pix stacks coexist that may be another stack's sandbox (or a
+// pre-scoping name no stack owns). sandbox.PlanForceRemove cannot catch
+// either: it has no stack id to compare against, so "pix-*" is as far as its
+// scope check reaches: which is exactly the gap this closes: the stack check
+// runs BEFORE any argv is composed, and a name that fails it is never
+// executed in any form.
+func RemoveScopedPixSandbox(env hostenv.Env, stackID, name string) error {
+	if !stack.IsScopedSandboxName(stackID, name) {
+		return fmt.Errorf("refusing to remove %q: it is not this pix stack's sandbox (a different PIX_HOME, or a pre-scoping name). Remove it from the home that created it, or by hand: sbx rm -f %s", name, name)
+	}
+	return removePixSandbox(env, name)
 }
 
 const LsDescription = `List the pix sandboxes on this host (name, state, ws dir). These are the
@@ -317,3 +359,94 @@ shell still references the sandbox. Only an explicitly named --force skips it.
   pix rm pix-a pix-b               remove several
   pix rm --all --keep pix-pix      remove all but one (never forced)
   pix rm --orphans                 remove only unreferenced pix-owned boxes`
+
+// envRemoveFallbackReport is the exact explicit note docs/design/
+// environments.md §10.3 requires when the stable effective file is absent:
+// "It reports that environment-scoped secret cleanup could not run; it
+// never guesses or prunes shared state." %q is the recorded pix-* instance
+// name a caller is falling back to removing by name alone.
+const envRemoveFallbackReport = "environment-scoped secret cleanup could not run: no effective environment file was found for %q; falling back to name-based removal (bindings and MCP registrations are host-global and are left untouched either way)"
+
+// EnvRemovalPlan is what PlanEnvRemoveSeam composed: Argv is what a
+// caller passes to `sbx` — never executed by this function, exactly like
+// every other Plan* function in this module and in package sandbox — and
+// Report is set ONLY on the fallback branch (see envRemoveFallbackReport).
+type EnvRemovalPlan struct {
+	Argv   []string
+	Report string
+}
+
+// PlanEnvRemoveSeam is E2.4's launch-integration seam for docs/design/
+// environments.md §10.3's environment-scoped removal: the future E2.5
+// launch cutover's caller for "how do I tear down a sandbox this host may
+// have launched through a stable effective environment file".
+//
+// It composes the SAME effectivePath a launch would have created (§6.2:
+// "Create and remove always use this same path"), and when a file exists
+// there, recomputes the effective name FROM THAT DOCUMENT — reading its own
+// `name:` field back via envinfo.Parse, never re-deriving one independently
+// — and plans through sandbox.PlanEnvRemove: refusing anything outside
+// pix-* scope or unequal to recordedInstanceName before any argv is ever
+// composed. A refusal here is a cli.UsageError (exit 2): the same posture
+// validateRmShape already gives every other malformed-removal-intent
+// refusal in this file, because a scope or instance mismatch is exactly
+// that — an invocation this caller must not proceed with, not a
+// transient failure.
+//
+// When effectivePath names no file — "as with a pre-migration sandbox or a
+// hard crash that lost state" (§10.3) — PlanEnvRemoveSeam falls back
+// to this package's EXISTING name-based planner, sandbox.PlanForceRemove
+// when force is true or sandbox.PlanRemove otherwise: the IDENTICAL
+// pix-*/name-safety scope check every other removal path in this file
+// already runs. This function only PLANS that fallback argv; it never
+// executes anything, so it can neither weaken nor skip the
+// holder/keep/instance-id/fresh-probe proof chain TeardownSandbox already
+// enforces before ever forwarding removal argv to sbx — a caller MUST
+// still route the returned EnvRemovalPlan through TeardownSandbox exactly
+// as every other removal in this file does today: reap.go's
+// TeardownOptions.Planner is that seam (a func(name string)
+// (EnvRemovalPlan, error), of which this function is one valid shape), and
+// it is consulted ONLY from the two points inside decideTeardown/
+// teardownUnderProof that have already cleared this domain's own authority
+// gate — there is no other API that executes an EnvRemovalPlan. The
+// fallback plan's Report states, in the operator's own words, that
+// environment-scoped secret cleanup could not run, and TeardownResult's
+// Detail carries it forward regardless of whether the removal itself
+// succeeds, so a caller can surface that instead of silently pretending it
+// happened.
+//
+// Neither branch ever appends `--prune-bindings`, or any flag beyond `-f`:
+// see sandbox.PlanEnvRemove's own doc comment on A3's nonclaim.
+func PlanEnvRemoveSeam(effectivePath, recordedInstanceName string, force bool) (EnvRemovalPlan, error) {
+	if effectivePath != "" {
+		_, statErr := os.Stat(effectivePath)
+		switch {
+		case statErr == nil:
+			doc, perr := envinfo.Parse(effectivePath)
+			if perr != nil {
+				return EnvRemovalPlan{}, fmt.Errorf("launch: could not read effective environment file %s: %w", effectivePath, perr)
+			}
+			argv, rerr := sandbox.PlanEnvRemove(effectivePath, doc.Name, recordedInstanceName)
+			if rerr != nil {
+				return EnvRemovalPlan{}, cli.Usagef("%v", rerr)
+			}
+			return EnvRemovalPlan{Argv: argv}, nil
+		case !os.IsNotExist(statErr):
+			return EnvRemovalPlan{}, fmt.Errorf("launch: could not check effective environment file %s: %w", effectivePath, statErr)
+		}
+		// statErr is a plain "not exist": fall through to the name-based plan.
+	}
+
+	planFallback := sandbox.PlanRemove
+	if force {
+		planFallback = sandbox.PlanForceRemove
+	}
+	argv, rerr := planFallback(recordedInstanceName)
+	if rerr != nil {
+		return EnvRemovalPlan{}, cli.Usagef("%v", rerr)
+	}
+	return EnvRemovalPlan{
+		Argv:   argv,
+		Report: fmt.Sprintf(envRemoveFallbackReport, recordedInstanceName),
+	}, nil
+}

@@ -1,5 +1,12 @@
 # Runtime invariants (host binary + launcher)
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 The long-form rationale behind a handful of one- or two-line comments in
 `services/host/*.go` and `services/host/cmd/pix/*.go`. It lives here because it is
 paragraphs of reasoning about ORDERING and TRUST that never changes when the code

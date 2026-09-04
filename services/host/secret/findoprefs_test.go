@@ -12,11 +12,8 @@ import (
 // realFileEnv answers IsFile from the real filesystem: these tests write real
 // files into a temp dir, because "which path does the resolver find" is a
 // question about the disk, not about a stub.
-func opRefsFileEnv(getenv func(string) string, home, cwd string) hostenv.Env {
+func opRefsFileEnv() hostenv.Env {
 	return hostenv.Env{System: &systest.Fake{
-		GetenvFn:  getenv,
-		HomeDirFn: func() string { return home },
-		GetwdFn:   func() (string, error) { return cwd, nil },
 		IsFileFn: func(p string) bool {
 			st, err := os.Stat(p)
 			return err == nil && !st.IsDir()
@@ -26,7 +23,7 @@ func opRefsFileEnv(getenv func(string) string, home, cwd string) hostenv.Env {
 
 func writeRefs(t *testing.T, path string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("ANTHROPIC_API_KEY=op://v/i/f\n"), 0o600); err != nil {
@@ -34,29 +31,38 @@ func writeRefs(t *testing.T, path string) {
 	}
 }
 
-// TestFindOpRefs moved here with its subject (it was stranded in the doctor
-// workflow, whose report used to print the resolved path). It uses REAL files
-// in a temp dir rather than a stat fake: the question is what the resolver
-// finds on disk.
-func TestFindOpRefs(t *testing.T) {
-	cfgDir := t.TempDir()
-	writeRefs(t, filepath.Join(cfgDir, "op-refs.env"))
-	empty := t.TempDir()
-	env := opRefsFileEnv(func(k string) string {
-		return map[string]string{"PIX_CONFIG": filepath.Join(cfgDir, "config.toml")}[k]
-	}, "", empty)
-	if got, want := FindOpRefs(env), filepath.Join(cfgDir, "op-refs.env"); got != want {
-		t.Errorf("expected the PIX_CONFIG-dir op-refs %q, got %q", want, got)
+// TestFindOpRefs_PixHomeIsTheOnlyCandidate pins QA F5's close-out: the
+// resolver looks at <PIX_HOME>/secrets.env and nowhere else. $PIX_CONFIG, a
+// repo checkout's config/secrets.env, and ~/.config/pix are deleted, not
+// deprioritized, so a stray file at any of them is invisible here.
+func TestFindOpRefs_PixHomeIsTheOnlyCandidate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	env := opRefsFileEnv()
+
+	if got := FindOpRefs(env); got != "" {
+		t.Fatalf("FindOpRefs with no file = %q, want \"\" (cannot verify)", got)
 	}
 
-	home := t.TempDir()
-	writeRefs(t, filepath.Join(home, ".config", "pix", "op-refs.env"))
-	env2 := opRefsFileEnv(func(string) string { return "" }, home, t.TempDir())
-	got := FindOpRefs(env2)
-	if want := filepath.Join(home, ".config", "pix", "op-refs.env"); got != want {
-		t.Errorf("expected the home-dir op-refs fallback %q, got %q", want, got)
+	// A file at every DELETED candidate must still resolve to nothing.
+	other := t.TempDir()
+	writeRefs(t, filepath.Join(other, "secrets.env"))
+	t.Setenv("PIX_CONFIG", filepath.Join(other, "config.toml"))
+	t.Setenv("XDG_CONFIG_HOME", other)
+	if got := FindOpRefs(env); got != "" {
+		t.Errorf("FindOpRefs honored a retired candidate: %q", got)
+	}
+
+	want := filepath.Join(home, "secrets.env")
+	writeRefs(t, want)
+	got := FindOpRefs(env)
+	if got != want {
+		t.Errorf("FindOpRefs = %q, want the PIX_HOME file %q", got, want)
 	}
 	if !filepath.IsAbs(got) {
 		t.Errorf("resolved op-refs must be absolute, got %q", got)
+	}
+	if p := DefaultOpRefsPath(); p != want {
+		t.Errorf("DefaultOpRefsPath = %q, want %q", p, want)
 	}
 }

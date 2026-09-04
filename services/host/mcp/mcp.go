@@ -3,15 +3,12 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os/exec"
-	"sort"
 	"strings"
 
-	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sys"
 )
@@ -135,111 +132,6 @@ const mcpLsAttachmentNote = "\nNote: this is the gateway's HOST registration lis
 	"sandbox picks up everything registered when it starts, so `pix rm <box>` then\n" +
 	"`pix run` is how a running one catches up.\n"
 
-// McpRegistrar carries the resolved ABSOLUTE paths needed to build a
-// `sbx mcp add` command. The gateway daemon's PATH is not the user's, so every
-// binary is registered by absolute path.
-type McpRegistrar struct {
-	Op     string // absolute op (1Password CLI)
-	OpRefs string // absolute config/op-refs.env
-	// resolved maps a server COMMAND name to its absolute path, looked up once
-	// at registration. A pack declares `command = "gog"`; the gateway is handed
-	// `/opt/homebrew/bin/gog`, because its PATH need not contain Homebrew.
-	resolved map[string]string
-	// servers maps a server name to its pack-declared spec. A Command or Image
-	// server registers as an op-run-wrapped host command (creds from op-refs).
-	// A Manifest name registers via `--local --url` (gateway resolves the OCI
-	// image; creds Docker-side). A RemoteURL name registers via `--url` (the
-	// gateway OAuths it host-side). Neither of the last two is op-run wrapped.
-	servers map[string]config.MCPServer
-	// LegacyPositionalURL flips a manifest/remote container's URL argument
-	// from the current --url FLAG grammar to the legacy POSITIONAL grammar
-	// (`mcp add name --local <manifest>` / `mcp add name <url>`, no --url).
-	// It is decided ONCE, up front, by a read-only `sbx mcp add --help` probe
-	// (see detectLegacyPositionalURL) — never by retrying a failed remote-URL
-	// registration, which can trigger an interactive OAuth grant a second
-	// attempt must not repeat.
-	LegacyPositionalURL bool
-}
-
-// ServerCmd is the bare command+args the gateway must ultimately spawn for one
-// server, before any op-run wrapping. There are exactly two shapes, and BOTH
-// come from the pack manifest — pix contributes no flags of its own, so the
-// argv a reviewer approved in the pack's bill of materials is the argv that
-// runs. A Manifest/RemoteURL server has no host command at all and returns nil.
-func (m McpRegistrar) ServerCmd(name string) []string {
-	s := m.servers[name]
-	switch {
-	case s.Command != "":
-		// Host command: the resolved absolute binary plus the pack's LITERAL
-		// args. Per-user values reach it as environment variables (EnvKeys),
-		// never by templating this argv.
-		bin := m.resolved[name]
-		if bin == "" {
-			bin = s.Command
-		}
-		return append([]string{bin}, s.Args...)
-	case s.Image != "":
-		// Container: `docker run -i --rm -e <KEY>… <image>`. AddArgs op-run
-		// wraps it (when op-refs is present), so op resolves each KEY from
-		// 1Password and `-e KEY` forwards it into the container.
-		argv := []string{"docker", "run", "-i", "--rm"}
-		for _, k := range s.EnvKeys {
-			argv = append(argv, "-e", k)
-		}
-		keys := make([]string, 0, len(s.EnvValues))
-		for key := range s.EnvValues {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			argv = append(argv, "-e", key+"="+s.EnvValues[key])
-		}
-		return append(argv, s.Image)
-	}
-	return nil
-}
-
-// AddArgs builds the `sbx mcp add <name> …` argv for one server. A host
-// command (Command or Image) is wrapped in `op run --no-masking
-// --env-file=<refs> -- <cmd…>` whenever op-refs is present, so its declared
-// credentials resolve from 1Password at gateway spawn time. When op-refs is
-// ABSENT it registers bare — 1Password is optional, and a server that declares
-// no credentials needs nothing injected.
-func (m McpRegistrar) AddArgs(name string) []string {
-	// Manifest container: register the OCI server by manifest, run locally by the
-	// gateway via Docker. No op-run wrap — its creds are provided Docker-side
-	// (declared in the server's server.json), never through op-refs. (Image
-	// containers fall through to ServerCmd + the op-run wrapper below.)
-	if c := m.servers[name]; c.Manifest != "" {
-		if m.LegacyPositionalURL {
-			return []string{"mcp", "add", name, "--local", c.Manifest}
-		}
-		return []string{"mcp", "add", name, "--local", "--url", c.Manifest}
-	}
-	// Remote container: register the remote MCP endpoint by URL. No --local (it's a
-	// remote HTTP server, not an OCI image the gateway runs) and no op-run wrap —
-	// OAuth is discovered + handled host-side by the gateway on first use.
-	if c := m.servers[name]; c.RemoteURL != "" {
-		if m.LegacyPositionalURL {
-			return []string{"mcp", "add", name, c.RemoteURL}
-		}
-		return []string{"mcp", "add", name, "--url", c.RemoteURL}
-	}
-	argv := m.ExecArgv(name)
-	if len(argv) == 0 {
-		// No transport: nothing to register. Callers filter these out before
-		// getting here, but AddArgs used to be total and losing that quietly
-		// turned a caller's mistake into a panic. Returning nil keeps the
-		// mistake visible as "registered nothing" instead.
-		return nil
-	}
-	args := []string{"mcp", "add", name, "--command", argv[0]}
-	for _, c := range argv[1:] {
-		args = append(args, "--args", c)
-	}
-	return args
-}
-
 // detectLegacyPositionalURL is the bounded, side-effect-free FEATURE-DETECTION
 // probe that decides which `sbx mcp add` URL grammar this host's installed sbx
 // speaks, BEFORE ever registering a manifest/remote container. It runs the
@@ -328,6 +220,25 @@ func catalogEntryMatchesShippedURL(name, url string) (bool, error) {
 	return false, fmt.Errorf("could not inspect existing registration (`sbx mcp inspect|get %s` both failed)", name)
 }
 
+// VerifyExistingEndpoint inspects an ALREADY-PRESENT registration under name
+// (via `sbx mcp inspect NAME`, falling back to `sbx mcp get NAME`) and
+// reports whether its canonical endpoint equals want. verified is false when
+// NEITHER verb produced a readable answer — the caller must then treat the
+// registration as unverifiable (this host genuinely cannot tell), never as a
+// match or a mismatch. This is the exported form of
+// catalogEntryMatchesShippedURL's own inspect/get probe, for a caller (e.g.
+// cmd/pix's pix-memory registrar) outside this package that needs the same
+// evidence without importing the catalog-specific classification around it.
+func VerifyExistingEndpoint(name, want string) (matches bool, verified bool) {
+	for _, verb := range []string{"inspect", "get"} {
+		stdout, _, err := runSbxCaptured([]string{"mcp", verb, name})
+		if err == nil {
+			return outputContainsCanonicalEndpoint(stdout, want), true
+		}
+	}
+	return false, false
+}
+
 // catalogLsEvidenceOrFailClosed runs the ONE bounded `sbx mcp ls` every
 // direct catalog fallback (add or rm) fetches up front, so every catalog
 // entry is classified against a single consistent snapshot rather than a
@@ -403,28 +314,6 @@ func AddRemoteServers(out, errW io.Writer, catalog []CatalogServer) error {
 	return nil
 }
 
-// ExecArgv returns the EXACT, literal command line the sbx gateway will exec to
-// spawn server `name` — serverCmd's bare invocation, wrapped in
-// `op run --no-masking --env-file=<refs> -- <cmd…>` when m.opRefs is present so
-// creds resolve from 1Password at gateway spawn time, or returned bare when
-// m.opRefs is empty (1Password is optional). This is the single source of
-// truth for "what will actually run": AddArgs re-encodes it into sbx's
-// --command/--args form, so a probe of the real spawn path can never drift
-// from what gets registered. Container (manifest/remote) servers never route
-// through here — AddArgs short-circuits them above.
-func (m McpRegistrar) ExecArgv(name string) []string {
-	cmd := m.ServerCmd(name)
-	// A server that declares NO credentials is never wrapped, even when
-	// op-refs.env exists. `op run --env-file` resolves EVERY ref in the file,
-	// so wrapping a credential-free server would make it share fate with every
-	// unrelated ref: one stale entry elsewhere in the file would stop a server
-	// that needs nothing from 1Password at all.
-	if len(m.servers[name].EnvKeys) == 0 {
-		return cmd
-	}
-	return OpRunWrap(m.Op, m.OpRefs, cmd)
-}
-
 // OpRunWrap is the ONE op-run wrapper grammar pix generates. It exists as a
 // shared function, not an inline string, because two callers must produce
 // byte-identical commands: registration (what the gateway will spawn) and
@@ -440,293 +329,6 @@ func OpRunWrap(opPath, opRefs string, argv []string) []string {
 		return argv
 	}
 	return append([]string{opPath, "run", "--no-masking", "--env-file=" + opRefs, "--"}, argv...)
-}
-
-// RegisterServers resolves + guards + builds + runs the `sbx mcp add` commands
-// for the requested servers. With no requested names it registers every entry
-// in the resolved profile's cfg.MCP.
-//
-// Every server pix can register comes from the ACTIVE PACK's manifest. Pix
-// ships none of its own and special-cases no vendor: `servers` is the whole
-// vocabulary, so a name that is neither pack-declared nor a known catalog
-// endpoint is an error naming what to do about it, never a guess. When sbx is
-// absent it prints exactly what it WOULD run instead of crashing.
-func RegisterServers(cfg *config.Config, env hostenv.Env, out io.Writer,
-	requested []string, servers map[string]config.MCPServer,
-	creds Credentials) error {
-
-	names := requested
-	if len(names) == 0 {
-		names = append(names, cfg.MCP...)
-	}
-	if len(names) == 0 {
-		fmt.Fprintln(out, "Nothing to register: no servers requested and none in the config mcp list.")
-		fmt.Fprintln(out, "MCP servers come from a pack. Activate one with:  pix pack use <path>")
-		return nil
-	}
-
-	// `sbx mcp add` registers against sbx's local data-plane gateway, which is
-	// always available (no SBX_MCP_URL needed on nightly) — so there's no gateway
-	// precondition to check here anymore.
-
-	// Nil-safe lookPath: a partially-populated hostenv.Env (some tests set only
-	// env.Run) must degrade to "binary not found" rather than panic. Every
-	// op/command/sbx lookup below goes through this.
-	lookPath := env.LookPath
-
-	// Partition by what the PACK declared. This is pure data — no subprocess, no
-	// ambient host state, no fallback guess. A name pix cannot place is named as
-	// unknown rather than registered as something it might not be.
-	var hostServers []string    // Command + Image: an op-run-wrappable host command
-	var gatewayServers []string // Manifest + RemoteURL: the gateway resolves and runs it
-	var unknown []string
-	// servers is the pack's map and must not be mutated; a catalog fallback
-	// below needs to add to it, so work on a copy.
-	resolvedServers := make(map[string]config.MCPServer, len(servers)+len(names))
-	for k, v := range servers {
-		resolvedServers[k] = v
-	}
-	for _, n := range names {
-		s, declared := servers[n]
-		switch {
-		case declared && s.HostExec():
-			hostServers = append(hostServers, n)
-		case declared:
-			gatewayServers = append(gatewayServers, n)
-		case McpCatalogNames[n]:
-			// A curated catalog name is registerable with no pack at all: pix
-			// already knows its endpoint. Treating it as undeclared would break
-			// a host that registered one directly (`pix mcp add notion --url …`)
-			// and has it in the config — nobody declared it, and nobody needs to.
-			url, _ := KnownRemoteURL(n)
-			resolvedServers[n] = config.MCPServer{RemoteURL: url}
-			gatewayServers = append(gatewayServers, n)
-		default:
-			unknown = append(unknown, n)
-			fmt.Fprintf(out, "  %s: not declared by the active pack\n", n)
-		}
-	}
-	servers = resolvedServers
-
-	// unknownErr makes an unplaceable name a non-zero exit rather than a silent
-	// success. A user whose config lists a server nobody declares has a real
-	// problem — most often a pack that was deactivated, or a stale config entry.
-	var unknownErr error
-	if len(unknown) > 0 {
-		unknownErr = fmt.Errorf("no active pack declares %s — activate the pack that provides it "+
-			"(pix pack use <path>), or drop it (pix config unset mcp %s)",
-			strings.Join(unknown, ", "), unknown[0])
-	}
-
-	// Host commands first, then gateway-run servers: a remote registration can
-	// open a browser, and doing the silent work before the interactive work
-	// means a user is never left staring at a consent screen wondering whether
-	// the rest succeeded.
-	var finalNames []string
-	finalNames = append(finalNames, hostServers...)
-	finalNames = append(finalNames, gatewayServers...)
-	if len(finalNames) == 0 {
-		return unknownErr
-	}
-
-	// op-refs is the file of op:// refs the wrapper resolves at spawn. When both
-	// op and op-refs are present, a server that DECLARES credentials is wrapped
-	// in `op run`; one that declares none never is (see ExecArgv). When either
-	// is absent every server registers BARE — 1Password is optional, and a
-	// credential-free server is fully functional without it.
-	OpPath, OpRefs := creds.OpPath, creds.OpRefsPath
-	opReady := OpPath != "" && OpRefs != ""
-
-	reg := McpRegistrar{servers: servers, resolved: map[string]string{}}
-	if len(gatewayServers) > 0 {
-		// Decide the manifest/remote URL grammar ONCE, up front, by a read-only
-		// help probe — never by retrying a failed registration. A remote
-		// container's `mcp add` can trigger an interactive OAuth grant, and
-		// retrying that with a different argv after a failed first attempt
-		// risks a second, unwanted device-code flow; deciding the grammar
-		// before ever registering anything avoids that entirely.
-		reg.LegacyPositionalURL = detectLegacyPositionalURL(env)
-	}
-	if opReady {
-		reg.Op = OpPath
-		reg.OpRefs = OpRefs
-	}
-
-	// Resolve each host COMMAND to an absolute path. A server whose binary is
-	// missing is SKIPPED and reported; it does not abort the batch.
-	//
-	// This used to return immediately, which was a worse bug than the one it
-	// was guarding against. A pack's very first adoption is the normal case
-	// where a command is not installed yet — installing it is what the pack's
-	// own setup step is for — and one missing binary then prevented every OTHER
-	// server from registering, including remote and container transports that
-	// had nothing to do with it. Registering a command that does not exist is
-	// still refused; that is per-server, not per-batch.
-	var unresolved []string
-	resolvable := make([]string, 0, len(hostServers))
-	for _, n := range hostServers {
-		s := servers[n]
-		if s.Command == "" {
-			resolvable = append(resolvable, n) // Image: docker is the gateway's to resolve
-			continue
-		}
-		path, err := lookPath(s.Command)
-		if err != nil {
-			fmt.Fprintf(out, "  %s: needs the %q command, which is not on PATH — not registered\n", n, s.Command)
-			unresolved = append(unresolved, fmt.Sprintf("%s (needs %q)", n, s.Command))
-			continue
-		}
-		reg.resolved[n] = path
-		resolvable = append(resolvable, n)
-	}
-	var unresolvedErr error
-	if len(unresolved) > 0 {
-		unresolvedErr = fmt.Errorf("not registered because a required command is missing: %s — "+
-			"install it (the pack's setup step does this: `pix setup --pack <pack> --with <step>`), "+
-			"then re-run `pix mcp add`", strings.Join(unresolved, ", "))
-	}
-	// Rebuild the work list from what actually resolved, so nothing below can
-	// claim to have registered a server that was skipped here.
-	hostServers = resolvable
-	finalNames = finalNames[:0]
-	finalNames = append(finalNames, hostServers...)
-	finalNames = append(finalNames, gatewayServers...)
-	if len(finalNames) == 0 {
-		return errors.Join(unresolvedErr, unknownErr)
-	}
-
-	// Credential-declaring servers need op-refs to actually work. Registering
-	// them bare is legitimate (1Password is optional) but must be SAID, because
-	// a bare registration of a credentialed server is a server that will start
-	// and then fail its first real call.
-	if !opReady {
-		var needCreds []string
-		for _, n := range hostServers {
-			if len(servers[n].EnvKeys) > 0 {
-				needCreds = append(needCreds, n)
-			}
-		}
-		if len(needCreds) > 0 {
-			refsPath := creds.SeedPath
-			// ONE seeder: route through config.SeedOpRefsAt so the template + 0700 dir
-			// / 0600 file + no-clobber rule is identical to `pix setup`'s seeding.
-			if created, err := config.SeedOpRefsAt(refsPath); err == nil && created {
-				fmt.Fprintf(out, "seeded a template op-refs.env at %s\n", refsPath)
-			}
-			fmt.Fprintf(out, "note: no op-refs.env found, so %s registered WITHOUT credentials "+
-				"and will fail its first authenticated call; add them to %s and re-run `pix mcp add`\n",
-				strings.Join(needCreds, ", "), refsPath)
-		}
-	}
-
-	_, sbxErr := lookPath("sbx")
-	sbxOK := sbxErr == nil
-	if !sbxOK {
-		fmt.Fprintln(out, "sbx not on PATH; here is what WOULD be registered (run these on the host):")
-	}
-
-	// Accumulate per-server failures so `pix mcp add` exits non-zero on
-	// ANY failure, while still attempting every server and printing each result.
-	var regErrs []error
-	for _, n := range finalNames {
-		args := reg.AddArgs(n)
-		if !sbxOK {
-			fmt.Fprintf(out, "  sbx %s\n", strings.Join(args, " "))
-			continue
-		}
-		if remoteURL := servers[n].RemoteURL; remoteURL != "" && remoteMCPRegistrationCurrent(env, n, remoteURL) {
-			switch remoteMCPAuthorizationState(env, n) {
-			case CatalogMCPReady:
-				if !env.Quiet {
-					fmt.Fprintf(out, "  already registered: %s\n", n)
-				}
-				continue
-			case CatalogMCPUnauthorized:
-				fmt.Fprintf(out, "  Authorize %s in your browser…\n", n)
-				if authErr := runInteractiveSbx(env, "mcp", "auth", n); authErr != nil {
-					regErrs = append(regErrs, fmt.Errorf("%s: authorization failed: %v", n, authErr))
-					continue
-				}
-				if remoteMCPAuthorizationState(env, n) != CatalogMCPReady {
-					regErrs = append(regErrs, fmt.Errorf("%s: authorization completed but could not be verified", n))
-				}
-				continue
-			case CatalogMCPDenied:
-				regErrs = append(regErrs, fmt.Errorf("%s: authorization denied by policy", n))
-				continue
-			default:
-				regErrs = append(regErrs, fmt.Errorf("%s: registration exists but authorization could not be verified", n))
-				continue
-			}
-		}
-		var err error
-		if servers[n].RemoteURL != "" {
-			// Remote MCP registration is an explicitly interactive mutation (see
-			// runInteractiveSbx); read-only status checks stay bounded.
-			if env.Quiet {
-				fmt.Fprintf(out, "  Authorize %s in your browser…\n", n)
-			}
-			err = runInteractiveSbx(env, args...)
-		} else {
-			// One branch, not two: the bounded seam is always present, so the
-			// "fall back to the plain runner" arm this used to carry is gone.
-			_, timedOut, probeErr := env.RunTimed("sbx", args...)
-			err = probeErr
-			if timedOut {
-				err = fmt.Errorf("timed out")
-			}
-		}
-		if err != nil {
-			fmt.Fprintf(out, "  FAILED to register: %s (%v)\n", n, err)
-			regErrs = append(regErrs, fmt.Errorf("%s: %v", n, err))
-		} else {
-			if !env.Quiet {
-				fmt.Fprintf(out, "  registered: %s\n", n)
-			}
-		}
-	}
-
-	if sbxOK {
-		wrapped := false
-		if reg.Op != "" && reg.OpRefs != "" {
-			for _, name := range finalNames {
-				argv := reg.ExecArgv(name)
-				if len(argv) > 1 && argv[0] == reg.Op && argv[1] == "run" {
-					wrapped = true
-					break
-				}
-			}
-		}
-		if wrapped && !env.Quiet {
-			fmt.Fprintf(out, "Each wrapped server resolves its creds from %s via op run at gateway spawn.\n", reg.OpRefs)
-		}
-	} else {
-		fmt.Fprintln(out, "note: install Docker Sandboxes (sbx) to register: https://docs.docker.com/ai/sandboxes")
-	}
-	if len(regErrs) > 0 {
-		return errors.Join(fmt.Errorf("%d server(s) failed to register: %w", len(regErrs), errors.Join(regErrs...)), unresolvedErr, unknownErr)
-	}
-	if !sbxOK {
-		// `register` PROMISED to register these servers and did not (nothing was
-		// exec'd, nothing is registered with the gateway) — exit non-zero
-		// (ErrSbxUnavailable -> rpc.ExitServiceDown) rather than a silent success
-		// just because the would-run lines above printed cleanly.
-		return errors.Join(ErrSbxUnavailable, unresolvedErr, unknownErr)
-	}
-	return errors.Join(unresolvedErr, unknownErr)
-}
-
-// runInteractiveSbx runs an sbx mutation that may open a browser and keep a
-// localhost OAuth callback listener alive: it inherits the terminal and runs
-// to completion, never a bounded probe (a probe's kill leaves the browser at
-// ERR_CONNECTION_REFUSED). The quiet variant is the same contract with sbx's
-// own chatter suppressed — one helper so registration and repair can never
-// pick different runners for the same interactive mutation.
-func runInteractiveSbx(env hostenv.Env, args ...string) error {
-	if env.Quiet {
-		return env.RunInteractiveQuiet("sbx", args...)
-	}
-	return env.RunInteractive("sbx", args...)
 }
 
 // remoteMCPRegistrationCurrent prevents an idempotent setup rerun from
@@ -911,18 +513,6 @@ func McpAuthStatus(out string) mcpAuthResult {
 	return mcpAuthUnknown
 }
 
-// McpAuthExpired reports whether a FAILED auth status is specifically an
-// EXPIRED grant rather than one that was never established. Both are repaired
-// by the same command, but they are different user stories: "expired" says this
-// worked and needs renewing, which is routine; "not authenticated" reads as a
-// setup that failed, which during onboarding sends someone hunting a problem
-// they do not have. sbx already draws the distinction; this stops us discarding
-// it. Kept as a predicate over the raw output rather than a fourth tri-state
-// value, so no existing caller's exhaustive switch changes meaning.
-func McpAuthExpired(out string) bool {
-	return strings.Contains(strings.ToLower(out), "expired")
-}
-
 const (
 	mcpAuthUnknown mcpAuthResult = iota
 	McpAuthOK
@@ -991,16 +581,4 @@ func remoteMCPAuthorizationState(env hostenv.Env, name string) catalogMCPReadine
 	default: // mcpAuthUnknown
 		return catalogMCPUnverifiable
 	}
-}
-
-// KnownRemoteURL reports the endpoint pix already knows for name, if any. The
-// ONE reader of McpCatalog outside classification: `pix mcp add <name>` uses it
-// to skip asking for a URL it could have looked up.
-func KnownRemoteURL(name string) (string, bool) {
-	for _, c := range McpCatalog {
-		if c.Name == name {
-			return c.URL, true
-		}
-	}
-	return "", false
 }

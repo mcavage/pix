@@ -12,22 +12,19 @@ package main
 //      anything.
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/workflow/launch"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/sys/systest"
-	"pix/host/workflow/launch"
 	"pix/host/workflow/provision"
 )
 
@@ -73,7 +70,7 @@ func TestVerifyCatalogMCPReady_UnregisteredNamesAddAndAuth(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unregistered catalog server must fail the gate")
 	}
-	if !strings.Contains(err.Error(), "pix mcp add notion") || !strings.Contains(err.Error(), "pix mcp auth notion") {
+	if !strings.Contains(err.Error(), "sbx mcp add notion") || !strings.Contains(err.Error(), "sbx mcp auth notion") {
 		t.Errorf("error must carry the exact repair commands, got: %v", err)
 	}
 }
@@ -87,7 +84,7 @@ func TestVerifyCatalogMCPReady_UnauthorizedNamesAuthCommand(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unauthorized catalog server must fail the gate")
 	}
-	if !strings.Contains(err.Error(), "pix mcp auth notion") {
+	if !strings.Contains(err.Error(), "sbx mcp auth notion") {
 		t.Errorf("error must carry the exact auth command, got: %v", err)
 	}
 }
@@ -101,7 +98,7 @@ func TestVerifyCatalogMCPReady_ExplicitPolicyDenial(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "denied by policy") {
 		t.Errorf("an explicit policy denial must fail as DENIED (not a setup todo), got: %v", err)
 	}
-	if strings.Contains(err.Error(), "pix mcp auth notion`") && strings.Contains(err.Error(), "then re-run") {
+	if strings.Contains(err.Error(), "sbx mcp auth notion`") && strings.Contains(err.Error(), "then re-run") {
 		t.Errorf("a policy denial must not pretend an auth command fixes it: %v", err)
 	}
 }
@@ -129,38 +126,6 @@ func TestVerifyCatalogMCPReady_NonCatalogNamesNeverProbed(t *testing.T) {
 	}
 	if err := provision.VerifyCatalogMCPReady(env, []string{"gog", "slack", ""}); err != nil {
 		t.Fatalf("gog/local/blank names are not the gate's business: %v", err)
-	}
-}
-func TestReconcileOnboarding_CatalogGateLeavesFileAndConfig(t *testing.T) {
-	ws := t.TempDir()
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	t.Setenv("PIX_CONFIG", cfgPath)
-	t.Setenv("PIX_PROFILE", "")
-	dir := filepath.Join(ws, ".pix")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	fp := filepath.Join(dir, "onboarding.json")
-	if err := os.WriteFile(fp, []byte(`{"version":1,"mcp":["notion"]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	env := catalogGateEnv(t, map[string]string{"sbx mcp ls": "atlassian\n"})
-
-	var out bytes.Buffer
-	provision.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
-
-	if _, err := os.Stat(fp); err != nil {
-		t.Errorf("proposal file must be left in place on a gate failure, err=%v", err)
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if slices.Contains(cfg.MCP, "notion") {
-		t.Errorf("notion must NOT be persisted while unregistered: %v", cfg.MCP)
-	}
-	if !strings.Contains(out.String(), "pix mcp add notion") {
-		t.Errorf("refusal must name the exact repair command, got:\n%s", out.String())
 	}
 }
 
@@ -218,14 +183,18 @@ func TestProbeSbxSecrets_HangingSbxIsErrorNotAbsent(t *testing.T) {
 	}
 }
 
-// TestSbxModelKeyState_HangingProbeUnknownProceeds pins run's launch-preflight
-// tri-state under a hang: probeOK=false (unknown), which under the existing
-// rule PROCEEDS — only a POSITIVELY confirmed missing key blocks a launch.
-func TestSbxModelKeyState_HangingProbeUnknownProceeds(t *testing.T) {
-	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
-	present, probeOK := launch.SbxModelKeyState(env)
+// TestConfiguredModelKeyState_UnreadableRefsUnknownProceeds pins run's
+// launch-preflight tri-state when the evidence cannot be read: probeOK=false
+// (unknown), which under the existing rule PROCEEDS — only a POSITIVELY
+// answered "no model ref is configured" blocks a launch.
+func TestConfiguredModelKeyState_UnreadableRefsUnknownProceeds(t *testing.T) {
+	env := hostenv.Env{System: &systest.Fake{
+		LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		IsFileFn:   func(string) bool { return true },
+		ReadFileFn: func(string) (string, error) { return "", fmt.Errorf("permission denied") }}}
+	present, probeOK := launch.ConfiguredModelKeyState(env)
 	if present || probeOK {
-		t.Errorf("hanging preflight must be (present=false, probeOK=false) so run proceeds, got (%v,%v)", present, probeOK)
+		t.Errorf("unreadable refs must be (present=false, probeOK=false) so run proceeds, got (%v,%v)", present, probeOK)
 	}
 }
 
@@ -237,12 +206,24 @@ func TestSbxModelKeyState_HangingProbeUnknownProceeds(t *testing.T) {
 // with it the stale "pix-<basename>" fallback that named a sandbox nothing
 // creates. One derivation shared by both commands is what makes them agree.
 func TestMcpLoadSandbox_IsRunsOwnDefaultName(t *testing.T) {
+	t.Setenv("PIX_HOME", t.TempDir())
 	ws := t.TempDir()
-	got := resolveSandboxName("", ws)
-	if got != resolveSandboxName("", ws) {
+	got, err := resolveSandboxName("", ws)
+	if err != nil {
+		t.Fatalf("resolveSandboxName: %v", err)
+	}
+	again, err := resolveSandboxName("", ws)
+	if err != nil {
+		t.Fatalf("resolveSandboxName: %v", err)
+	}
+	if got != again {
 		t.Error("the derivation must be stable for one workspace")
 	}
-	if other := resolveSandboxName("", t.TempDir()); other == got {
+	other, err := resolveSandboxName("", t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveSandboxName: %v", err)
+	}
+	if other == got {
 		t.Error("two different workspaces must not derive one sandbox name")
 	}
 	if !strings.HasPrefix(got, "pix-") {

@@ -102,7 +102,7 @@ check_tree() { # <root>
 	# Collect the `../<dir>/` import targets across extensions/, then require the
 	# Dockerfile to COPY each one into $AGENT_DIR/<dir>/ (the path `../<dir>/`
 	# resolves to from $AGENT_DIR/extensions/ inside the sandbox).
-	local dockerfile="$root/Dockerfile" dir imported
+	local dockerfile="$root/images/agent/Dockerfile" dir imported
 	imported="$(
 		for f in "$root"/extensions/*.ts; do
 			[ -f "$f" ] || continue
@@ -133,7 +133,7 @@ self_test() {
 	plant() {
 		rm -rf "$tmp/tree"
 		mkdir -p "$tmp/tree"
-		(cd "$ROOT" && tar cf - extensions lib Dockerfile) | (cd "$tmp/tree" && tar xf -)
+		(cd "$ROOT" && tar cf - extensions lib images/agent/Dockerfile) | (cd "$tmp/tree" && tar xf -)
 	}
 
 	expect() { # <label> <expected-rc>
@@ -171,8 +171,8 @@ self_test() {
 	expect "a context hook stripping the output-style message is caught" 1
 
 	plant
-	grep -v "^COPY .*[[:space:]]lib/[[:space:]]" "$tmp/tree/Dockerfile" >"$tmp/Dockerfile.nolib"
-	mv "$tmp/Dockerfile.nolib" "$tmp/tree/Dockerfile"
+	grep -v "^COPY .*[[:space:]]lib/[[:space:]]" "$tmp/tree/images/agent/Dockerfile" >"$tmp/Dockerfile.nolib"
+	mv "$tmp/Dockerfile.nolib" "$tmp/tree/images/agent/Dockerfile"
 	expect "a Dockerfile that stops baking lib/ is caught" 1
 
 	plant

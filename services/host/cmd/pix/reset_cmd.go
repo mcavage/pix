@@ -10,45 +10,121 @@
 package main
 
 import (
-	"errors"
+	"bufio"
+	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"pix/host/cli"
+	"pix/host/pixhome"
+	"pix/host/stack"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/reset"
-	"pix/host/workspace"
 )
 
 func (c *resetCmd) Help() string { return reset.Description }
 
+// resetCmd is the v2 surface's whole `pix reset` flag set
+// (docs/design/pix-v2-surface.md §3.8): --yes, the ONE noninteractive
+// confirmation escape. M2 (security re-review): --keep-memory,
+// --keep-sandboxes, and --force existed in an earlier draft, parsed, and
+// were never read by ResetHome or anything else — three flags a user could
+// pass and have silently ignored, each promising a behavior (skip the
+// memory wipe, leave sandboxes alone, force past a stuck container) v2
+// reset does not have and never wired. They are deleted, not merely
+// undocumented: ResetHome's contract is unconditional (docs/design/
+// pix-v2-architecture.md §12 — sandboxes, then the memory container proven
+// absent, then PIX_HOME, every time), and a flag that parses but does
+// nothing is worse than no flag, because it tells a user something false
+// about what just happened.
 type resetCmd struct {
-	KeepMemory    bool `help:"Keep the captured-memory store (move everything else aside)."`
-	KeepSandboxes bool `help:"Leave this host's pix-* sandboxes alone."`
-	Yes           bool `short:"y" help:"Assume yes: required to reset a non-interactive terminal."`
-	Force         bool `help:"Move the data dir even when serve cannot be confirmed down."`
+	Yes bool `short:"y" help:"Skip the confirmation prompt (still required on a non-interactive terminal)."`
 }
 
 func (c *resetCmd) Run(d *cli.Deps) error {
-	// A reset that could not READ the config would also not know which MCP
-	// registrations to drop, so it fails here rather than half-resetting.
-	cfg, _, err := workspace.LoadResolvedConfig()
+	// pix reset is the v2 PIX_HOME clean slate (docs/design/
+	// pix-v2-architecture.md §12, §16.14): sweep sandboxes, then stop+remove+
+	// prove-absent the memory container, then rename PIX_HOME aside. It never
+	// reads the (still-live, v1) workspace config — ResetHome does not need
+	// to know which MCP registrations to drop; it only tears down what it
+	// itself owns.
+	if !c.Yes && !d.Interactive {
+		return cli.Usagef("refusing to reset a non-interactive terminal without confirmation; re-run with --yes")
+	}
+	home, err := pixhome.Resolve()
 	if err != nil {
 		return err
 	}
-	env := defaultShellEnv()
-	err = reset.Run(cfg, reset.ResolvePaths(env), reset.NewOpts(c.KeepMemory, c.KeepSandboxes, c.Yes, c.Force), reset.Runtime{
-		FS:    reset.DefaultResetFS(),
-		Env:   d.Sys,
-		IO:    cli.IO{In: d.In, Out: d.Out, IsTTY: d.Interactive},
-		ErrW:  d.Err,
-		Sweep: rmAllSandboxes(d),
-		Now:   time.Now,
-	})
-	if errors.Is(err, reset.ErrNeedsYes) {
-		return cli.Usagef("refusing to reset a non-interactive terminal without confirmation; re-run with --yes")
+	// This PIX_HOME's own scoped identity (Wave B coexistence): the
+	// container/MCP names reset targets are ALWAYS derived here, never the
+	// bare legacy names — a host whose stack id cannot be derived refuses
+	// before ANY mutation, including the confirmation bill.
+	id, err := stack.ID(home.Home)
+	if err != nil {
+		return err
 	}
-	return err
+	containerName, err := stack.MemoryContainerName(id)
+	if err != nil {
+		return err
+	}
+	memoryMCPName, err := stack.MCPMemoryName(id)
+	if err != nil {
+		return err
+	}
+	sessionMCPName, err := stack.MCPSessionName(id)
+	if err != nil {
+		return err
+	}
+	// M2 (security re-review): an interactive reset must show EXACTLY what
+	// is about to happen and default to No, the same posture `pix env
+	// trust`/the run trust gate already hold for a host-mutating decision
+	// — never a bare confirmation with no bill, and never a silent proceed
+	// just because the terminal happens to be a TTY. --yes (only) skips
+	// this prompt; it never skips the operations themselves or their fixed
+	// order, and a decline here mutates NOTHING (runs before ResetHome is
+	// ever called).
+	if !c.Yes {
+		renderResetBill(d.Out, home.Home, containerName)
+		fmt.Fprint(d.Out, "Proceed? [y/N] ")
+		reader := bufio.NewReader(d.In)
+		line, _ := reader.ReadString('\n')
+		if !strings.EqualFold(strings.TrimSpace(line), "y") {
+			fmt.Fprintln(d.Out, "pix: not confirmed; nothing was changed.")
+			return cli.SilentError{Code: 1}
+		}
+	}
+	res, err := reset.ResetHome(reset.HomeDeps{
+		Home:           home.Home,
+		ContainerName:  containerName,
+		MCP:            sbxMemoryDeregistrar{},
+		MemoryMCPName:  memoryMCPName,
+		SessionMCPName: sessionMCPName,
+		Sweep:          rmAllSandboxes(d),
+		Out:            d.Out,
+		ErrOut:         d.Err,
+		Now:            time.Now,
+	})
+	if err != nil {
+		return err
+	}
+	if res.BackupPath != "" {
+		fmt.Fprintf(d.Out, "pix: PIX_HOME moved aside to %s\n", res.BackupPath)
+	} else {
+		fmt.Fprintln(d.Out, "pix: nothing to reset (PIX_HOME did not exist).")
+	}
+	return nil
+}
+
+// renderResetBill prints the EXACT, fixed operations ResetHome performs, in
+// the order it performs them — the bill a confirming "y" is answering for.
+// It never varies by flag (there are none left to vary it): every
+// interactive reset sees the same three lines.
+func renderResetBill(out io.Writer, home, containerName string) {
+	fmt.Fprintln(out, "pix reset will:")
+	fmt.Fprintln(out, "  1. remove every pix-* sandbox (the same proof-gated path as `pix rm --all`)")
+	fmt.Fprintf(out, "  2. stop and remove the %q container\n", containerName)
+	fmt.Fprintf(out, "  3. rename %s aside to a timestamped backup (nothing is deleted)\n\n", home)
 }
 
 // rmAllSandboxes is `pix rm --all` as a callable: the SAME non-forced,

@@ -211,28 +211,6 @@ func TestReadyRequiresEveryRequiredProbeProven(t *testing.T) {
 	}
 }
 
-func TestRenderStatusIsShortAndFixFree(t *testing.T) {
-	s := Run(context.Background(), time.Second,
-		staticProbe{name: "sbx", required: true, res: Result{Status: StatusReady, Detail: "1.2.3"}},
-		staticProbe{name: "memory", required: true, res: Result{Status: StatusAbsent, Detail: "unit failed", Fix: "pix serve restart"}},
-		staticProbe{name: "pack", res: Result{Status: StatusUnknown, Detail: "unreadable"}},
-	)
-	var b strings.Builder
-	RenderStatus(&b, s)
-	out := b.String()
-	if n := len(strings.Split(strings.TrimSpace(out), "\n")); n > 5 {
-		t.Errorf("status is meant to be short, got %d lines:\n%s", n, out)
-	}
-	if strings.Contains(out, "pix serve restart") {
-		t.Errorf("status must not print repair commands (that is doctor's job):\n%s", out)
-	}
-	for _, want := range []string{"sbx", "memory", "pack"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("status omitted %q:\n%s", want, out)
-		}
-	}
-}
-
 // TestStatusOffIsNeitherGapNorSuccess pins the core of the fifth status:
 // verified, optional, intentionally not configured is its own answer, not a
 // gap laundered into ready and not a gap laundered into missing.
@@ -303,30 +281,6 @@ func TestRunCatchesARequiredProbeReportingOff(t *testing.T) {
 	}
 	if s.ExitCode() != ExitOK {
 		t.Errorf("exit = %d, want %d — the eligibility violation degrades to unknown, which never fails the process", s.ExitCode(), ExitOK)
-	}
-}
-
-// TestRenderStatus_OffProducesNoIssueLine is the bug this whole change fixes,
-// pinned at the render layer: a host with an optional, unconfigured capability
-// (pack) reports zero gaps and prints no "N issue(s). Run pix doctor" line —
-// before StatusOff existed this same snapshot printed exactly that line and
-// listed pack under "missing".
-func TestRenderStatus_OffProducesNoIssueLine(t *testing.T) {
-	s := Run(context.Background(), time.Second,
-		staticProbe{name: "sbx", required: true, res: Result{Status: StatusReady, Detail: "1.2.3"}},
-		staticProbe{name: "pack", res: Result{Status: StatusOff, Detail: "no active pack"}},
-	)
-	if len(s.Gaps()) != 0 {
-		t.Fatalf("Gaps() = %v, want none", s.Gaps())
-	}
-	var b strings.Builder
-	RenderStatus(&b, s)
-	out := b.String()
-	if strings.Contains(out, "issue") {
-		t.Errorf("an off-only host must print no issue line:\n%s", out)
-	}
-	if strings.Contains(out, "missing") {
-		t.Errorf("pack must not be filed under missing:\n%s", out)
 	}
 }
 

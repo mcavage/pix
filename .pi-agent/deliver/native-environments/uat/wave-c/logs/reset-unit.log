@@ -1,0 +1,14 @@
+=== RUN   TestReset_NeverDeletesAnEnvironmentSource
+--- PASS: TestReset_NeverDeletesAnEnvironmentSource (0.00s)
+=== RUN   TestReset_ExternalEnvironmentSource_UntouchedByteIdenticalAcceptanceGone
+--- PASS: TestReset_ExternalEnvironmentSource_UntouchedByteIdenticalAcceptanceGone (0.00s)
+=== RUN   TestReset_ScaffoldedEnvironmentSource_TravelsWithDataDirRename
+--- PASS: TestReset_ScaffoldedEnvironmentSource_TravelsWithDataDirRename (0.00s)
+=== RUN   TestReset_DataBlockedFailure_StillInvalidatesAcceptance_NeverMovesTheSource
+--- PASS: TestReset_DataBlockedFailure_StillInvalidatesAcceptance_NeverMovesTheSource (0.00s)
+=== RUN   TestReset_NeverDeletes
+--- PASS: TestReset_NeverDeletes (0.00s)
+=== RUN   TestResettableStateDir
+--- PASS: TestResettableStateDir (0.00s)
+PASS
+ok  	pix/host/workflow/reset	0.008s

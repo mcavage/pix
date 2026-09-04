@@ -47,13 +47,13 @@ func VerifyCatalogMCPReady(env hostenv.Env, names []string) error {
 		switch mcp.CatalogMCPState(env, mcpOut, mcpOK, n) {
 		case mcp.CatalogMCPReady:
 		case mcp.CatalogMCPUnregistered:
-			return fmt.Errorf("MCP server %q is not registered with the sbx gateway; register it (`pix mcp add %s`), authorize it (`pix mcp auth %s`), then re-run", n, n, n)
+			return fmt.Errorf("MCP server %q is not registered with the sbx gateway; register it (`sbx mcp add %s`), authorize it (`sbx mcp auth %s`), then re-run", n, n, n)
 		case mcp.CatalogMCPUnauthorized:
-			return fmt.Errorf("catalog MCP server %q is registered but not authorized; run `pix mcp auth %s`, then re-run", n, n)
+			return fmt.Errorf("catalog MCP server %q is registered but not authorized; run `sbx mcp auth %s`, then re-run", n, n)
 		case mcp.CatalogMCPDenied:
 			return fmt.Errorf("catalog MCP server %q is denied by policy (sbx mcp auth status %s) — an organizational denial no setup command can fix; drop it or contact your admin", n, n)
 		default: // catalogMCPUnverifiable
-			return fmt.Errorf("could not verify catalog MCP server %q is registered and authorized (sbx probe unavailable, failed, or timed out); fix sbx and retry, or prepare it first: `pix mcp add %s`, then `pix mcp auth %s`", n, n, n)
+			return fmt.Errorf("could not verify catalog MCP server %q is registered and authorized (sbx probe unavailable, failed, or timed out); fix sbx and retry, or prepare it first: `sbx mcp add %s`, then `sbx mcp auth %s`", n, n, n)
 		}
 	}
 	return nil

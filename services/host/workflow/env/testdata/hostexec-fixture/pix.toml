@@ -1,0 +1,9 @@
+schema = 1
+
+[host.mcp.warehouse-mcp]
+env_keys = ["WAREHOUSE_TOKEN"]
+
+[[host.services]]
+name = "warehouse-proxy"
+command = "warehouse-proxy"
+port = 19443

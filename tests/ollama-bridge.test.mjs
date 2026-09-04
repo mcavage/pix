@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import { register } from "node:module";
+import * as os from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
 
 register("./stub-loader.mjs", import.meta.url);
 
-const { modelsFromManifest } = await import("../extensions/ollama-bridge.ts");
+const { modelsFromManifest, readRoster } = await import("../extensions/ollama-bridge.ts");
 
 const TAG = {
 	id: "qwen3.5:9b",
@@ -89,5 +92,45 @@ test("a missing or junk manifest degrades to the bridge tag alone", () => {
 	for (const junk of [null, undefined, {}, { models: null }, { models: "nope" }, { models: [null, 7, { backend: "ollama" }] }]) {
 		const models = modelsFromManifest(junk, TAG);
 		assert.deepEqual(models.map((m) => m.id), [TAG.id], `junk input ${JSON.stringify(junk)}`);
+	}
+});
+
+// E3.2: the additive `roster` field is compatible with everything above —
+// the bridge's own model-list building is UNCHANGED by its presence (the
+// parent-Ollama inheritance exception stays a subagents.ts concern, per
+// docs/design/environments.md §6.4).
+test("a roster key on the manifest never changes the registered ollama model list", () => {
+	const withoutRoster = modelsFromManifest(
+		{ models: [{ id: "ollama/glm-5.2:cloud", backend: "ollama", name: "GLM 5.2" }] },
+		TAG,
+	);
+	const withRoster = modelsFromManifest(
+		{
+			models: [{ id: "ollama/glm-5.2:cloud", backend: "ollama", name: "GLM 5.2" }],
+			roster: { main: "ollama/glm-5.2:cloud", agents: { engineer: "ollama/glm-5.2:cloud" } },
+		},
+		TAG,
+	);
+	assert.deepEqual(withRoster, withoutRoster);
+});
+
+// extensions/ollama-bridge.ts reads the SAME additive roster shape the other
+// two readers do, from the SAME file — never a second, divergent read.
+test("readRoster resolves the roster from <agentDir>/inference.json", () => {
+	const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "ollama-bridge-roster-"));
+	const saved = process.env.PI_TEST_AGENT_DIR;
+	try {
+		process.env.PI_TEST_AGENT_DIR = agentDir;
+		assert.equal(readRoster(), undefined, "absent inference.json -> no roster");
+		fs.writeFileSync(
+			path.join(agentDir, "inference.json"),
+			JSON.stringify({ version: 1, backends: {}, models: [], roster: { main: "ollama/glm-5.2:cloud", agents: {} } }),
+		);
+		assert.deepEqual(readRoster(), { main: "ollama/glm-5.2:cloud", agents: {} });
+		fs.writeFileSync(path.join(agentDir, "inference.json"), "{ not json");
+		assert.equal(readRoster(), undefined, "unparseable manifest -> no roster, never throws");
+	} finally {
+		if (saved === undefined) delete process.env.PI_TEST_AGENT_DIR;
+		else process.env.PI_TEST_AGENT_DIR = saved;
 	}
 });

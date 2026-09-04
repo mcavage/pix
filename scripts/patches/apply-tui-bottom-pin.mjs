@@ -36,9 +36,20 @@ const BEFORE_ANCHOR = `        if (firstChanged < prevViewportTop) {
             return;
         }
 `;
-const AFTER_ANCHOR = `${ANCHOR}
+// pi-tui's post-anchor line changed shape once (0.84.4 replaced the raw
+// `buffer +=` accumulator with a `BoundedTerminalWriter` class), so both
+// wordings are accepted context: the anchor comment itself is what this
+// patch actually inserts before, and neither variant's continuation is
+// touched by the inserted block.
+const AFTER_ANCHOR_VARIANTS = [
+	`${ANCHOR}
         // Build buffer with all updates wrapped in synchronized output
-        let buffer = "\\x1b[?2026h"; // Begin synchronized output`;
+        let buffer = "\\x1b[?2026h"; // Begin synchronized output`,
+	`${ANCHOR}
+        // Keep updates wrapped in synchronized output while writing bounded chunks.
+        const output = new BoundedTerminalWriter((data) => this.terminal.write(data));`,
+];
+const AFTER_ANCHOR = AFTER_ANCHOR_VARIANTS[0];
 const here = dirname(fileURLToPath(import.meta.url));
 const BLOCK_FILE = join(here, "tui-bottom-pin.block.txt");
 
@@ -117,9 +128,9 @@ function main() {
 		!src
 			.slice(Math.max(0, lineStart - BEFORE_ANCHOR.length), lineStart)
 			.endsWith(BEFORE_ANCHOR) ||
-		!src
-			.slice(lineStart, lineStart + 8 + AFTER_ANCHOR.length)
-			.startsWith(`        ${AFTER_ANCHOR}`)
+		!AFTER_ANCHOR_VARIANTS.some((variant) =>
+			src.slice(lineStart, lineStart + 8 + variant.length).startsWith(`        ${variant}`),
+		)
 	) {
 		warn(
 			`expected renderer context around "${ANCHOR}" not found in ${tuiPath} — ` +

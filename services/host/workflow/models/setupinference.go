@@ -10,8 +10,6 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/routing"
-	"pix/host/secret"
 )
 
 // setupinference.go — the PROBE half of `pix models`: choose a runtime, prove
@@ -35,13 +33,6 @@ type probeOutcome struct {
 // with no probe. That is a PROGRAMMING error, and it must never be reported as
 // `0 attempted, 0 verified, no failures` — indistinguishable from a clean pass.
 var ErrNoProbeSeam = fmt.Errorf("no inference probe is configured on this hostenv.Env (use defaultShellEnv, or inject a probe in tests)")
-
-// reconcileResult is what a reconcile actually did and proved.
-type reconcileResult struct {
-	Providers []string // every provider with a resolvable key, sorted
-	Added     []string // providers that had no native binding before this run
-	probeOutcome
-}
 
 // candidate is one binding a verify pass may probe. It carries the index, not a
 // pointer, so promotion writes through cfg — which is what gets saved.
@@ -103,60 +94,6 @@ func (res *probeOutcome) dispatch(cands []candidate, probe func(candidate) error
 	}
 }
 
-// VerifyDirectInference earns Verified with a model-specific inference request
-// per binding, concurrently. Resolved key bytes stay in process memory: never
-// logged, never persisted.
-func VerifyDirectInference(cfg *config.Config, env hostenv.Env) (res probeOutcome, err error) {
-	if cfg == nil {
-		return res, fmt.Errorf("verify direct inference: no config")
-	}
-	if env.DirectInference == nil {
-		return res, ErrNoProbeSeam
-	}
-	cands := eligible(cfg, func(_ config.InferenceModelBinding, backend config.InferenceBackend) bool {
-		return backend.Auth == "1password"
-	})
-	// One resolution and one failure line per provider: N bindings behind one
-	// missing ref is one problem, not N.
-	keys, failed := map[string]string{}, map[string]bool{}
-	var probeable []candidate
-	for _, c := range cands {
-		if _, ok := keys[c.backend]; !ok {
-			if failed[c.backend] {
-				continue
-			}
-			key, reason := resolveProviderKey(env, cfg.Inference.Backends[c.backend])
-			if reason != "" {
-				failed[c.backend] = true
-				res.Failures = append(res.Failures, c.backend+": "+reason)
-				continue
-			}
-			keys[c.backend] = key
-		}
-		probeable = append(probeable, c)
-	}
-	collect := res.dispatch(probeable, func(c candidate) error {
-		return env.DirectInference(c.backend, strings.TrimPrefix(c.tag, c.backend+"/"), keys[c.backend])
-	})
-	collect(cfg)
-	sort.Strings(res.Failures)
-	return res, nil
-}
-
-// resolveProviderKey returns the resolved key, or a reason naming which step
-// failed — a missing ref and an unresolvable one have different fixes.
-func resolveProviderKey(env hostenv.Env, backend config.InferenceBackend) (key, reason string) {
-	ref, ok := secret.CurrentOpRef(env, backend.KeyEnv)
-	if !ok {
-		return "", "credential ref missing"
-	}
-	key, ok = secret.OpReadNonEmpty(env, ref)
-	if !ok {
-		return "", "credential could not be resolved"
-	}
-	return key, ""
-}
-
 // VerifyOllamaInference earns Verified through the RESOLVED endpoint. CLOUD
 // probes run concurrently; LOCAL probes are SERIALIZED and unload after
 // themselves, because two concurrent generates co-load two sets of weights and
@@ -177,7 +114,7 @@ func VerifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 	if out == nil {
 		out = io.Discard
 	}
-	reg, err := routing.LoadRegistry()
+	cat, err := inference.LoadCatalog()
 	if err != nil {
 		return res, fmt.Errorf("verify ollama inference: %w", err)
 	}
@@ -207,9 +144,12 @@ func VerifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 		// num_ctx is the rung's DECLARED context, so the probe allocates the same
 		// KV cache the RAM gate priced: a rung that cannot hold its own context
 		// fails here, which is exactly when we want to find out.
-		m, found := reg.Get(c.label)
+		m, found := cat.Get(c.label)
 		if found && m.Local {
-			c.numCtx, c.minRAM = m.ContextWindow, m.MinRAMGB
+			// RAM comes from the rung table (E4.3), the one home for local
+			// hardware facts; the catalog declares the context to probe with.
+			rung, _ := inference.LocalOllamaRungFor(m.ID)
+			c.numCtx, c.minRAM = m.ContextWindow, rung.MinRAMGB
 			local = append(local, c)
 			continue
 		}
@@ -271,120 +211,6 @@ func VerifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (
 	sort.Strings(res.Failures)
 	sort.Strings(res.NotProbed)
 	return res, nil
-}
-
-// ReconcileDirectInference turns the provider keys on this host into callable
-// bindings. Every path that adds a key routes through it, so a key written by
-// `pix secret set` is rebuilt, probed and widened like setup's own.
-//
-// requestedProvider is the provider the USER named, or "" for setup's own
-// reconcile; it alone overrides the roster's already-offered stamp.
-func ReconcileDirectInference(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool, requestedModels, requestedProvider string) (reconcileResult, error) {
-	var res reconcileResult
-	if err := reconcilable(cfg); err != nil {
-		return res, err
-	}
-	// Captured BEFORE binding, or widening cannot see what is new.
-	prior := inference.BoundNativeProviders(cfg)
-	providers, err := secret.ProviderKeyNames(env)
-	if err != nil {
-		return res, fmt.Errorf("reading configured providers: %w", err)
-	}
-	res.Providers = providers
-	for _, p := range providers {
-		if !prior[p] {
-			res.Added = append(res.Added, p)
-		}
-	}
-	sort.Strings(res.Added)
-
-	if err := ConfigureDirectInference(cfg, providers); err != nil {
-		return res, fmt.Errorf("configuring direct inference: %w", err)
-	}
-	widenRosterForNewProviders(cfg, prior)
-	WidenRosterForProvider(cfg, requestedProvider)
-	outcome, verr := VerifyDirectInference(cfg, env)
-	if verr != nil {
-		return res, fmt.Errorf("verifying provider keys: %w", verr)
-	}
-	res.probeOutcome = outcome
-	err = res.finish(cfg, in, orDiscard(out), interactive, requestedModels,
-		"provider keys resolved, but live inference verification failed", "no provider accepted a model-specific request")
-	return res, err
-}
-
-// ReconcileOllamaInference is ReconcileDirectInference's counterpart for the
-// one backend with no key to store: same order, same honesty rules, but the
-// evidence is the daemon's /api/tags plus a generate through the resolved endpoint. It
-// exists because `models add` was built around secret.ProviderKeyRefOrder, so
-// the one keyless backend had no post-setup path at all.
-//
-// Downloads nothing: the plan may NAME a rung worth pulling and leave the
-// decision to the user, because `models add` is a wiring command.
-func ReconcileOllamaInference(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool, sel OllamaSelection) (reconcileResult, ollamaPlan, error) {
-	var res reconcileResult
-	if err := reconcilable(cfg); err != nil {
-		return res, ollamaPlan{}, err
-	}
-	out = orDiscard(out)
-	if err := RequireOllamaReady(env); err != nil {
-		return res, ollamaPlan{}, err
-	}
-	res.Providers = []string{"ollama"}
-	if _, existed := cfg.Inference.Backends["ollama"]; !existed {
-		res.Added = []string{"ollama"}
-	}
-	plan, err := ConfigureOllamaInference(cfg, env, sel, out)
-	if err != nil {
-		return res, plan, err
-	}
-	WidenRosterForProvider(cfg, "ollama")
-	outcome, verr := VerifyOllamaInference(cfg, env, out)
-	if verr != nil {
-		return res, plan, fmt.Errorf("verifying ollama models: %w", verr)
-	}
-	res.probeOutcome = outcome
-	err = res.finish(cfg, in, out, interactive, "",
-		"Ollama is reachable, but no model proved callable", "no Ollama model answered a generate request")
-	return res, plan, err
-}
-
-// finish is the tail both reconciles share, and its ORDER is load-bearing:
-// Save BEFORE the verdict (a partial success must survive the error path);
-// verified == 0 with something attempted is a hard error while verified > 0
-// with some failures is not; the roster comes LAST because it prunes whatever
-// failed its probe.
-func (res *reconcileResult) finish(cfg *config.Config, in io.Reader, out io.Writer, interactive bool, requestedModels, verdict, noDetail string) error {
-	if err := cfg.Save(); err != nil {
-		return err
-	}
-	if res.Verified == 0 && (res.Attempted > 0 || len(res.Failures) > 0) {
-		detail := strings.Join(res.Failures, "; ")
-		if detail == "" {
-			detail = noDetail
-		}
-		return fmt.Errorf("%s: %s", verdict, detail)
-	}
-	if len(res.NotProbed) > 0 {
-		fmt.Fprintf(out, "%d candidate(s) were not probed within the time budget: %s\n", len(res.NotProbed), strings.Join(res.NotProbed, ", "))
-	}
-	if callable, _ := inference.ConfiguredSummary(cfg); callable > 0 || strings.TrimSpace(requestedModels) != "" {
-		if err := ConfigureModelRoster(cfg, in, out, interactive, requestedModels); err != nil {
-			return fmt.Errorf("choosing models: %w", err)
-		}
-	}
-	return cfg.Save()
-}
-
-// reconcilable refuses BEFORE any mutation: see ErrInferenceExclusive.
-func reconcilable(cfg *config.Config) error {
-	switch {
-	case cfg == nil:
-		return fmt.Errorf("no config")
-	case cfg.Inference.ExclusiveSource != "":
-		return ErrInferenceExclusive
-	}
-	return nil
 }
 
 func orDiscard(out io.Writer) io.Writer {

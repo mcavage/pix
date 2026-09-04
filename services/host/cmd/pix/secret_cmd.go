@@ -1,84 +1,83 @@
+// secret_cmd.go — `pix secret`: list | set | rm | check (docs/design/
+// pix-v2-surface.md §3.5). It manages `~/.pix/secrets.env` references only;
+// values are never stored, printed, or returned. Behavior lives in
+// pix/host/secret's pixhome.go file (LoadRefs/SetRef/RemoveRef/CheckRef).
 package main
-
-// secret_cmd.go is `pix secret` under the cli command contract: the argument
-// count IS the struct. `Ref string \`arg:""\`` means exactly one, required,
-// named in generated help, with kong producing the arity error.
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"pix/host/cli"
-	"pix/host/packinfo"
+	"pix/host/pixhome"
 	"pix/host/secret"
-	"pix/host/workspace"
 )
 
-// secretDescription is GENERATED from the key registries, never hand-listed.
-// Naming one key in prose ("PARALLEL_API_KEY buys web search") makes that key
-// look like a special case and goes stale the moment a second one is added; the
-// distinction that actually matters is the CATEGORY, and the members are data.
-func secretDescription() string {
-	var b strings.Builder
-	b.WriteString(`API keys, as 1Password references.
+const secretDescriptionV2 = `API keys, as 1Password references, under ~/.pix/secrets.env.
 
-Pix never stores a secret value: op-refs.env maps ENV_VAR to an op:// reference,
-and the value is resolved just-in-time. The secret never touches disk or the
-sandbox.
+Pix never stores a secret value: secrets.env maps ENV_VAR to an op://
+reference, and the value is resolved just-in-time through 'op'. The secret
+never touches disk or the sandbox beyond that reference.`
 
-Two categories live here. They are stored and resolved identically; what differs
-is what they buy.
+func (c *SecretCmd) Help() string { return secretDescriptionV2 }
 
-`)
-	fmt.Fprintf(&b, "  model keys  %s\n", strings.Join(envVarsOf(secret.ProviderKeyRefOrder), ", "))
-	b.WriteString("              A vendor you can route models to. Wire one with\n")
-	b.WriteString("              'pix models add <provider>'; at least one is needed to launch.\n\n")
-	fmt.Fprintf(&b, "  tool keys   %s\n", strings.Join(envVarsOf(secret.ToolKeyRefOrder), ", "))
-	b.WriteString("              A capability the agent calls. Nothing routes to these,\n")
-	b.WriteString("              'pix models add' does not take them, and a missing one\n")
-	b.WriteString("              degrades that capability instead of blocking a launch.\n\n")
-	b.WriteString("Keys held directly by the sandbox runtime (GitHub, for example) are set with\n")
-	b.WriteString("'sbx secret set', not here.")
-	return b.String()
-}
-
-func envVarsOf(refs []secret.ProviderKeyRef) []string {
-	out := make([]string, 0, len(refs))
-	for _, r := range refs {
-		out = append(out, r.EnvVar)
-	}
-	return out
-}
-
-// SecretCmd is a child of the kong root; the verb tree, its arities and its
-// usage are these tags, and the behaviour lives in pix/host/secret.
-func (c *SecretCmd) Help() string { return secretDescription() }
-
+// SecretCmd is a child of the kong root; bare 'pix secret' is 'secret ls'.
 type SecretCmd struct {
-	Ls    SecretLsCmd    `cmd:"" default:"1" help:"List configured references and whether each is well-formed. Use 'secret check' to actually resolve them."`
-	Set   SecretSetCmd   `cmd:"" help:"Point an environment variable at a 1Password reference. (WRITES)"`
+	Ls    SecretLsCmd    `cmd:"" default:"1" help:"List configured references and whether each is well-formed."`
+	Set   SecretSetCmd   `cmd:"" help:"Point an environment variable at an op:// reference. (WRITES)"`
 	Rm    SecretRmCmd    `cmd:"" help:"Remove a reference. (WRITES)"`
-	Check SecretCheckCmd `cmd:"" help:"Resolve every reference and report which fail."`
-	Sync  SecretSyncCmd  `cmd:"" help:"Reconcile keys into sbx. (WRITES)"`
+	Check SecretCheckCmd `cmd:"" help:"Resolve every reference (or one) through op, without printing values."`
+}
+
+func secretHome() (pixhome.Paths, error) {
+	home, err := pixhome.Resolve()
+	if err != nil {
+		return pixhome.Paths{}, err
+	}
+	return home, nil
 }
 
 type SecretLsCmd struct{}
 
 func (c *SecretLsCmd) Run(d *cli.Deps) error {
-	secret.RunSecretLs(defaultShellEnv(), d.Out, packNonSecretEnv())
+	home, err := secretHome()
+	if err != nil {
+		return err
+	}
+	refs, err := secret.LoadRefs(home)
+	if err != nil {
+		return err
+	}
+	if len(refs) == 0 {
+		fmt.Fprintln(d.Out, "No secrets configured. Set one with: pix secret set NAME op://vault/item/field")
+		return nil
+	}
+	for _, r := range refs {
+		state := "ok"
+		if !r.IsRef {
+			state = "NOT an op:// reference"
+		}
+		fmt.Fprintf(d.Out, "%s\t%s\t%s\n", r.Key, r.Value, state)
+	}
 	return nil
 }
 
-// SecretSetCmd takes exactly two arguments because it declares exactly two.
 type SecretSetCmd struct {
 	EnvVar string `arg:"" help:"Environment variable name (e.g. ANTHROPIC_API_KEY)."`
 	Ref    string `arg:"" help:"1Password reference (op://vault/item/field)."`
 }
 
 func (c *SecretSetCmd) Run(d *cli.Deps) error {
-	// A returned error is exit 1: a mirror failure must never leave the CLI
-	// exiting 0 while quietly reporting a shortfall.
-	return secret.RunSecretSet(defaultShellEnv(), d.Out, c.EnvVar, c.Ref, packNonSecretEnv())
+	home, err := secretHome()
+	if err != nil {
+		return err
+	}
+	if err := secret.SetRef(home, c.EnvVar, c.Ref); err != nil {
+		return err
+	}
+	fmt.Fprintf(d.Out, "pix: %s -> %s\n", c.EnvVar, c.Ref)
+	return nil
 }
 
 type SecretRmCmd struct {
@@ -86,32 +85,64 @@ type SecretRmCmd struct {
 }
 
 func (c *SecretRmCmd) Run(d *cli.Deps) error {
-	return secret.RunSecretRm(defaultShellEnv(), d.Out, c.EnvVar)
-}
-
-type SecretCheckCmd struct{}
-
-// A returned error is the capability's own exit code (3 when it could not
-// check at all, 1 when a ref failed to resolve), already worded on d.Out.
-func (c *SecretCheckCmd) Run(d *cli.Deps) error {
-	return secret.RunSecretCheck(defaultShellEnv(), d.Out)
-}
-
-type SecretSyncCmd struct{}
-
-func (c *SecretSyncCmd) Run(d *cli.Deps) error {
-	return secret.RunSecretSync(defaultShellEnv(), d.Out)
-}
-
-// packNonSecretEnv resolves which env vars the ACTIVE PACK authorized to carry
-// a literal value in op-refs.env. Composition, not policy: only this layer can
-// load config and the pack, and secret must not reach for either. A host with
-// no pack gets nil, which means "everything here must be an op:// ref" — the
-// right default, and the one that cannot be widened by accident.
-func packNonSecretEnv() secret.NonSecret {
-	cfg, _, err := workspace.LoadResolvedConfig()
+	home, err := secretHome()
 	if err != nil {
-		return nil
+		return err
 	}
-	return packinfo.ActiveNonSecretEnvNames(cfg)
+	if err := secret.RemoveRef(home, c.EnvVar); err != nil {
+		return err
+	}
+	fmt.Fprintf(d.Out, "pix: removed %s\n", c.EnvVar)
+	return nil
+}
+
+type SecretCheckCmd struct {
+	Name string `arg:"" optional:"" help:"Check only this reference's env var (default: all configured)."`
+}
+
+// opReader shells out to `op read <ref>` with stdout discarded — the value
+// is never captured by this process, only success/failure.
+type opReader struct{}
+
+func (opReader) ReadRef(ref string) error {
+	cmd := exec.Command("op", "read", ref)
+	cmd.Stdout = nil
+	return cmd.Run()
+}
+
+func (c *SecretCheckCmd) Run(d *cli.Deps) error {
+	home, err := secretHome()
+	if err != nil {
+		return err
+	}
+	refs, err := secret.LoadRefs(home)
+	if err != nil {
+		return err
+	}
+	if _, lerr := exec.LookPath("op"); lerr != nil {
+		fmt.Fprintln(d.Err, "pix secret check: `op` is not installed; cannot resolve references.")
+		return cli.SilentError{Code: 3}
+	}
+	failed := 0
+	checked := 0
+	for _, r := range refs {
+		if c.Name != "" && !strings.EqualFold(r.Key, c.Name) {
+			continue
+		}
+		checked++
+		err := secret.CheckRef(opReader{}, r.Value)
+		if err != nil {
+			failed++
+			fmt.Fprintf(d.Out, "%s\tFAIL\t%v\n", r.Key, err)
+		} else {
+			fmt.Fprintf(d.Out, "%s\tok\n", r.Key)
+		}
+	}
+	if c.Name != "" && checked == 0 {
+		return fmt.Errorf("no secret named %q is configured", c.Name)
+	}
+	if failed > 0 {
+		return cli.SilentError{Code: 1}
+	}
+	return nil
 }

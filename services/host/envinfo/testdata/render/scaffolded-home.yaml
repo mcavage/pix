@@ -1,0 +1,15 @@
+schemaVersion: "1"
+agent: pix
+name: pix-home-11111111
+workspace:
+  path: /home/user/.local/share/pix/envs/home
+  clone: false
+additionalWorkspaces:
+  - path: /home/user/.local/share/pix/context
+    readOnly: false
+kits:
+  - /tmp/pix-mixin-11111111
+sandboxOptions:
+  pullPolicy: missing
+  template: docker.io/mcavage/pix:v0.0.0
+env: {}
