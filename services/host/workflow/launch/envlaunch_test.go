@@ -314,31 +314,6 @@ func TestCreationFingerprint_HMACKeyed(t *testing.T) {
 	}
 }
 
-// The live-holder answer FAILS CLOSED: an sbx state this host cannot read
-// is an error, never "nobody is holding it".
-func TestEnvironmentHolders_FailsClosedOnUnknown(t *testing.T) {
-	stateHome(t)
-	key := "pix-held-1"
-	if err := RecordSessionEnvironment(key, SessionEnvironment{Name: "work", Root: "/envs/work", SandboxName: key}); err != nil {
-		t.Fatalf("RecordSessionEnvironment: %v", err)
-	}
-	if _, err := EnvironmentHolders(unreadableSbx(), "/envs/work"); err == nil {
-		t.Fatal("an unreadable sbx listing must be an error, not an empty holder set")
-	}
-	held, err := EnvironmentHolders(runningSbx(key), "/envs/work")
-	if err != nil {
-		t.Fatalf("EnvironmentHolders: %v", err)
-	}
-	if len(held) != 1 || held[0] != key {
-		t.Fatalf("holders = %v, want [%s]", held, key)
-	}
-	// A DIFFERENT environment root is not held by it.
-	held, err = EnvironmentHolders(runningSbx(key), "/envs/home")
-	if err != nil || len(held) != 0 {
-		t.Fatalf("holders for an unrelated root = (%v, %v), want ([], nil)", held, err)
-	}
-}
-
 // unreadableSbx makes every `sbx ls` fail: SbxUnknown for every name.
 func unreadableSbx() hostenv.Env {
 	return hostenv.Env{System: &systest.Fake{

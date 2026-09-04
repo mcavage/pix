@@ -26,7 +26,6 @@
 package launch
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -826,72 +825,6 @@ func ReadSessionEnvironment(sessionKey string) (SessionEnvironment, bool) {
 // environment-holder question is answered from. An unbounded `sbx` here is
 // what turns `pix env forget` or `pix env show` into a hang.
 const HolderProbeBudget = health.StatusBudget
-
-// EnvironmentHolders answers §10.4's live-holder question for ONE
-// environment root: which sandboxes this host recorded against it are
-// still positively live. It FAILS CLOSED — an sbx state it cannot read is
-// an error, never "no holders" — because a wrong "nobody is holding it"
-// is what turns `env forget` into a silent teardown of someone's session.
-//
-// It runs ONE bounded, SCHEMA-VERIFIED listing (`sbx ls --json`, parsed by
-// package sandbox) for the whole answer, not a raw `sbx ls` per recorded
-// sandbox: one timeout instead of N, one parse contract instead of column
-// scraping, and "could not read the listing" is a single honest unknown
-// rather than a per-sandbox guess.
-func EnvironmentHolders(env hostenv.Env, envRoot string) ([]string, error) {
-	root, err := leaseRoot()
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	want := strings.TrimSpace(envRoot)
-	var recorded []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		var rec SessionEnvironment
-		data, rerr := os.ReadFile(filepath.Join(root, e.Name(), sessionEnvironmentFileName))
-		if rerr != nil {
-			continue
-		}
-		if jerr := json.Unmarshal(data, &rec); jerr != nil {
-			continue
-		}
-		if rec.Root == "" || rec.Root != want || rec.SandboxName == "" {
-			continue
-		}
-		recorded = append(recorded, rec.SandboxName)
-	}
-	if len(recorded) == 0 {
-		return nil, nil
-	}
-	listing, trusted := sbxListing(env, HolderProbeBudget)
-	if !trusted {
-		return nil, fmt.Errorf("launch: could not read a schema-verified `sbx ls` within %s; refusing to answer as unheld", HolderProbeBudget)
-	}
-	var held []string
-	for _, name := range recorded {
-		entry := sandbox.FindByName(listing, name)
-		if entry == nil {
-			continue // positively absent: nothing holds it
-		}
-		if !entry.IdentityVerified {
-			return nil, fmt.Errorf("launch: `sbx ls` did not positively identify %s; refusing to answer as unheld", name)
-		}
-		if entry.State == sandbox.StateRunning {
-			held = append(held, name)
-		}
-	}
-	sort.Strings(held)
-	return held, nil
-}
 
 // EnvTeardownPlanner is the planner a launch hands SessionDeps.Teardown so
 // the environment-scoped removal path (E2.4) runs INSIDE the existing

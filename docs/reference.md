@@ -245,8 +245,10 @@ credential destinations require host trust approval.
 `pix.toml` may declare the main model and agent-to-model mappings, a custom
 Pi inference backend, environment-local Pi content paths, a memory scope, and
 credential/health/host-capability annotations for an MCP server declared in
-`.sbxenv.yaml`. It cannot declare or supervise a host service, and it cannot
-declare kits, workspaces, sandbox variables, secrets, credential bindings, MCP
+`.sbxenv.yaml`. It may declare a resident host service (`[[host.services]]`)
+for review and reporting, but Pix never starts, supervises, or registers one:
+that entry buys a line on the trust bill and a probed row in `pix env show`,
+nothing more. It cannot declare kits, workspaces, sandbox variables, secrets, credential bindings, MCP
 transports, sandbox resources or ports, Pi extensions, settings, keybindings,
 or themes: anything native sbx or global Pi settings already own stays out.
 Unknown keys are errors.
@@ -262,9 +264,18 @@ server with no declared probe always reports `reachable: unknown`, never a
 guessed `ready` earned by registration alone: registration only proves the
 gateway knows the name, not that the server authenticates or works.
 `--json` carries the same three fields per server plus a `_detail` string
-for `registered`/`reachable` naming exactly what was checked. An
-environment declaring no MCP server prints no `integrations:` section at
-all, and its JSON carries no `integrations` key.
+for `registered`/`reachable` naming exactly what was checked.
+
+The same section carries one row per `[[host.services]]` entry the sidecar
+declares, tagged `service` where an MCP row carries `registered`: Pix
+registers nothing and starts nothing for a host service, so any
+registration word there would be a claim about a registry the row does not
+live in. A service row is `reachable: ready` only after its own declared
+`probe` URL answered 2xx, and that URL is fetched only when it is plain
+HTTP on loopback (anything else stays `unknown` and is never requested, so
+reading an environment file never makes an outbound call on your behalf).
+An environment declaring neither an MCP server nor a host service prints no
+`integrations:` section at all, and its JSON carries no `integrations` key.
 
 **An environment's own inference gateway.** `[inference.backends.<name>]`
 takes `driver`, `protocol`, `base_url`, `auth`, `key_env`, plus (for
@@ -607,7 +618,7 @@ defines**. Pix resolves its own home (`$PIX_HOME`, else `~/.pix`) and
 substitutes it into a local MCP server's command and args before it renders the
 effective document, so:
 
-- an authored `${PIX_HOME}` is never the undefined-variable refusal — Pix knows
+- an authored `${PIX_HOME}` is never the undefined-variable refusal. Pix knows
   its home whether or not a shell exported it;
 - the value in the effective document is a real path, not an expression a
   `docker run -v` would take literally;
@@ -615,9 +626,8 @@ effective document, so:
   resolved by sbx, so the persisted effective document never becomes a sink of
   resolved host values.
 
-The conventional home for that state is `<PIX_HOME>/.state/integrations/<name>`
-(`pixhome.Paths.IntegrationStateDir`), bind-mounted into the container that
-owns it:
+The conventional home for that state is `<PIX_HOME>/.state/integrations/<name>`,
+bind-mounted into the container that owns it:
 
 ```yaml
 mcp:
@@ -631,11 +641,11 @@ mcp:
 
 Pix owns the LOCATION only: it neither creates nor populates that directory.
 The environment's own `[[setup]]` hook creates it, because only that hook knows
-what belongs inside and what ownership the container needs — and it should,
+what belongs inside and what ownership the container needs. It should, too,
 since `docker run -v` creates a missing bind-mount source silently, which turns
 a missing directory into a container that has quietly lost its credential.
 
-The alternative — a named docker volume — puts credentials outside every
+The alternative, a named docker volume, puts credentials outside every
 PIX_HOME: `pix reset` cannot move them aside, a PIX_HOME backup does not contain
 them, and two homes on one host silently share one credential store.
 

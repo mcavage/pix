@@ -363,50 +363,6 @@ func TestReleaseEffectiveEnv_RetainsUntilPositiveAbsentProbe(t *testing.T) {
 	}
 }
 
-// ── BLOCK 7: bounded, schema-shaped holder probing ───────────────────────
-
-// The live-holder answer is read from ONE bounded `sbx ls --json`, never an
-// unbounded or raw `sbx ls`, and an unreadable listing fails closed.
-func TestEnvironmentHolders_UsesOneBoundedJSONListing(t *testing.T) {
-	stateHome(t)
-	for _, name := range []string{"pix-h1", "pix-h2"} {
-		if err := RecordSessionEnvironment(name, SessionEnvironment{Name: "work", Root: "/envs/work", SandboxName: name}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var calls [][]string
-	var bounded int
-	env := hostenv.Env{System: &systest.Fake{
-		LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil },
-		RunFn: func(name string, args ...string) (string, error) {
-			calls = append(calls, append([]string{name}, args...))
-			return "", nil
-		},
-		RunTimedFn: func(name string, args ...string) (string, bool, error) {
-			calls = append(calls, append([]string{name}, args...))
-			return "", false, nil
-		},
-		RunWithinFn: func(d time.Duration, name string, args ...string) (string, bool, error) {
-			bounded++
-			calls = append(calls, append([]string{name}, args...))
-			return `[{"name":"pix-h1","state":"running","instance_id":"i1"},{"name":"pix-h2","state":"stopped","instance_id":"i2"}]`, false, nil
-		},
-	}}
-	held, err := EnvironmentHolders(env, "/envs/work")
-	if err != nil {
-		t.Fatalf("EnvironmentHolders: %v", err)
-	}
-	if len(held) != 1 || held[0] != "pix-h1" {
-		t.Fatalf("holders = %v, want [pix-h1] (a stopped sandbox holds nothing)", held)
-	}
-	if bounded != 1 || len(calls) != 1 {
-		t.Fatalf("sbx calls = %v (bounded=%d); want exactly one bounded listing", calls, bounded)
-	}
-	if strings.Join(calls[0], " ") != "sbx ls --json" {
-		t.Fatalf("holder probe ran %q; want the schema-shaped `sbx ls --json`", strings.Join(calls[0], " "))
-	}
-}
-
 // ── shared fixtures ──────────────────────────────────────────────────────
 
 func runningEntry(name, instance string) *sandbox.Entry {

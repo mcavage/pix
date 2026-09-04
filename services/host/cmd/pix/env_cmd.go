@@ -416,9 +416,9 @@ func computeIntegrationStatuses(bom nativeenv.BillOfMaterials) []nativeenv.Integ
 // renderIntegrationStatuses is `pix env show`'s plain-text integrations
 // section: one line per declared MCP server naming all three states by
 // name (declared/registered/reachable), never collapsing any two of them
-// into a single verdict. Nothing is printed for an environment that
-// declares no MCP server — an empty section reads as "nothing to report",
-// matching every other omitted-when-empty line in this renderer.
+// into one verdict, then one line per [[host.services]] entry
+// (declared/reachable; a service has no registration state). Declaring
+// neither prints nothing: an empty section reads as "nothing to report".
 func renderIntegrationStatuses(w io.Writer, statuses []nativeenv.IntegrationStatus) {
 	if len(statuses) == 0 {
 		return

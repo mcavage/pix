@@ -13,6 +13,61 @@ scored model router, `pix-host`, the pack system, and the custom memory RPC
 are deleted outright, not deprecated. There is no migration path and no
 compatibility shim — `~/.pix` from a v1 install is not read by this build.
 
+### Added — resident host services on the same status surface
+
+The `integrations:` section of `pix env show NAME` now also carries one row
+per `[[host.services]]` entry the environment's `pix.toml` declares, probed
+through that entry's own `probe` URL. Before this, a warehouse proxy that
+was not answering produced no output at all, which reads as "nothing to
+report". A service row reports `declared` and `reachable` only: Pix starts,
+supervises and registers nothing for a host service, so a `registered`
+column there would be a claim about a registry the row does not live in.
+The probe is fetched only when it is plain HTTP on loopback; anything else
+stays `unknown` and is never requested.
+
+### Added — `${PIX_HOME}` in static MCP argv
+
+`mcp.servers[].command`/`args` in `.sbxenv.yaml` are static argv with no
+shell, so a host MCP server that keeps durable state had to choose between
+a hard-coded `/Users/<someone>` and a named Docker volume that no PIX_HOME
+can see, back up, or reset. `${PIX_HOME}` is now the one interpolation
+variable Pix itself defines and substitutes before rendering the effective
+document; every other `${VAR}` is left for sbx to resolve, so the persisted
+effective document never becomes a sink of resolved host values. The
+convention for that state is `<PIX_HOME>/.state/integrations/<name>`, which
+Pix locates but never creates or populates.
+
+### Added — typed metadata for an environment's declared setup values
+
+`pix.toml` `[host.values.<NAME>]` takes `label`, `help`, `example` and
+`required` for a name the environment already declares in some
+`[host.mcp.<x>]`'s `env_keys`/`plain_keys`. It is presentation only: those
+fields are shown by `pix setup --env NAME` and are never fingerprinted,
+because they cannot change what an environment executes, mounts, or is
+handed. `required = false` is the one behavioral bit; absent means true.
+
+### Changed — `pix setup --env NAME` is scoped to that environment
+
+An environment-scoped setup asks nothing about personal provider keys: it
+prompts for exactly the values the named environment declares. Personal
+provider configuration stays in the unscoped `pix setup`.
+
+### Fixed
+
+- `[[setup]]` hooks run in authored order. They were sorted by id, so an
+  environment whose second hook depended on its first could not express
+  that ordering at all.
+- The sandbox creation path passes sbx's actual `--skip-auth` flag; the
+  underscore spelling was rejected by sbx.
+
+### Removed — the last of the `pix-host serve` supervision surface
+
+`DesiredHostServices`/`EnvironmentHolders` (the v1 desired-set union and
+live-holder query that `pix-host serve` and `pix env forget` called) are
+deleted rather than kept alive by their own tests. Neither verb exists in
+v2, `[[host.services]]` is review-and-report only, and the reference-lock
+proofs are what `pix rm` actually uses.
+
 ### Added — MCP integration status: declared, registered, reachable
 
 `pix env show NAME` now reports three separate facts for every MCP server

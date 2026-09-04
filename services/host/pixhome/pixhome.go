@@ -78,7 +78,6 @@ type Paths struct {
 	StateTasks             string // .state/tasks/<repo-key>/
 	StateTrust             string // .state/trust/
 	StateTrustEnvironments string // .state/trust/environments/<name>.json
-	StateIntegrations      string // .state/integrations/<name>/
 }
 
 // Resolve builds Paths from Dir().
@@ -119,7 +118,6 @@ func New(home string) Paths {
 	p.StateTasks = filepath.Join(p.State, "tasks")
 	p.StateTrust = filepath.Join(p.State, "trust")
 	p.StateTrustEnvironments = filepath.Join(p.StateTrust, "environments")
-	p.StateIntegrations = filepath.Join(p.State, "integrations")
 
 	return p
 }
@@ -129,21 +127,6 @@ func New(home string) Paths {
 // verify existence; that is workflow/env's job, layered above this package.
 func (p Paths) EnvironmentDir(name string) string {
 	return filepath.Join(p.Envs, name)
-}
-
-// IntegrationStateDir returns .state/integrations/<name>/ — the durable,
-// per-PIX_HOME home for one integration's own state (a keyring, an OAuth
-// grant), typically bind-mounted into the container that owns it through
-// an authored `${PIX_HOME}` reference (envinfo.PixHomeVar).
-//
-// Pix neither creates nor populates it: what belongs inside is the
-// integration's business, and the environment's own setup hook is what
-// creates it with the ownership its container needs. Pix owns only the
-// LOCATION, so this state lands inside the home `pix reset` moves aside
-// and `pix env` reasons about, instead of in a named Docker volume no
-// PIX_HOME can see.
-func (p Paths) IntegrationStateDir(name string) string {
-	return filepath.Join(p.StateIntegrations, name)
 }
 
 // RuntimeVersionDir returns runtime/<version>/ for a specific Pix version
