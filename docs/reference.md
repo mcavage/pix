@@ -336,8 +336,14 @@ run` remains the setup opt-out; non-interactive bare `pix` stays read-only. It:
 5. creates a default environment only when none exists, and selects it as
    the machine default in the same atomic step;
 6. always seeds a refs-only `secrets.env` (no-op if one already exists) and,
-   on a TTY with `op` installed and no refs configured yet, offers to add one
-   per model provider interactively;
+   on a BARE `pix setup` with a TTY, `op` installed and no refs configured
+   yet, offers to add one per model provider interactively. A named `pix
+   setup --env NAME` run skips every base personal-provider step (that
+   offer, the provider-key report, the default-model picker and the optional
+   Parallel web-search key): an environment that declares its own roster and
+   its own authenticated backends can neither use a public-vendor key nor be
+   told it has none, so the only values such a run asks for are the ones
+   that environment itself declares (step 8);
 7. creates or reconciles this stack's own `pix-memory` container;
 8. checks requirements declared by the selected environment (`--env NAME`),
    including validating any local inference backend (llmman or Ollama, over

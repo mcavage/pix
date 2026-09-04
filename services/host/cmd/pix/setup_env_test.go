@@ -12,6 +12,7 @@ import (
 	"pix/host/cli"
 	"pix/host/pixhome"
 	"pix/host/secret"
+	"pix/host/sys"
 	nativeenv "pix/host/workflow/env"
 )
 
@@ -346,6 +347,50 @@ func TestSetup_EnvFlagSuppressesBaseParallelPrompt(t *testing.T) {
 	}
 }
 
+// TestSetup_EnvFlagSuppressesBaseProviderInterview proves the OTHER half
+// of the same rule: a named `--env NAME` setup never runs the base
+// personal-provider interview either — no 1Password provider-key offer,
+// and no "no model provider key is configured yet / pix secret set
+// ANTHROPIC_API_KEY" advice — on a home whose environment brings its own
+// authenticated backends. It still establishes the refs file, because that
+// is where this environment's own declared values get recorded moments
+// later.
+func TestSetup_EnvFlagSuppressesBaseProviderInterview(t *testing.T) {
+	home, _ := setupHome(t)
+
+	var out, errb bytes.Buffer
+	// Interactive, with an answer waiting: if the offer were ever reached it
+	// would ask, and this input would answer yes.
+	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader("y\nop://Vault/Anthropic/key\n"), Interactive: true}
+	setupCredentials(d, false)
+
+	got := out.String()
+	for _, forbidden := range []string{
+		"Set up model providers from 1Password?",
+		"no model provider key is configured yet",
+		"pix secret set ANTHROPIC_API_KEY",
+		"model keys are configured",
+		"Parallel web search",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("`pix setup --env NAME` printed the base personal-provider step %q:\n%s", forbidden, got)
+		}
+	}
+	if got != "" {
+		t.Errorf("a named --env credential step must be silent, got:\n%s", got)
+	}
+	// The refs file is still established: the declared-requirements screen
+	// writes this environment's own values into it right after.
+	if _, serr := os.Stat(filepath.Join(home, "secrets.env")); serr != nil {
+		t.Errorf("a named --env setup must still establish secrets.env: %v", serr)
+	}
+	// And it wrote nothing it was never asked for.
+	body, _ := os.ReadFile(filepath.Join(home, "secrets.env"))
+	if strings.Contains(string(body), "ANTHROPIC_API_KEY=op://Vault/Anthropic/key") {
+		t.Errorf("a named --env setup recorded a provider ref from a prompt it must never have run:\n%s", body)
+	}
+}
+
 // TestSetup_EnvFlagSuppressesBaseModelPrompt proves a named `--env NAME`
 // setup never reaches the base default-model picker at all, even when a
 // bare `pix setup` under the identical conditions would.
@@ -390,6 +435,22 @@ func TestSetup_EnvFlagSuppressesBaseModelPrompt(t *testing.T) {
 	}
 	if strings.Contains(envOut, "Parallel web search") {
 		t.Errorf("`pix setup --env work` must not print the base Parallel-search prompt/report:\n%s", envOut)
+	}
+	// The same run, through the REAL command body: no personal-provider
+	// interview and no provider-key advice either (this home configures
+	// ANTHROPIC_API_KEY, so the bare run reports it and the --env run must
+	// not).
+	if !strings.Contains(baseOut, "model keys are configured") {
+		t.Fatalf("a bare `pix setup` must still report the configured provider refs:\n%s", baseOut)
+	}
+	for _, forbidden := range []string{
+		"model keys are configured",
+		"no model provider key is configured yet",
+		"Set up model providers from 1Password?",
+	} {
+		if strings.Contains(envOut, forbidden) {
+			t.Errorf("`pix setup --env work` printed the base personal-provider step %q:\n%s", forbidden, envOut)
+		}
 	}
 }
 
