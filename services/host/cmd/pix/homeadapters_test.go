@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -302,9 +303,54 @@ printf '%s\n' "$@" > "$d/argv"
 		t.Fatal(err)
 	}
 	got := strings.Fields(string(data))
-	want := []string{"mcp", "add", "pix-memory", "--url", endpoint, "--skip-ssrf-check", "--skip_auth"}
+	want := []string{"mcp", "add", "pix-memory", "--url", endpoint, "--skip-ssrf-check", "--skip-auth"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sbx argv = %#v, want %#v", got, want)
+	}
+}
+
+// TestAddMemoryRemoteUsesHyphenatedSkipAuthFlag pins the exact `sbx mcp add`
+// auth-skip spelling. sbx once rejected the earlier `--skip_auth` (underscored)
+// spelling outright, which silently broke every fresh memory registration on
+// current sbx builds; this test exists so a future respelling of either flag
+// fails a unit test instead of a live `pix setup`.
+func TestAddMemoryRemoteUsesHyphenatedSkipAuthFlag(t *testing.T) {
+	dir := installSbxRegistrarFixture(t, `
+if [ "$1 $2" = "mcp ls" ]; then exit 0; fi
+printf '%s\n' "$@" > "$d/argv"
+`)
+	const endpoint = "http://127.0.0.1:18080/mcp?token=secret"
+	state, err := (sbxMemoryRegistrar{}).EnsureMemoryRemote("pix-memory", endpoint)
+	if err != nil {
+		t.Fatalf("EnsureMemoryRemote: %v", err)
+	}
+	if state != provision.MCPRegistrationAdded {
+		t.Fatalf("state = %v, want added", state)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "argv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := strings.Fields(string(data))
+	if !slices.Contains(argv, "--skip-auth") {
+		t.Fatalf("sbx argv = %#v, want it to contain --skip-auth", argv)
+	}
+	if slices.Contains(argv, "--skip_auth") {
+		t.Fatalf("sbx argv = %#v, still uses the rejected underscored --skip_auth spelling", argv)
+	}
+}
+
+// TestMemorySourceNeverReintroducesUnderscoredSkipAuth is a compatibility
+// guard at the source-text level: even a caller this test file doesn't know
+// about (a future addMemoryRemote rewrite, a copy-pasted helper) cannot slip
+// the rejected `--skip_auth` spelling back in without failing here.
+func TestMemorySourceNeverReintroducesUnderscoredSkipAuth(t *testing.T) {
+	src, err := os.ReadFile("homeadapters.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), "--skip_auth") {
+		t.Fatal("homeadapters.go contains the rejected --skip_auth flag spelling; sbx requires --skip-auth")
 	}
 }
 

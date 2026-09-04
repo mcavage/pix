@@ -245,8 +245,8 @@ func replaceMemoryRemote(name, url string) (provision.MCPRegistrationState, erro
 
 func addMemoryRemote(name, url string) (provision.MCPRegistrationState, error) {
 	// This reserved endpoint is intentionally loopback and token-authenticated,
-	// so opt out of sbx's SSRF guard and hosted OAuth flow for this add only.
-	_, stderr, err := runSbxCapturedOut("mcp", "add", name, "--url", url, "--skip-ssrf-check", "--skip_auth")
+	// so skip sbx's SSRF guard and OAuth flow for this add only (hyphenated flags: sbx rejects an underscored spelling).
+	_, stderr, err := runSbxCapturedOut("mcp", "add", name, "--url", url, "--skip-ssrf-check", "--skip-auth")
 	if err != nil {
 		return provision.MCPRegistrationNone, fmt.Errorf("%w: %s", err, container.RedactMemoryURLToken(strings.TrimSpace(stderr)))
 	}
