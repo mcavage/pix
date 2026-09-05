@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"pix/host/config"
+	"path/filepath"
 	"pix/host/envinfo"
 	"pix/host/mcp"
 	"pix/host/stack"
@@ -41,7 +41,8 @@ func EnvironmentFacts(doc *envinfo.Document, sidecar *envinfo.Sidecar, home stri
 		}
 		argv := envinfo.ExpandPixManagedArgv(append([]string{srv.Command}, srv.Args...), envinfo.PixManagedVars(home))
 		if entry, ok := hostMCP[srv.Name]; ok && len(entry.EnvKeys) > 0 {
-			argv = opRunWrapIfAvailable(argv)
+			keys := append(append([]string(nil), entry.EnvKeys...), entry.PlainKeys...)
+			argv = opRunWrapIfAvailable(home, keys, argv)
 		}
 		fact.Command = argv[0]
 		fact.Args = argv[1:]
@@ -51,17 +52,17 @@ func EnvironmentFacts(doc *envinfo.Document, sidecar *envinfo.Sidecar, home stri
 }
 
 // opRunWrapIfAvailable calls mcp.OpRunWrap with this host's own resolved
-// `op` binary path and op-refs.env location, or returns argv unchanged
+// `op` binary path and the selected home’s secrets.env, or returns argv unchanged
 // when either is absent (1Password remains optional — mcp.OpRunWrap's own
 // no-op behavior for opPath == "" || opRefs == "").
-func opRunWrapIfAvailable(argv []string) []string {
+func opRunWrapIfAvailable(home string, keys, argv []string) []string {
 	opPath, err := exec.LookPath("op")
 	if err != nil {
 		return argv
 	}
-	refs := config.OpRefsPath()
+	refs := filepath.Join(home, "secrets.env")
 	if _, err := os.Stat(refs); err != nil {
 		return argv
 	}
-	return mcp.OpRunWrap(opPath, refs, argv)
+	return mcp.OpRunWrap(opPath, refs, keys, argv)
 }

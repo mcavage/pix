@@ -101,7 +101,14 @@ func setupModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, name 
 	if model, ok := catalog.Get(selected); ok {
 		label = model.Label
 	}
-	fmt.Fprintf(d.Out, "Model: %s\n", label)
+	route := ""
+	for _, binding := range cfg.Inference.Models {
+		if binding.Model == selected && cfg.Inference.Backends[binding.Backend].Auth == "sbx-session" {
+			route = " (environment AI gateway)"
+			break
+		}
+	}
+	fmt.Fprintf(d.Out, "Model for %q: %s%s\n", name, label, route)
 	return nil
 }
 

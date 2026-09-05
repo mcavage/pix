@@ -34,21 +34,24 @@ func VerifyExistingEndpoint(name, want string) (matches bool, verified bool) {
 	return false, false
 }
 
-// OpRunWrap is the ONE op-run wrapper grammar pix generates. It exists as a
-// shared function, not an inline string, because two callers must produce
-// byte-identical commands: registration (what the gateway will spawn) and
-// doctor's health probe (what we claim to have verified).
-//
-// That equality is the whole point. The failure this codebase was rebuilt
-// around is a credential that works in your terminal and not in the gateway's
-// environment — so a probe that does not go through this wrapper proves
-// nothing about the thing it claims to check. Returns argv unchanged when
-// 1Password is not configured, which is a legitimate no-credential setup.
-func OpRunWrap(opPath, opRefs string, argv []string) []string {
-	if opPath == "" || opRefs == "" || len(argv) == 0 {
+// scopedOpRun reads references at process start, so rotations do not require
+// rewriting Gateway registrations. Only declared keys reach op. Process
+// substitution keeps the filtered references off disk; exec preserves signals.
+const scopedOpRun = `op=$1; refs=$2; keys=$3; shift 3
+selected=$(awk -v names="$keys" '
+  BEGIN { split(names, list, ","); for (i in list) wanted[list[i]]=1 }
+  { key=$0; sub(/^[[:space:]]*(export[[:space:]]+)?/, "", key)
+    sub(/[[:space:]]*=.*/, "", key); if (key in wanted) print }
+' "$refs") || exit
+exec "$op" run --no-masking --env-file=<(printf '%s\n' "$selected") -- "$@"`
+
+// OpRunWrap supplies only one integration's declared secret and plain keys.
+// The argv contains paths and key names, never resolved credential values.
+func OpRunWrap(opPath, opRefs string, keys, argv []string) []string {
+	if opPath == "" || opRefs == "" || len(keys) == 0 || len(argv) == 0 {
 		return argv
 	}
-	return append([]string{opPath, "run", "--no-masking", "--env-file=" + opRefs, "--"}, argv...)
+	return append([]string{"/bin/bash", "-c", scopedOpRun, "pix-mcp", opPath, opRefs, strings.Join(keys, ",")}, argv...)
 }
 
 // outputContainsCanonicalEndpoint accepts only URL/endpoint fields (or a bare

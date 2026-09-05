@@ -144,3 +144,23 @@ func TestSetupModelSelection_ArbitraryEnvironmentKeepsDeclaredModel(t *testing.T
 		t.Fatal("changed declared model")
 	}
 }
+
+func TestSetupModelSelection_NamesEnvironmentGatewayWithoutResolvingPersonalKeys(t *testing.T) {
+	home, path := modelSetupHome(t, "ANTHROPIC_API_KEY=op://fixture/missing/api key\n")
+	body := strings.ReplaceAll(gatewaySidecar, "gateway/big", "anthropic/claude-opus-5")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &out, In: strings.NewReader(""), Interactive: true}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		t.Fatalf("gateway setup must not look for provider credentials: %s", name)
+		return "", nil
+	}}}
+	if err := setupModelSelection(d, home, env, "default"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `Model for "default": Claude Opus 5 (environment AI gateway)`) {
+		t.Fatalf("model announcement omits its source: %s", out.String())
+	}
+}

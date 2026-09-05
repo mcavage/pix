@@ -589,8 +589,8 @@ func OpRefsPath() string {
 
 // OpRefsMentalModel is the ≤4-line plain explanation of what secrets.env is, reused
 // VERBATIM in `pix setup`, the `secret` help, and the template header.
-const OpRefsMentalModel = `secrets.env maps ENV_VAR = op://vault/item/field. Each launch resolves every
-configured ref and hands it to sbx as a credential scoped to that one sandbox
+const OpRefsMentalModel = `secrets.env maps ENV_VAR = op://vault/item/field. Each launch resolves its needed
+refs and hands them to sbx as credentials scoped to that one sandbox
 (model keys, tool keys, GITHUB_TOKEN), or passes an MCP server's own ref only
 to that server's host command. Pix never writes or prints a resolved value.`
 
@@ -603,8 +603,8 @@ to that server's host command. Pix never writes or prints a resolved value.`
 // one moved.
 const OpRefsTemplate = `# pix secrets.env — 1Password refs this launcher resolves, never secret values.
 #
-# secrets.env maps ENV_VAR = op://vault/item/field. Each launch resolves every
-# configured ref and hands it to sbx as a credential scoped to that one
+# secrets.env maps ENV_VAR = op://vault/item/field. Each launch resolves its needed
+# refs and hands them to sbx as credentials scoped to that one
 # sandbox (model provider keys, tool keys, GITHUB_TOKEN); a declared MCP
 # server's own refs are resolved the same way (` + "`op run --env-file`" + `) and
 # passed only to that server's host command. Pix never writes a resolved
