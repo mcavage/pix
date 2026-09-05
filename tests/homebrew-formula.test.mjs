@@ -65,11 +65,13 @@ test("the formula only installs paths the tarball actually contains", () => {
 	);
 });
 
-test("the formula installs both binaries, so a bad edit cannot ship a formula that installs nothing runnable", () => {
+test("the formula installs the pix binary, so a bad edit cannot ship a formula that installs nothing runnable", () => {
 	const installed = formulaInstalledPaths();
-	for (const bin of ["pix", "pix-host"]) {
-		assert.ok(installed.includes(bin), `the formula must install ${bin}`);
-	}
+	assert.ok(installed.includes("pix"), "the formula must install pix");
+	// There is no pix-host any more (services/host/cmd/pix is the one build
+	// target): a formula that reintroduces it would be installing a binary the
+	// tarball no longer stages.
+	assert.ok(!installed.includes("pix-host"), "the formula must not install pix-host (it no longer ships)");
 });
 
 test("Homebrew installs every notice install.sh installs, so brew is not the one channel that drops them", () => {

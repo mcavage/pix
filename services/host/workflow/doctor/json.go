@@ -6,14 +6,17 @@ import (
 	"pix/host/launcher"
 )
 
-// json.go is ONE schema for both verbs — one parser, and no second chance to
-// disagree about the same host. A consumer reads one shape from either command
-// and gets the same rows.
+// json.go is `pix doctor --json`'s one schema — one parser, no second shape
+// to disagree with. (It was briefly one schema shared with `pix status`;
+// that verb is gone, deleted as unreachable dead code in the Pix v2 cutover,
+// AC-16.)
 //
-// SchemaVersion 5 ADDS the `supervisor` object (the Suture tree serve
-// publishes) as a required top-level key. That is a key-set change, and the
-// contract test below refuses a key-set change without a version bump — so it
-// is a bump, with a migration note, rather than a field smuggled into v4.
+// SchemaVersion 6 DROPS the v5 `supervisor` object: `pix-host serve` and its
+// Suture tree are gone (Pix v2 deletion sweep, docs/design/pix-v2-architecture.md
+// §14), so there is nothing left to publish a snapshot of. That is a key-set
+// change, and the contract test below refuses a key-set change without a
+// version bump — so it is a bump, with a migration note, rather than quietly
+// dropping a field v5 promised was always present.
 //
 // SchemaVersion 4 was a BREAK, not an extension: v1-v3 described the
 // requirement/verdict matrix this wave deleted, and there is no honest
@@ -21,7 +24,7 @@ import (
 // say "unknown". The version number is the contract that says so out loud,
 // and RetiredSchemas below is the migration note that says what a consumer
 // must do about it.
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 // RetiredSchemas is the MIGRATION CONTRACT for the versions this one
 // replaces, keyed by version. Each value states what that shape was and what
@@ -47,13 +50,15 @@ var RetiredSchemas = map[int]string{
 	2: "as v1 plus per-axis requirement rollups; same break, same migration",
 	4: "the v5 shape minus the `supervisor` object; a v4 consumer keeps reading every field it knows and gains supervision state by reading `supervisor`",
 	3: "`groups` plus a flat `checks` array, and a separate `dashboard` object from `pix status`; both verbs now emit one shape — read `checks`",
+	5: "the v6 shape plus a `supervisor` object describing pix-host serve's Suture tree; pix-host serve was deleted outright in the Pix v2 cutover, so there is no replacement field — a v5 consumer simply stops reading `supervisor`",
 }
 
-// RetiredSchemaKeys are the top-level field names v1-v3 published that v4
-// does NOT. They are listed so the break is testable in both directions: a v4
-// payload must carry none of them, which is what makes a stale parser fail on
-// a missing field instead of silently reading a subset it recognizes.
-var RetiredSchemaKeys = []string{"groups", "dashboard", "axes", "ok"}
+// RetiredSchemaKeys are the top-level field names a prior schema published
+// that v6 does NOT. They are listed so the break is testable in both
+// directions: a v6 payload must carry none of them, which is what makes a
+// stale parser fail on a missing field instead of silently reading a subset
+// it recognizes.
+var RetiredSchemaKeys = []string{"groups", "dashboard", "axes", "ok", "supervisor"}
 
 // ReportJSONView is the machine-readable snapshot behind `--json`.
 type ReportJSONView struct {
@@ -70,14 +75,9 @@ type ReportJSONView struct {
 	// Fixes are the exact repair commands, de-duplicated, in probe order.
 	// Only a verified gap contributes one.
 	Fixes []string `json:"fixes"`
-	// Exit is the code `pix doctor` returns for this snapshot. `pix status`
-	// publishes the same number while itself exiting 0, so the two surfaces
-	// cannot tell a reader different things.
+	// Exit is the code `pix doctor` returns for this snapshot.
 	Exit      int   `json:"exit"`
 	ElapsedMS int64 `json:"elapsed_ms"`
-	// Supervisor is the Suture tree `pix-host serve` published, or the reason
-	// this process could not see it. Always present.
-	Supervisor SupervisorJSON `json:"supervisor"`
 }
 
 // CheckJSON is one probe's answer.
@@ -94,8 +94,8 @@ type CheckJSON struct {
 }
 
 // ReportJSON renders a snapshot into its serializable form. exit is passed in
-// rather than derived so status can publish doctor's verdict while returning
-// its own (always 0) exit code.
+// rather than derived because the caller (RunDoctor) already computed it once
+// against the same snapshot, and this keeps the two agreeing by construction.
 func ReportJSON(s health.Snapshot, profile string, exit int) ReportJSONView {
 	v := ReportJSONView{
 		SchemaVersion: SchemaVersion,
@@ -108,7 +108,6 @@ func ReportJSON(s health.Snapshot, profile string, exit int) ReportJSONView {
 		Fixes:         s.Fixes(),
 		Exit:          exit,
 		ElapsedMS:     s.Elapsed.Milliseconds(),
-		Supervisor:    supervisorSnapshot(),
 	}
 	if v.Fixes == nil {
 		v.Fixes = []string{}
@@ -120,11 +119,39 @@ func ReportJSON(s health.Snapshot, profile string, exit int) ReportJSONView {
 			Required:   r.Required,
 			Detail:     r.Detail,
 			Evidence:   r.Evidence,
-			Fix:        r.Fix,
+			Fix:        sbxJSONFix(r),
 			DurationMS: r.Took.Milliseconds(),
 		})
 	}
 	return v
+}
+
+// sbxJSONFix answers a check's JSON `fix` field, filling in the ONE gap the
+// shared health.Run pipeline leaves for a machine reader: an sbx reply that
+// ran to completion but parsed as no version at all is StatusUnknown, not
+// StatusAbsent (probes.go's sbxProbeResult), so health.go's runOne strips its
+// Fix along with every other non-Missing() result's — Fix is reserved for a
+// VERIFIED gap, and "I could not read this" is deliberately not one. A human
+// reading doctor's text mode still gets the exact repair command, because
+// RunDoctor renders it from health.SbxVersionGate directly into the gate
+// line above the report. A JSON consumer has no such prose to parse, only
+// this row, so the same already-computed gate verdict is read back onto the
+// row for the JSON schema alone. StatusUnknown/Detail/Evidence are read from
+// r unchanged: SbxVersionGate never asks for or changes them, and the health
+// package's own honesty rule keeps unparsable as unparsable everywhere else
+// (Snapshot.Gaps/Blocking/Fixes) — only the JSON `fix` field for this exact
+// row gains a value it did not carry before.
+func sbxJSONFix(r health.Result) string {
+	if r.Fix != "" {
+		return r.Fix
+	}
+	if r.Name != "sbx" {
+		return ""
+	}
+	if blocked, _ := health.SbxVersionGate(r); blocked {
+		return health.SbxUpgradeFix
+	}
+	return ""
 }
 
 // verdictOf reduces a snapshot to one word, by the same precedence the

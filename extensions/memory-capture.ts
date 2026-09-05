@@ -1,13 +1,13 @@
 // pix — capture (client side).
 //
-// When an exchange finishes, hand it to the host memory service, which runs the
-// watcher and decides what's worth remembering. The agent never chooses to
-// remember; this just forwards the turn.
+// When an exchange finishes, hand it to the memory service (behind the sbx MCP
+// Gateway), which runs the watcher and decides what's worth remembering. The
+// agent never chooses to remember; this just forwards the turn.
 //
 // memory_capture (the host's config key) decides whether this happens AT
-// ALL: explicit is the shipped default and sends ZERO observe requests. The
+// ALL: explicit is the shipped default and sends ZERO observe calls. The
 // live mode is read ONCE at load from <cwd>/.pix/memory-capture (written by
-// the launcher, launch.WriteMemoryCaptureFile) — no RPC round trip, and a
+// the launcher, launch.WriteMemoryCaptureFile) — no round trip, and a
 // missing/garbled marker fails closed to explicit. The host's own memObserve
 // admission gate stays authoritative regardless of what this file says.
 //
@@ -18,16 +18,15 @@
 // agent_end (best-effort, catches the final exchange of an interactive session).
 // A dedup key makes sure each exchange is processed once.
 //
-//   MEMORY_URL  default http://host.docker.internal:11435
+// Transport: a deterministic `tools/call` (memory_observe) through the same
+// injected Gateway endpoint pi-mcp-adapter uses — see ../lib/mcp-gateway-client.ts.
+// Never a direct connection to the memory container or host.docker.internal.
 
 import { basename, join } from "node:path";
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
-
-const MEMORY_URL = process.env.MEMORY_URL ?? "http://host.docker.internal:11435";
+import { createMcpGatewayClient, MEMORY_TOOL } from "../lib/mcp-gateway-client.ts";
 
 const safe = async <T>(fn: () => Promise<T>): Promise<T | undefined> => {
 	try {
@@ -37,56 +36,15 @@ const safe = async <T>(fn: () => Promise<T>): Promise<T | undefined> => {
 	}
 };
 
-// node:http, not fetch: in an sbx sandbox pi installs a global undici proxy
-// dispatcher and sbx's NO_PROXY omits host.docker.internal, so fetch() to the
-// host store would be routed through the proxy and fail. node:http goes direct.
-function postJson(urlStr: string, body: unknown, timeoutMs: number): Promise<any> {
-	return new Promise((resolve, reject) => {
-		const u = new URL(urlStr);
-		const data = JSON.stringify(body);
-		const req = (u.protocol === "https:" ? httpsRequest : httpRequest)(
-			{
-				hostname: u.hostname,
-				port: u.port || (u.protocol === "https:" ? 443 : 80),
-				path: u.pathname || "/",
-				method: "POST",
-				headers: { "content-type": "application/json", "content-length": Buffer.byteLength(data) },
-				timeout: timeoutMs,
-			},
-			(res) => {
-				let chunks = "";
-				res.on("data", (c) => (chunks += c));
-				res.on("end", () => {
-					const status = res.statusCode ?? 500;
-					if (status < 200 || status >= 300) {
-						const detail = chunks.trim().replace(/\s+/g, " ").slice(0, 240);
-						return reject(new Error(`memory service HTTP ${status}${detail ? `: ${detail}` : ""}`));
-					}
-					try {
-						resolve(chunks ? JSON.parse(chunks) : null);
-					} catch {
-						reject(new Error("memory service returned a non-JSON success response"));
-					}
-				});
-			},
-		);
-		req.on("error", reject);
-		req.on("timeout", () => req.destroy(new Error("timeout")));
-		req.write(data);
-		req.end();
-	});
-}
+// One Gateway client for this extension instance (see
+// createMcpGatewayClient's doc comment for why this is per-instance state,
+// not module-global).
+const gateway = createMcpGatewayClient();
 
-// Exported only for the transport regression tests; production uses call().
-export const testPostJson = postJson;
+const OBSERVE_TIMEOUT_MS = 3000;
 
-let rpcId = 0;
 async function call(method: string, params: any): Promise<any> {
-	const response = await postJson(MEMORY_URL, { jsonrpc: "2.0", id: ++rpcId, method, params }, 3000);
-	if (response?.error) {
-		throw new Error(typeof response.error.message === "string" ? response.error.message : "memory service RPC error");
-	}
-	return response;
+	return await gateway.callTool(method, params, OBSERVE_TIMEOUT_MS);
 }
 
 // Surface a not-accepted observe ONCE per session instead of dropping captures
@@ -114,9 +72,8 @@ function notify(ctx: any, text: string): void {
 		/* best-effort; never break a turn over a notice */
 	}
 }
-function warnIfNotAccepted(ctx: any, resp: any): void {
+function warnIfNotAccepted(ctx: any, r: any): void {
 	try {
-		const r = resp?.result;
 		if (r && r.accepted === false && !warnedNotAccepted) {
 			warnedNotAccepted = true;
 			const reason = typeof r.reason === "string" ? r.reason : "not accepted";
@@ -278,12 +235,12 @@ async function capture(ctx: any, awaited: boolean): Promise<void> {
 	const onErr = (e: any) => {
 		if (!warnedPostErr) {
 			warnedPostErr = true;
-			notify(ctx, `[memory] capture POST to ${MEMORY_URL} failed: ${e?.message ?? e}`);
+			notify(ctx, `[memory] capture call to the memory Gateway failed: ${e?.message ?? e}`);
 		}
 	};
 	const send = async () => {
 		try {
-			const response = await call("observe", params);
+			const response = await call(MEMORY_TOOL.observe, params);
 			warnIfNotAccepted(ctx, response);
 			lastSent = key; // only a completed RPC earns deduplication
 		} catch (e) {

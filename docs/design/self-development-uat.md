@@ -1,5 +1,12 @@
 # Self-development UAT
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: PROPOSED
 
 ## Problem
@@ -9,7 +16,7 @@ that matters most: a real host build followed by real `pix` and `sbx` lifecycle
 operations. Docker, the sbx image store, OAuth callbacks, and the host browser
 all live outside the sandbox.
 
-The current release check, `scripts/macos/verify-pix-lifecycle.sh`, therefore
+The current release check, `scripts/host-uat.sh` (the deleted `scripts/macos/verify-pix-lifecycle.sh` is gone), therefore
 requires a person to build, load, run, observe, and clean up the host-side test.
 That breaks the autonomous development loop.
 
@@ -70,26 +77,103 @@ A run starts from a commit, never uncommitted bytes or an arbitrary host path:
 The host verifies that the commit is reachable from the checkout bound to the
 UAT session, then makes a disposable local clone for the run.
 
-## Session-scoped MCP
+## Session-scoped MCP: gateway relay + host-context worker
 
-On creation of a `--dev` sandbox, the host launcher:
+The first implementation planned to have the sbx gateway spawn `pix-host
+uat-mcp` directly, with that one process both speaking stdio MCP to the client
+and constructing the UAT Runner (which shells out to `git`, `docker`, `sbx`,
+and a host browser). Building it exposed why that shape cannot work: sbx's
+local gateway spawns MCP host commands from its OWN daemon process tree, not
+from the operator's interactive shell. A process born under that ancestry
+never inherits the operator's `sbx`/Docker login session, SSH agent, or
+browser-profile state — the exact host authentication the UAT Runner needs to
+drive real lifecycle operations. Every gateway-spawned `uat-mcp` therefore hit
+"not authenticated to Docker"-shaped failures that had nothing to do with the
+scenario under test.
 
-1. generates a random session capability;
-2. registers a uniquely named host-command MCP server, for example
-   `pix-uat-a8f32c`;
-3. starts `pix-host uat-mcp` with fixed arguments naming the canonical checkout,
-   UAT state root, session capability, and resource namespace;
-4. adds only that registration to this sandbox's `--static-mcp` set;
-5. records the registration and resources in the sandbox lease;
-6. removes them when the last session exits.
+The fix is a two-process split, authorized as the explicit fallback in this
+document's original MVP note ("use a per-session loopback worker … the tool
+contract and runner remain the same") rather than an exec broker or a
+network-exposed backdoor:
+
+- **`pix-host uat-mcp`** stays what the gateway spawns per client connection,
+  but it is now a DUMB stdio↔Unix-socket relay. It takes one flag,
+  `--connect <socket>`, dials the session's worker socket (bounded retries,
+  then an actionable error naming `pix run --dev`), and copies bytes
+  bidirectionally until either side closes. It constructs no Runner, and it
+  must never import `os/exec` or `pix/host/workflow/uat` again — a structural
+  sentinel test (`TestUatMcpGatewayIsADumbRelay`) pins that fact at the source
+  level so the regression cannot silently return.
+- **`pix-host uat-worker`** owns the real UAT Runner and every host command it
+  runs. It is started later, by `pix run --dev` itself — a process launched
+  from the operator's own interactive shell, which is exactly where the
+  authenticated `sbx`/Docker/browser context lives. It listens on a
+  session-owned Unix socket under the same 0700 per-session state directory
+  `RegisterMCP` already creates (`<state>/sessions/<sessionID>/uat.sock`),
+  accepts one client connection at a time (single-flight), and survives a
+  client EOF: only that connection's MCP `Serve` loop ends, never the worker
+  process, so a gateway relay reconnecting (a new pi session in the same
+  sandbox) picks the same live Runner back up.
+
+The socket path is hardened with the same session-id/root rules
+`RegisterMCP`/`removeSessionState` already enforce (absolute, real directory,
+never a symlink, 0700, owned by the current uid), plus a symlink check on the
+socket file itself, before either side (the worker's `Listen` or the
+gateway's `Dial`) touches it.
+
+The registration argv changes accordingly: `sbx mcp add <name> --command
+<pix-host> --args uat-mcp --args --connect --args <socket>`, with the repo
+path, state root, and session id no longer part of the gateway command at all
+(the worker receives those directly from `pix run --dev`, not from the
+gateway's registration). The tool contract — `uat_capabilities`, `uat_submit`,
+`uat_status`, `uat_artifact`, `uat_browser_action`, `uat_abort` — and the
+underlying Runner are unchanged; only the transport and which process
+constructs the Runner moved.
+
+Wiring `pix run --dev` to actually spawn and supervise `uat-worker` (start
+ordering, lifecycle, teardown alongside the sandbox) is the next unit, not
+this one: this change lands the reusable transport primitives — the socket
+hardening, the relay, the worker's accept loop, and the planner/registration
+argv — with no `run_cmd` lifecycle wiring yet.
 
 Normal pix sandboxes never receive the UAT server. A startup reaper removes
 expired UAT registrations and resources after a hard crash.
 
-The first implementation must prove that sbx isolates a uniquely attached
-static MCP registration as expected. If it does not, use a per-session loopback
-JSON-RPC worker with a bearer capability injected only into the dev sandbox.
-The tool contract and runner remain the same.
+## Security boundary: operator environment inheritance
+
+`uat-worker` executes submitted candidate code on the host as a child process
+of the operator's own `pix run --dev` invocation, precisely because that is
+the only process in the tree holding the operator's authenticated `sbx`,
+Docker, and browser-profile session (see above). That inheritance is not
+incidental — it is the fix that makes `uat-worker` work at all — and it comes
+with a consequence that must be stated plainly, not assumed away.
+
+`uat-worker` inherits the operator shell's full environment, unfiltered. It
+does not scrub, allowlist, or redact environment variables before building
+candidate binaries or running scenario steps. Any environment variable
+exported in the shell that ran `pix run --dev` — including a long-lived
+provider or cloud API key the operator happens to have exported for
+unrelated work — is visible to whatever the submitted candidate build and
+scenario execute on the host. This is an accepted, dev-only boundary, not a
+gap slated for a later unit: `--dev` is explicitly the mode where a
+committed but not-yet-trusted candidate gets host execution, and proving that
+candidate's behavior before it ships is the point of this design. No
+mechanism described here removes, wraps, or filters the inherited
+environment, and none should be assumed present until one is designed,
+implemented, and covered by a test that proves scrubbing actually happens.
+
+**Operators must not launch `pix run --dev` from a shell that has exported
+long-lived provider or cloud API secrets.** Use a clean shell, or one scoped
+to only the credentials `sbx`, Docker, and the browser controller actually
+need, before running `--dev`. Treat any secret exported into that shell as
+potentially exposed to whatever a submitted UAT scenario executes.
+
+This boundary is dev-only by construction. `uat-mcp`/`uat-worker` are wired
+only into sessions started with `--dev` (see "Decision" above: normal pix
+sandboxes never receive the UAT server). A production or non-dev session
+never spawns a worker, never receives `uat_capabilities`, and never executes
+submitted candidate code on the host. The risk above is scoped to the
+self-development loop, not to ordinary `pix run` usage.
 
 ## Tool contract
 
@@ -351,4 +435,7 @@ tool exists.
 - generic browser automation outside an active UAT run;
 - bypassing MFA;
 - interactive TUI automation in the first version;
-- changing the user's normal pix configuration or browser profile.
+- changing the user's normal pix configuration or browser profile;
+- scrubbing, filtering, or sandboxing the operator shell's environment before
+  candidate execution (none exists today; see "Security boundary: operator
+  environment inheritance").

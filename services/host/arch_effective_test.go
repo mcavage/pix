@@ -1,0 +1,235 @@
+package main
+
+// arch_effective_test.go pins E2.1's two architect corrections with named,
+// independently-failing sentinels — TestArchitecture_ImportsPointDown
+// (arch_test.go) already enforces envinfo's sibling isolation generically,
+// but a reader of THIS unit should see its own specific claim proven, not
+// just "the shared L1 rule held two files away".
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// TestArchitecture_EnvinfoRenderNoSiblingImport is a literal, source-text
+// check over envinfo/render.go's own import block: RenderEffective must
+// take no dependency on pix/host/mcp, pix/host/sandbox, or any
+// pix/host/workflow/* package (AC-54's "do NOT import mcp/sandbox/
+// workflow" — this file's own name for it).
+func TestArchitecture_EnvinfoRenderNoSiblingImport(t *testing.T) {
+	src := mustReadArchFile(t, "envinfo/render.go")
+	for _, forbidden := range []string{
+		`"pix/host/mcp"`,
+		`"pix/host/sandbox"`,
+		`"pix/host/workflow/`,
+	} {
+		if strings.Contains(src, forbidden) {
+			t.Errorf("envinfo/render.go must not import %s (E2.1 AC-54: RenderEffective is pure, no sibling/workflow dependency)", forbidden)
+		}
+	}
+}
+
+// TestArchitecture_NoDuplicateOpRunGrammar proves package mcp's OpRunWrap
+// (mcp/mcp.go) stays the ONE place this module builds the `op run
+// --no-masking --env-file=...` argv (docs/design/environments.md §9.2). A
+// second hand-built copy anywhere else — most plausibly in envinfo or
+// workflow/env, which this unit adds a new caller to — would let a future
+// edit to the grammar silently diverge between what registration spawns
+// and what an effective-document preview claims will run. Scoped to
+// PRODUCTION (non-`_test.go`) source only: workflow/pack/probewrap_test.go
+// and mcp/mcp_test.go already carry pre-existing, legitimate fixture/
+// assertion copies of this literal string in test files, and this
+// sentinel's whole point is a NEW production duplicate, not those.
+func TestArchitecture_NoDuplicateOpRunGrammar(t *testing.T) {
+	const grammar = "--no-masking"
+	allowed := filepath.FromSlash("mcp/mcp.go")
+	var offenders []string
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			switch info.Name() {
+			case "node_modules", ".git":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if path == allowed {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		if strings.Contains(string(b), grammar) {
+			offenders = append(offenders, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(offenders) > 0 {
+		t.Errorf("op-run grammar %q duplicated outside mcp/mcp.go in production source: %v (reuse mcp.OpRunWrap instead)", grammar, offenders)
+	}
+}
+
+// TestArchitecture_ExactlyOneEffectiveDocumentProducer pins F17: AC-54
+// requires exactly ONE stable effective-document producer,
+// envinfo.RenderEffective, that both `pix env show --effective` (today)
+// and a future E2.5 launch composition must call — never a second,
+// independently-shaped renderer. This greps every production (non-test)
+// .go file in the module for a qualified call `envinfo.RenderEffective(`
+// and requires exactly one call site, and that it lives in
+// workflow/env/effective.go: cmd/pix must reach RenderEffective only
+// THROUGH workflow/env's typed wrapper (RenderEffectiveDocument), never by
+// calling it directly.
+func TestArchitecture_ExactlyOneEffectiveDocumentProducer(t *testing.T) {
+	const call = "envinfo.RenderEffective("
+	var sites []string
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			switch info.Name() {
+			case "node_modules", ".git":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		if strings.Contains(string(b), call) {
+			sites = append(sites, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	// F17 pins ONE RENDERER, not one caller: the two callers are the two
+	// documented compositions — `pix env show --effective`'s deterministic
+	// preview and E2.5's real launch — and the sibling-workflow rule
+	// (arch_test.go's TestArchitecture_ImportsPointDown) forbids the launch
+	// from reaching the preview's wrapper, so it renders its own richer
+	// RuntimeFacts through the SAME envinfo.RenderEffective. What F17
+	// forbids is a SECOND effective grammar; any third call site is one.
+	want := []string{
+		filepath.FromSlash("workflow/env/effective.go"),
+		filepath.FromSlash("workflow/launch/envlaunch.go"),
+	}
+	sort.Strings(sites)
+	sort.Strings(want)
+	if strings.Join(sites, ",") != strings.Join(want, ",") {
+		t.Fatalf("envinfo.RenderEffective's production call sites must be exactly %v (F17: one renderer, the two documented compositions); found %v", want, sites)
+	}
+
+	// cmd/pix must never call envinfo.RenderEffective directly.
+	err = filepath.Walk("cmd/pix", func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") {
+			return err
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		if strings.Contains(string(b), call) {
+			t.Errorf("cmd/pix must never call envinfo.RenderEffective directly (must go through workflow/env's typed wrapper): %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk cmd/pix: %v", err)
+	}
+}
+
+func mustReadArchFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(b)
+}
+
+// TestArchitecture_NoInventedWorkspacesKey is the static half of the fix
+// for the host failure of run-20260829-161325-d3c9a7be (candidate
+// 54152f2b), where a real `sbx env create` answered:
+//
+//	field workspaces not found in type sbxenv.Config
+//
+// on line 9 of the generated effective file. sbx 0.39's schema has a
+// SINGULAR `workspace:` (string, or object with path/clone) plus
+// `additionalWorkspaces:` (objects with path/readOnly). There is no
+// top-level `workspaces:` list anywhere in it — see Docker's reference,
+// https://docs.docker.com/ai/sandboxes/configuration/environment-files/.
+//
+// envinfo/upstream_schema_test.go proves the RENDERED document parses as
+// the real schema. This sentinel bans the invented key from ever being
+// re-declared or re-pinned in the first place: a `yaml:"workspaces` struct
+// tag in production source, or a top-level `workspaces:` line in a
+// checked-in effective-document golden. The golden half matters most —
+// every golden in this module agreed with the invalid renderer, so the
+// suite was green while the host was refusing every create.
+func TestArchitecture_NoInventedWorkspacesKey(t *testing.T) {
+	// This file necessarily spells the banned tag out to search for it.
+	self := filepath.FromSlash("arch_effective_test.go")
+	var offenders []string
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			switch info.Name() {
+			case "node_modules", ".git":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path == self {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		switch {
+		case strings.HasSuffix(path, ".go"):
+			// The struct tag, in production OR test source: a test that
+			// re-declares it is a test re-pinning the invalid shape.
+			if strings.Contains(string(b), `yaml:"workspaces`) {
+				offenders = append(offenders, path+`: yaml:"workspaces...`+`" struct tag`)
+			}
+		case strings.HasSuffix(path, ".yaml"), strings.HasSuffix(path, ".yml"):
+			for i, line := range strings.Split(string(b), "\n") {
+				if strings.HasPrefix(line, "workspaces:") {
+					offenders = append(offenders, fmt.Sprintf("%s:%d: top-level `workspaces:`", path, i+1))
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(offenders) > 0 {
+		sort.Strings(offenders)
+		t.Errorf("sbx 0.39 has no top-level `workspaces:` key; use `workspace:` + `additionalWorkspaces:`.\n"+
+			"A real `sbx env create` answers `field workspaces not found in type sbxenv.Config`.\noffenders:\n  %s",
+			strings.Join(offenders, "\n  "))
+	}
+}

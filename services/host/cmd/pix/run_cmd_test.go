@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -34,6 +35,8 @@ func TestRunPassthrough_TailReachesPiVerbatim(t *testing.T) {
 		wantDev bool
 	}{
 		{args: []string{"--", "-p", "hi"}, wantWS: ".", wantPi: []string{"-p", "hi"}},
+		{args: []string{"--", "-p", "Read mail, check Slack, then stop.\nKeep this one prompt."}, wantWS: ".", wantPi: []string{"-p", "Read mail, check Slack, then stop.\nKeep this one prompt."}},
+		{args: []string{"--", "--tools", "read,bash", "", "a|b"}, wantWS: ".", wantPi: []string{"--tools", "read,bash", "", "a|b"}},
 		{args: []string{"--dev", "--", "--help"}, wantWS: ".", wantPi: []string{"--help"}, wantDev: true},
 		{args: []string{dir, "--", "-p", "hi", "--model=x"}, wantWS: dir, wantPi: []string{"-p", "hi", "--model=x"}},
 		{args: []string{dir}, wantWS: dir},
@@ -45,7 +48,7 @@ func TestRunPassthrough_TailReachesPiVerbatim(t *testing.T) {
 		if o.Workspace != tc.wantWS || o.Dev != tc.wantDev {
 			t.Errorf("run %v = {ws:%q dev:%v}, want {%q %v}", tc.args, o.Workspace, o.Dev, tc.wantWS, tc.wantDev)
 		}
-		if strings.Join(o.Passthrough, "|") != strings.Join(tc.wantPi, "|") {
+		if !slices.Equal(o.Passthrough, tc.wantPi) {
 			t.Errorf("run %v passthrough = %q, want %q", tc.args, o.Passthrough, tc.wantPi)
 		}
 	}

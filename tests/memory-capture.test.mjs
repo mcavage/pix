@@ -6,14 +6,21 @@
 // observed it like a real statement and invented pix facts/events from
 // it. The fix is a marker contract: setup.go prefixes any generated message
 // with "[pix-generated:...] " and shouldCaptureUserText skips it.
+//
+// Transport (U9, docs/design/pix-v2-architecture.md §9.3): memory-capture.ts
+// now calls memory_observe through the sbx Gateway (lib/mcp-gateway-client.ts)
+// instead of a direct JSON-RPC POST, so every fixture here spins up a fake
+// Gateway (tests/fake-mcp-gateway.mjs) and points $PI_CODING_AGENT_DIR's
+// mcp.json at it, instead of setting MEMORY_URL directly.
 import assert from "node:assert";
 import http from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, after } from "node:test";
+import { makeFakeGateway, listen, writeGatewayConfig } from "./fake-mcp-gateway.mjs";
 
-const { shouldCaptureUserText, testPostJson } = await import("../extensions/memory-capture.ts");
+const { shouldCaptureUserText } = await import("../extensions/memory-capture.ts");
 
 async function withServer(handler, fn) {
 	const server = http.createServer(handler);
@@ -26,29 +33,48 @@ async function withServer(handler, fn) {
 	}
 }
 
+// Thin adapter over the shared fake Gateway fixture, matching the shape the
+// old direct-JSON-RPC fixtures in this file already used: a raw node:http
+// server (so a test can still return arbitrary non-2xx/non-JSON responses to
+// exercise transport-error paths) instead of the protocol-aware fixture.
+function withGatewayServer(handler, fn) {
+	return withServer(handler, fn);
+}
+
+// Restore the real $PI_CODING_AGENT_DIR once, after every test in this file
+// has run — see the identical rationale in memory-recall.test.mjs: the
+// Gateway endpoint is resolved at CALL TIME (lib/mcp-gateway-client.ts), not at
+// module load, so the override must still be active when a test's hook
+// actually fires, not just during the dynamic import.
+const PRIOR_AGENT_DIR = process.env.PI_CODING_AGENT_DIR;
+after(() => {
+	if (PRIOR_AGENT_DIR === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = PRIOR_AGENT_DIR;
+});
+
 // The workspace + module-load machinery needed to exercise CAPTURE_MODE: a
 // temp dir with .pix/memory-capture set to `mode` (omit for the
 // un-launched, no-marker case), a fresh module import with process.cwd()
-// pointed at it (CAPTURE_MODE is read once at load). Returns the
+// pointed at it (CAPTURE_MODE is read once at load) and $PI_CODING_AGENT_DIR
+// pointed at a temp mcp.json naming the fake Gateway. Returns the
 // before_agent_start hook, callable as many times as a test needs.
 let seq = 0;
-async function loadCaptureHook(mode, memoryUrl) {
+async function loadCaptureHook(mode, gatewayUrl) {
 	const dir = mkdtempSync(join(tmpdir(), "pix-capture-"));
 	if (mode !== undefined) {
 		mkdirSync(join(dir, ".pix"), { recursive: true });
 		writeFileSync(join(dir, ".pix", "memory-capture"), mode + "\n");
 	}
+	const agentDir = mkdtempSync(join(tmpdir(), "pix-agentdir-"));
+	writeGatewayConfig(agentDir, gatewayUrl);
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 	const prevCwd = process.cwd();
-	const priorUrl = process.env.MEMORY_URL;
 	process.chdir(dir);
-	process.env.MEMORY_URL = memoryUrl;
 	let mod;
 	try {
 		mod = await import(`../extensions/memory-capture.ts?case=${seq++}`);
 	} finally {
 		process.chdir(prevCwd);
-		if (priorUrl === undefined) delete process.env.MEMORY_URL;
-		else process.env.MEMORY_URL = priorUrl;
 	}
 	let hook;
 	mod.default({ on(event, fn) { if (event === "before_agent_start") hook = fn; } });
@@ -96,47 +122,21 @@ test("a real message that merely mentions setup/onboarding is still captured (no
 	assert.equal(shouldCaptureUserText("I just ran pix setup and it broke on step 3"), true);
 });
 
-test("capture transport reports a plain-text gateway failure as HTTP, not a JSON parser error", async () => {
-	await withServer((_req, res) => {
-		res.writeHead(502, { "content-type": "text/plain" });
-		res.end("dial tcp 127.0.0.1:11435: connect: connection refused");
-	}, async (url) => {
-		await assert.rejects(
-			testPostJson(url, { jsonrpc: "2.0", method: "observe" }, 500),
-			/memory service HTTP 502: dial tcp .*connection refused/,
-		);
-	});
-});
+// Direct-transport diagnostics (HTTP-error / non-JSON-body wording) now live
+// with the shared client: see tests/mcp-gateway-client.test.mjs's "callTool
+// surfaces a clean HTTP-error diagnostic..." and "...a stable diagnostic for a
+// non-JSON 2xx initialize response" tests. This file keeps only the
+// capture-specific behavior: dedupe/mode/notify, exercised end to end below.
 
-test("capture transport gives a stable diagnostic for non-JSON 2xx responses", async () => {
-	await withServer((_req, res) => {
-		res.writeHead(200, { "content-type": "text/plain" });
-		res.end("not json");
-	}, async (url) => {
-		await assert.rejects(
-			testPostJson(url, { jsonrpc: "2.0", method: "observe" }, 500),
-			/memory service returned a non-JSON success response/,
-		);
+test("a failed observe call is retried on the next awaited hook instead of being deduplicated as sent", async () => {
+	let toolCalls = 0;
+	const { server, requests } = makeFakeGateway(() => {
+		toolCalls++;
+		if (toolCalls === 1) throw new Error("dial tcp: connection refused");
+		return { accepted: true };
 	});
-});
-
-test("a failed observe POST is retried on the next awaited hook instead of being deduplicated as sent", async () => {
-	let observeRequests = 0;
-	await withServer((req, res) => {
-		observeRequests++;
-		let body = "";
-		req.on("data", (c) => (body += c));
-		req.on("end", () => {
-			if (observeRequests === 1) {
-				res.writeHead(502, { "content-type": "text/plain" });
-				res.end("dial tcp: connection refused");
-				return;
-			}
-			const parsed = JSON.parse(body);
-			res.writeHead(200, { "content-type": "application/json" });
-			res.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result: { accepted: true } }));
-		});
-	}, async (url) => {
+	const url = await listen(server);
+	try {
 		const hook = await loadCaptureHook("experimental-auto", url);
 		const ctx = exchangeCtx("this exchange should retry after a temporary outage", "the answer is complete");
 		const write = process.stderr.write;
@@ -147,54 +147,53 @@ test("a failed observe POST is retried on the next awaited hook instead of being
 		} finally {
 			process.stderr.write = write;
 		}
-		assert.equal(observeRequests, 2, "the failed first POST must not suppress the retry");
-	});
+		assert.equal(toolCalls, 2, "the failed first call must not suppress the retry");
+		assert.equal(requests.length, 2);
+	} finally {
+		server.close();
+	}
 });
 
-// Wire-level sentinel: the observe RPC params object must carry EXACTLY
-// profile/project/user, no more and no less (no session id, no assistant text).
-test("the observe RPC params object has exactly profile/project/user", async () => {
-	let received;
-	await withServer((req, res) => {
-		let body = "";
-		req.on("data", (c) => (body += c));
-		req.on("end", () => {
-			received = JSON.parse(body);
-			res.writeHead(200, { "content-type": "application/json" });
-			res.end(JSON.stringify({ jsonrpc: "2.0", id: received.id, result: { accepted: true } }));
-		});
-	}, async (url) => {
+// Wire-level sentinel: the memory_observe tool call's arguments must carry
+// EXACTLY profile/project/user, no more and no less (no session id, no
+// assistant text).
+test("the memory_observe call arguments have exactly profile/project/user", async () => {
+	const { server, requests } = makeFakeGateway(() => ({ accepted: true }));
+	const url = await listen(server);
+	try {
 		await runCapture("experimental-auto", url);
-		assert.ok(received, "observe POST must have been sent");
-		assert.equal(received.method, "observe");
-		assert.deepEqual(Object.keys(received.params).sort(), ["profile", "project", "user"]);
-	});
+		assert.equal(requests.length, 1, "observe must have been called exactly once");
+		assert.equal(requests[0].method, "memory_observe");
+		assert.deepEqual(Object.keys(requests[0].params).sort(), ["profile", "project", "user"]);
+	} finally {
+		server.close();
+	}
 });
 
 // The headline requirement: explicit (an absent marker, or any garbled value)
-// sends ZERO observe requests — not even one the host would refuse.
-test("explicit mode (absent or garbled marker) sends zero observe requests", async () => {
+// sends ZERO observe calls — not even one the host would refuse.
+test("explicit mode (absent or garbled marker) sends zero observe calls", async () => {
 	for (const mode of [undefined, "explicit", "always-on-please"]) {
-		let observeCalls = 0;
-		await withServer((_req, res) => {
-			observeCalls++;
-			res.writeHead(200, { "content-type": "application/json" }).end("{}");
-		}, async (url) => {
+		const { server, requests } = makeFakeGateway(() => ({}));
+		const url = await listen(server);
+		try {
 			await runCapture(mode, url);
-		});
-		assert.equal(observeCalls, 0, `mode ${mode} must never call observe`);
+		} finally {
+			server.close();
+		}
+		assert.equal(requests.length, 0, `mode ${mode} must never call observe`);
 	}
 });
 
 test("experimental-auto mode sends exactly one observe call for a completed exchange", async () => {
-	let observeCalls = 0;
-	await withServer((_req, res) => {
-		observeCalls++;
-		res.writeHead(200, { "content-type": "application/json" }).end("{}");
-	}, async (url) => {
+	const { server, requests } = makeFakeGateway(() => ({}));
+	const url = await listen(server);
+	try {
 		await runCapture("experimental-auto", url);
-	});
-	assert.equal(observeCalls, 1, "experimental-auto mode must call observe");
+	} finally {
+		server.close();
+	}
+	assert.equal(requests.length, 1, "experimental-auto mode must call observe exactly once");
 });
 
 // ── not-accepted capture reasons reach the USER, once ──────────────────────
@@ -250,7 +249,7 @@ test("a failed observe POST notifies through ctx.ui.notify too", async () => {
 		const notes = [];
 		await hook({}, notifyCtx("an exchange the daemon never answers properly", "ok", notes));
 		assert.equal(notes.length, 1);
-		assert.match(notes[0].msg, /capture POST to .* failed/);
+		assert.match(notes[0].msg, /capture call to the memory Gateway failed/);
 	});
 });
 

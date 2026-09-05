@@ -14,9 +14,8 @@
 #
 # columns: path  disposition  occurrences  frozen  pathmv  note
 #
-# totals: 15 files, 218 occurrences
-#   rename 0 | manual 0 | keep 9 | keep-historical 6 | unclassified 0
-AGENTS.md	keep	1	1	no	every occurrence is a frozen literal (see the FROZEN table): nothing here is rewritable
+# totals: 14 files, 217 occurrences
+#   rename 0 | manual 0 | keep 8 | keep-historical 6 | unclassified 0
 CHANGELOG.md	keep-historical	49	1	no	released history: entries describe versions published under the old name, including their asset URLs
 docs/upstream/pi-subagents-hang-pi-0.80.md	keep-historical	2	0	no	upstream bug reports as filed: the text was sent to another project under the old name
 docs/upstream/sbx-0.34-custom-kit-credentials.md	keep-historical	4	0	no	upstream bug reports as filed: the text was sent to another project under the old name

@@ -1,5 +1,12 @@
 # Parallel task sandboxes (pix task)
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: IMPLEMENTED (v1), then EXTENDED. This document is the original v1 localclone
 design. The sandbox naming scheme and the `harvest` / `gc` verbs (plus auto-GC) were
 revised and added in `docs/design/task-ux-decisions.md` (accepted) — read that for

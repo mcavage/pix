@@ -1,5 +1,12 @@
 # Integrations remediation (gog, Slack, BambooHR, Snowflake)
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: **planned, not started.** Audit complete and reproduced on a live host
 (2026-08-10). No code changed yet.
 

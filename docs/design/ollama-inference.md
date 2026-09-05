@@ -1,5 +1,13 @@
 # Ollama inference — local ladder, cloud entitlement, and a probe that earns "verified"
 
+> **HISTORICAL (Wave F).** This document was written while pix had a scored
+> model router, and it still describes one: scorecard rows, policy task types,
+> `CompiledRouting`, `routing.json`, the `run_intent` doctor row. All of that
+> was DELETED. Read it for the Ollama/local-hardware reasoning (the RAM
+> formula, the rung ladder, the classification cascade), which survives in
+> `services/host/inference/hardware.go`; treat every routing sentence as a
+> record of what pix used to do.
+
 **Status:** design. Nothing here is implemented. This doc replaces the current
 one-size Ollama setup path with two explicit flows (local, cloud), a hardware
 probe that sizes the local flow to the machine, and an Ollama verification probe

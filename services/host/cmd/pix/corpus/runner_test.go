@@ -224,27 +224,32 @@ func TestRunCase_ExitCodeAndStreams(t *testing.T) {
 }
 
 func TestRunCase_IsolatesHome(t *testing.T) {
-	// `pix config path` must resolve under the isolated $HOME passed to
-	// RunCase, never a real user's config — this is the "no destructive
-	// operations" guarantee: nothing this harness runs can touch real state.
+	// `pix secret ls` must read PIX_HOME (which resolves to $HOME/.pix when
+	// PIX_HOME itself is unset, pixhome.Dir's only two rules) under the
+	// isolated $HOME RunCase passes, never a real user's ~/.pix — this is the
+	// "no destructive operations" guarantee: nothing this harness runs can
+	// touch real state. Seeding a ref only the isolated home could contain and
+	// asserting it comes back proves the isolation, not just its absence.
 	bin := buildPixBinary(t)
 	root := repoRoot(t)
 	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".pix"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const seeded = "ANTHROPIC_API_KEY=op://isolated-vault/item/field\n"
+	if err := os.WriteFile(filepath.Join(home, ".pix", "secrets.env"), []byte(seeded), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	res, err := RunCase(bin, root, home, Case{
-		Name:     "path",
-		Args:     []string{"config", "path"},
+		Name:     "ls",
+		Args:     []string{"secret", "ls"},
 		ExitCode: 0,
 	})
 	if err != nil {
 		t.Fatalf("RunCase: %v", err)
 	}
-	want := filepath.Join(home, ".config", "pix", "config.toml")
-	got := res.Stdout
-	if len(got) == 0 || got[len(got)-1] == '\n' {
-		got = got[:max(0, len(got)-1)]
-	}
-	if got != want {
-		t.Errorf("config path = %q, want %q (isolated HOME=%q)", got, want, home)
+	if !strings.Contains(res.Stdout, "op://isolated-vault/item/field") {
+		t.Errorf("secret ls stdout = %q, want the ref seeded under the isolated HOME=%q", res.Stdout, home)
 	}
 }
 
@@ -296,35 +301,15 @@ func mustJSON(t *testing.T, v any) string {
 
 // dangerousVerbs is the flat set of pix verbs whose corpus shard may ONLY
 // exercise -h/--help/bad-flag cases (never actually launch/mutate/reach the
-// network). Keep this in sync with runVerb's switch in main.go: any verb that
-// mutates on-disk state, spawns a sandbox, or touches the network belongs
-// here, not just the ones that happen to have a shard today.
+// network). Keep this in sync with root.go's rootCmd: any verb that mutates
+// on-disk state, spawns a sandbox, or touches the network belongs here, not
+// just the ones that happen to have a shard today. The v2 surface has no
+// grouping verb whose OWN subcommands need a separate dangerous set (the v1
+// `state`/`serve install` groups are gone with those verbs), so there is only
+// this one flat map now.
 var dangerousVerbs = map[string]bool{
-	"run": true, "reset": true, "rm": true, "restore": true, "backup": true,
+	"run": true, "reset": true, "rm": true,
 	"task": true, "setup": true,
-}
-
-// groupedDangerousSubcommands maps a "grouping" verb (one whose subcommands
-// were once dangerous flat aliases, e.g. `pix state reset` ran the exact same
-// mutation as the top-level `pix reset`) to the set of its OWN subcommands
-// that stay classified as dangerous. The `state` group itself is GONE — the
-// top-level `pix reset` came back but the grouping noun did not, and
-// backup/restore stayed deleted — yet the entry stays: a corpus shard for a
-// name that does not dispatch is pointless regardless, and this stays the one
-// place that answers "was this ever a mutation" without a second lookup
-// somewhere else. A grouping verb itself is safe to
-// invoke bare or with -h (it only prints group usage), so it is deliberately
-// absent from dangerousVerbs; only once the subcommand token resolves to a
-// dangerous one does the same safe-tail rule apply, starting one position
-// later.
-var groupedDangerousSubcommands = map[string]map[string]bool{
-	"state": {"backup": true, "restore": true, "reset": true},
-	// `serve install`/`uninstall` register or remove a launchd LaunchAgent on
-	// the real machine. Their refusal and help paths are corpus-worthy (they
-	// are the exit codes P0-2 moved out of the service package), but only ever
-	// with a safe tail: a bare `serve install` in CI would install a login
-	// service. `serve` itself, and `serve status`, stay safe to invoke.
-	"serve": {"install": true, "uninstall": true},
 }
 
 // safeTailArg reports whether a single argv token, appearing after a
@@ -347,14 +332,7 @@ func dangerousArgvViolation(args []string) string {
 		return ""
 	}
 	verb, tail := args[0], args[1:]
-	if subs, ok := groupedDangerousSubcommands[verb]; ok {
-		if len(args) < 2 || !subs[args[1]] {
-			// Bare group noun, group -h/--help, or an unresolved/unknown
-			// subcommand — none of these dispatch to a dangerous action.
-			return ""
-		}
-		verb, tail = verb+" "+args[1], args[2:]
-	} else if !dangerousVerbs[verb] {
+	if !dangerousVerbs[verb] {
 		return ""
 	}
 	for _, a := range tail {
@@ -378,7 +356,7 @@ func TestDangerousArgvViolation(t *testing.T) {
 		wantViolation bool
 	}{
 		{"empty", nil, false},
-		{"safe verb untouched", []string{"config", "show"}, false},
+		{"safe verb untouched", []string{"env", "show"}, false},
 		{"reset help", []string{"reset", "--help"}, false},
 		{"reset bad-flag", []string{"reset", "--this-is-not-a-real-flag-9x7z"}, false},
 		{"reset bare", []string{"reset"}, false},
@@ -387,16 +365,6 @@ func TestDangerousArgvViolation(t *testing.T) {
 		{"setup help", []string{"setup", "--help"}, false},
 		{"setup bad-flag", []string{"setup", "--this-is-not-a-real-flag-9x7z"}, false},
 		{"setup with a real dir launches provisioning", []string{"setup", "."}, true},
-		{"serve status is not a mutation", []string{"serve", "status"}, false},
-		{"serve install help", []string{"serve", "install", "--help"}, false},
-		{"serve install with a real argument", []string{"serve", "install", "--now"}, true},
-		{"state group bare", []string{"state"}, false},
-		{"state group help", []string{"state", "--help"}, false},
-		{"state bad-invocation", []string{"state", "--this-is-not-a-real-flag-9x7z"}, false},
-		{"state reset help is fine", []string{"state", "reset", "--help"}, false},
-		{"state reset with a real flag mutates", []string{"state", "reset", "--yes"}, true},
-		{"state restore with an archive path restores", []string{"state", "restore", "/tmp/x.tar.gz"}, true},
-		{"state backup with an out path writes", []string{"state", "backup", "--out", "/tmp/x"}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

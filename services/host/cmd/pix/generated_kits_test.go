@@ -11,8 +11,7 @@ import (
 )
 
 func TestCleanupGeneratedKitDirsRemovesSynthesizedKitsOnly(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("PIX_HOME", t.TempDir())
 
 	cfg := &config.Config{Inference: config.InferenceConfig{
 		Backends: map[string]config.InferenceBackend{
@@ -22,7 +21,7 @@ func TestCleanupGeneratedKitDirsRemovesSynthesizedKitsOnly(t *testing.T) {
 			{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true},
 		},
 	}}
-	inferenceKit, err := inference.SynthesizeInferenceKit(cfg)
+	inferenceKit, err := inference.SynthesizeInferenceKit(cfg, inference.RosterInput{})
 	if err != nil {
 		t.Fatal(err)
 	}

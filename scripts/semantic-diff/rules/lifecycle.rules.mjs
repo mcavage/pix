@@ -69,12 +69,17 @@ export default [
 	{
 		id: "lifecycle.rm.keep-polarity-except",
 		description:
-			"`pix rm --all --except <name>` removes a box only when it is ABSENT from the keep set (!keepSet[b.Name]) — the direction documented in RmDescription (\"remove all but one\"). Flipping this one-word condition would silently reverse which boxes survive. The --all discovery loop is also scoped: it only ever iterates workspace.ParsePixBoxes (already pix-* filtered), so an automatic/bulk removal can never reach a non-pix sandbox in the first place.",
+			"`pix rm --all --except <name>` removes a box only when it is ABSENT from the keep set (!keep[b.Name]) — the direction documented in RmDescription (\"remove all but one\"). Flipping this one-word condition would silently reverse which boxes survive. The --all discovery loop is scoped TWICE over: workspace.ParseScopedBoxes filters `sbx ls` to pix-* names AND to names carrying THIS PIX_HOME's stack id (stack.IsScopedSandboxName), so a bulk removal can reach neither a non-pix sandbox nor another coexisting stack's pix-* sandbox. The pre-Wave-B ParsePixBoxes form is deliberately NOT pinned any more: it was the unscoped discovery this rule now forbids.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/sandbox.go",
 				kind: "contains",
-				values: ["for _, b := range workspace.ParsePixBoxes(raw) {", "if !keep[b.Name] {"],
+				values: ["for _, b := range workspace.ParseScopedBoxes(raw, stackID) {", "if !keep[b.Name] {"],
+			},
+			{
+				file: "services/host/workspace/sandboxls.go",
+				kind: "contains",
+				values: ["if stack.IsScopedSandboxName(stackID, b.Name) {"],
 			},
 		],
 	},
@@ -83,12 +88,12 @@ export default [
 	{
 		id: "lifecycle.lease.instance-id-immutable",
 		description:
-			"lease.CreateRecord writes the immutable instance record exactly once (O_EXCL makes write-once a syscall-level guarantee, not an app-level check-then-write race) and refuses to relabel an existing lease directory under a different instance ID — a create/teardown pair can never alias two different sandbox lifetimes onto the same lease dir. ValidateInstanceID's allowlist regex is the other half: only [A-Za-z0-9._-], so an instance ID can never traverse or escape SandboxDir's path join.",
+			"lease.CreateRecord writes the immutable instance record exactly once and refuses to relabel an existing lease directory under a different instance ID — a create/teardown pair can never alias two different sandbox lifetimes onto the same lease dir. E2.3 review fix: write-once moved from a direct O_CREAT|O_EXCL open on record.json's own final path (which left a window between 'the name exists' and 'the name's content is complete' a crash could land in) to writeRecordOnce's temp-file-fsync-then-os.Link install — os.Link, like O_EXCL before it, REFUSES (EEXIST) rather than replaces an existing target, so write-once stays a syscall-level guarantee, just reachable only once the content it publishes is already durable. checkExistingRecord is the ONE identity-match check reused both before a create attempt and after losing a create race, so a loser asking for a DIFFERENT identity is refused rather than silently handed the winner's record. ValidateInstanceID's allowlist regex is the other half: only [A-Za-z0-9._-], so an instance ID can never traverse or escape SandboxDir's path join.",
 		checks: [
 			{
 				file: "services/host/lease/record.go",
 				kind: "contains",
-				values: ["if existing.InstanceID != instanceID {", "syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL"],
+				values: ["if existing.InstanceID != instanceID {", "os.Link(tmpPath, path)", "errors.Is(werr, os.ErrExist)"],
 			},
 			{
 				file: "services/host/lease/paths.go",
@@ -198,17 +203,21 @@ export default [
 	{
 		id: "lifecycle.session.digest-name-keys-lease-state",
 		description:
-			"U04c2: a session's lease/keep/fingerprint state is keyed by sandbox.Name(workspace) (SessionName) — the deterministic, digest-suffixed identity U04b's sandbox package derives — and `pix run`'s DEFAULT sandbox name is that same digest form, not workspace.DeriveSandboxName's bare \"pix-<basename>\". Two workspaces sharing a basename can never alias the same lease directory or the same box. An explicit --name still travels verbatim.",
+			"U04c2 + Wave B/D: a session's lease/keep/fingerprint state is keyed by the deterministic, digest-suffixed sandbox identity the sandbox package derives, and `pix run`'s DEFAULT sandbox name is that same form — never workspace.DeriveSandboxName's bare \"pix-<basename>\". Two workspaces sharing a basename can never alias the same lease directory or the same box. Since Wave B that identity is also STACK-SCOPED: resolveSandboxName derives this PIX_HOME's stack id FIRST and routes BOTH branches through it — sandbox.NameForStack for the default, sandbox.ScopeExplicitName for an explicit --name, which is why an explicit name no longer travels verbatim. A stack id that cannot be derived is an error, never an unscoped fallback name.",
 		checks: [
-			{
-				file: "services/host/workflow/launch/session.go",
-				kind: "contains",
-				values: ["func SessionName(workspace string) string { return sandbox.Name(workspace) }"],
-			},
 			{
 				file: "services/host/cmd/pix/run_cmd.go",
 				kind: "contains",
-				values: ["return sandbox.Name(workspace)"],
+				values: [
+					"id, err := stack.Current()",
+					"return sandbox.NameForStack(id, workspace, \"\")",
+					"return sandbox.ScopeExplicitName(id, explicit)",
+				],
+			},
+			{
+				file: "services/host/workflow/launch/session.go",
+				kind: "notContains",
+				values: ["func SessionName(workspace string) string { return sandbox.Name(workspace) }"],
 			},
 		],
 	},
@@ -233,7 +242,7 @@ export default [
 	{
 		id: "lifecycle.session.attach-execs-stored-invocation",
 		description:
-			"U04c2: an attach to a POSITIVELY IDENTIFIED, RUNNING sandbox re-invokes pi through `sbx exec -it` (interactive) / `-i` (piped) with the STORED create-time invocation replayed verbatim — never asking sbx to re-derive a command from the container's spec. A stopped or schema-unverified row keeps the legacy `sbx run --name` reattach argv, because exec has no start of its own.",
+			"U04c2/QA re-review F1: an attach to a POSITIVELY IDENTIFIED, RUNNING sandbox re-invokes pi through `sbx exec -it` (interactive) / `-i` (piped) with THIS SESSION'S OWN CURRENT invocation (spec.DefaultInvocation — whatever --model/--resume/etc. this exact run asked for), never a replay of whatever a PRIOR create happened to store (the stored invocation is retained for audit only: reap.go still reads it to confirm a sandbox has a verifiable creation record). A stopped or schema-unverified row keeps the legacy `sbx run --name` reattach argv, because exec has no start of its own.",
 		checks: [
 			{
 				file: "services/host/workflow/launch/sbxargs.go",
@@ -243,12 +252,12 @@ export default [
 			{
 				file: "services/host/sandbox/argv.go",
 				kind: "contains",
-				values: ['args := []string{"exec", ttyFlag(o.TTY), o.Name}', 'return "-it"'],
+				values: ['args := []string{"exec", ttyFlag(o.TTY), o.Name, "--"}', 'return "-it"'],
 			},
 			{
 				file: "services/host/workflow/launch/session.go",
 				kind: "contains",
-				values: ["execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, invocation)"],
+				values: ["execArgs, aerr := BuildAttachArgv(spec.Name, spec.AttachTTY, spec.DefaultInvocation)"],
 			},
 		],
 	},
@@ -309,8 +318,8 @@ export default [
 				file: "services/host/cmd/pix/root.go",
 				kind: "contains",
 				values: [
-					'short:"k" help:"With --all: keep this one (repeatable)."',
-					"append(append([]string(nil), c.Keep...), c.Except...),",
+					'short:"k" help:"With --all/--orphans: keep this one (repeatable)."',
+					"Except:      c.Keep,",
 				],
 			},
 		],

@@ -1,7 +1,6 @@
 ---
 description: PRDs, specs, user stories, roadmaps. JTBD, opportunity solution trees, RICE, working-backwards, testable criteria, edge cases.
 tools: read, write, edit, grep, find, ls
-intent: strategy
 thinking: high
 max_turns: 30
 ---

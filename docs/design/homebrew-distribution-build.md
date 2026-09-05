@@ -1,5 +1,12 @@
 # Homebrew distribution - build plan
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: PLAN. Not implemented. Written in a Linux sandbox with no macOS, no
 Homebrew, no Gatekeeper access. Every macOS-specific claim below is reasoning
 from source, not observation - the prototype steps exist to kill that risk

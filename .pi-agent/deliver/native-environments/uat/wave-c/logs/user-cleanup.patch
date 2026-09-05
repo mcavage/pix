@@ -1,0 +1,446 @@
+diff --git a/.claude/settings.local.json b/.claude/settings.local.json
+deleted file mode 100644
+index f8d04237..00000000
+--- a/.claude/settings.local.json
++++ /dev/null
+@@ -1,14 +0,0 @@
+-{
+-  "permissions": {
+-    "allow": [
+-      "Bash(ollama list *)",
+-      "WebSearch",
+-      "WebFetch(domain:ollama.com)",
+-      "Bash(./out/pix models *)",
+-      "Bash(echo \"--- exit $?\")",
+-      "Bash(./out/pix-host route *)",
+-      "Bash(./out/pix --help)",
+-      "WebFetch(domain:github.com)"
+-    ]
+-  }
+-}
+diff --git a/CODE_OF_CONDUCT.md b/CODE_OF_CONDUCT.md
+deleted file mode 100644
+index ac7ddeb1..00000000
+--- a/CODE_OF_CONDUCT.md
++++ /dev/null
+@@ -1,36 +0,0 @@
+-# Code of Conduct
+-
+-## The short version
+-
+-Be decent. Assume good faith. Critique ideas and code, not people. No harassment,
+-no discrimination, no personal attacks.
+-
+-## Scope
+-
+-This applies to all project spaces: issues, pull requests, discussions, and any
+-other channel where you are acting as part of the pix community.
+-
+-## Standards
+-
+-Encouraged:
+-
+-- Direct, specific, technical feedback.
+-- Assuming the other person is trying to help.
+-- Owning your mistakes and moving on.
+-
+-Not tolerated:
+-
+-- Harassment, insults, or discriminatory language.
+-- Personal or political attacks.
+-- Publishing others' private information without permission.
+-
+-## Enforcement
+-
+-Report problems to the maintainer via the contact on the
+-[@mcavage](https://github.com/mcavage) GitHub profile. Reports are handled
+-confidentially. Maintainers may remove content, and may block contributors who
+-break these rules.
+-
+-This is a lightweight adaptation of the
+-[Contributor Covenant](https://www.contributor-covenant.org/), version 2.1. See
+-that document for the full text and rationale.
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+deleted file mode 100644
+index c1b2d6cc..00000000
+--- a/CONTRIBUTING.md
++++ /dev/null
+@@ -1,82 +0,0 @@
+-# Contributing to pix
+-
+-Thanks for looking. pix is an opinionated distribution of the
+-[pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) coding agent, so most contributions
+-are skills, agents, extensions, docs, or host-service code, not changes to pi
+-itself.
+-
+-Read [AGENTS.md](AGENTS.md) before you start. It is the harness's own memory:
+-repo layout, the build loop, extension and skill conventions, and the mistakes
+-worth not repeating.
+-
+-## Ground rules
+-
+-- **Two languages, one convention.** Everything that runs on the HOST is Go
+-  (`services/host/`, compiled into `pix-host`). Everything that runs INSIDE
+-  the sandbox is TypeScript (`extensions/`). Do not add a host-side Node or
+-  Python service. See AGENTS.md for why.
+-- **Keep the open-core boundary clean.** Nothing company-specific belongs in this
+-  repo: no channel names, account emails, internal hostnames, connector-specific
+-  env, or private skills. Those live in a private **pack** (git-backed, mounted at
+-  runtime with `pix pack use`) and, for host-executing integrations, in a
+-  separate container/host-daemon repo — never compiled into the public tree.
+-  `scripts/check-open-core.sh` runs in CI and fails if a company-specific file or
+-  an internal marker is ever tracked.
+-- **A skill is pure mechanism.** Never bake one person's specifics (their
+-  channels, accounts, thresholds) into a `SKILL.md`. Read those from memory or
+-  a pack at runtime; the skill only knows the shape.
+-- **Write like a human.** Direct, concrete, no em-dashes, no AI filler. See the
+-  `anti-slop` and `writing-voice` skills.
+-
+-## Setup
+-
+-You can develop the host binaries and skills from a normal checkout. Building
+-the Docker image needs a DHI-entitled Docker account; the hosted `sbx run` path
+-does not.
+-
+-```bash
+-git clone https://github.com/mcavage/pix
+-cd pix
+-cd services/host && go build ./... && go test ./...   # host code
+-```
+-
+-## Changing things
+-
+-- **Host code (Go):** edit under `services/host/`, then
+-  `go build ./... && go test ./... && go vet ./...`. Add table-driven tests for
+-  new logic.
+-- **Skills:** edit `skills/<name>/SKILL.md`. In a dev sandbox (`make run`) skills
+-  load live from the tree, so `/reload` picks up edits with no rebuild.
+-- **Agents:** edit `agents/<name>.md`. Declare an `intent:`, not a pinned
+-  `model:`; the router resolves it. If you must pin, use a fully-qualified id that
+-  exists in `services/host/routing/defaults/models.json` (`pix agent ls`
+-  flags an unknown pin).
+-- **Extensions (TypeScript):** edit `extensions/*.ts`. An extension that throws
+-  at load breaks pi startup, so guard defensively. Never put a `.d.ts` in
+-  `extensions/`.
+-- **Image / baked files:** need `make load` on a DHI host to take effect in a new
+-  sandbox.
+-
+-## Before you open a PR
+-
+-1. `cd services/host && go build ./... && go test ./... && go vet ./...`
+-2. If you touched the image or baked files, note that a maintainer must
+-   `make load` to verify.
+-3. Run the `code-review` skill (or ask a second model) over your diff.
+-4. Fill in the PR template. Say what changed, why, and how you verified it.
+-
+-## License of contributions (inbound = outbound)
+-
+-pix is a Docker, Inc. project distributed under the MIT license in
+-[LICENSE](LICENSE), and contributions come in on those same terms: **by
+-opening a pull request you license your contribution under the MIT license,
+-and you represent that you have the right to do so** (that it is your own
+-work, or that your employer has authorized it). There is no separate CLA and
+-no copyright assignment — inbound license equals outbound license. See
+-[NOTICE.md](NOTICE.md) and
+-[docs/legal/AUTHORIZATIONS.md](docs/legal/AUTHORIZATIONS.md).
+-
+-## Reporting bugs and asking for features
+-
+-Use the issue templates. For anything security-sensitive, follow
+-[SECURITY.md](SECURITY.md) instead of opening a public issue.
+diff --git a/LICENSE b/LICENSE
+index dbff380d..ca74a655 100644
+--- a/LICENSE
++++ b/LICENSE
+@@ -1,6 +1,6 @@
+ MIT License
+ 
+-Copyright (c) 2026 Docker, Inc. and the pix contributors
++Copyright (c) 2026 Mark Cavage.
+ 
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+diff --git a/NOTICE.md b/NOTICE.md
+deleted file mode 100644
+index 34cc9a0b..00000000
+--- a/NOTICE.md
++++ /dev/null
+@@ -1,47 +0,0 @@
+-# Notice
+-
+-**pix** is a Docker, Inc. project, released under the MIT license (see
+-`LICENSE`). Copyright in the pix source is held by Docker, Inc. and the pix
+-contributors.
+-
+-**Inbound contributions.** Contributions to this repository are accepted
+-inbound under the same terms pix is distributed outbound: the MIT license in
+-`LICENSE`. Opening a pull request means you license your contribution under
+-those terms and represent that you have the right to do so (see
+-`CONTRIBUTING.md`).
+-
+-## Other vendors' marks
+-
+-pix is **not affiliated with, endorsed by, or sponsored by** HashiCorp,
+-Anthropic, OpenAI, Google, Mozilla, or any other third-party vendor whose
+-product, trademark, or trade name is referenced in this repository, its
+-documentation, or its generated artifacts (image, binaries, or notices).
+-Those marks are the property of their respective owners and are used here
+-only in the ordinary, descriptive sense — to say which components pix builds
+-on. See `THIRD_PARTY_NOTICES.md` for the components themselves and their
+-license terms, and `licenses/MPL-2.0.txt` for the verbatim text of the one
+-weak-copyleft license in that set (MPL-2.0, covering
+-`github.com/hashicorp/go-plugin` and `github.com/hashicorp/yamux`).
+-
+-## Docker Hardened Images (DHI)
+-
+-pix builds `FROM` a Docker Hardened Image base and publishes the resulting
+-image to `docker.io/<namespace>/pix`. The authorization of record for that
+-redistribution — and for pix's employer-IP posture generally — is recorded in
+-`docs/legal/AUTHORIZATIONS.md`. That record is what the release process
+-relies on; it is not re-derived per build and not asserted by any agent.
+-
+-Two things that authorization does **not** cover, and this project does not
+-claim:
+-
+-- It grants no rights in Docker's trademarks or brand beyond the descriptive
+-  use above, and no rights to any third party's DHI entitlement.
+-- A contributor building the image themselves (`make build`) still needs
+-  their own DHI-entitled Docker account, or the documented public fallback
+-  base in the `Dockerfile`. pix never requests, stores, or asserts anyone
+-  else's entitlement.
+-
+-This notice is provided for transparency and does not constitute legal
+-advice. See `docs/legal/FINDINGS.md` for the items that still require a
+-human (counsel or an account holder), not an agent, and
+-`docs/legal/PRIVACY.md` for what data pix handles.
+diff --git a/SECURITY.md b/SECURITY.md
+deleted file mode 100644
+index 907b312d..00000000
+--- a/SECURITY.md
++++ /dev/null
+@@ -1,112 +0,0 @@
+-# Security
+-
+-pix's whole premise is running an autonomous agent without a stream of
+-approval prompts, so the trust boundary matters more than usual. Read this before
+-you rely on it.
+-
+-## The trust boundary
+-
+-The safety boundary is the **Docker Sandbox (sbx) VM**, not a per-command
+-confirmation. pi runs full-auto inside a disposable, network-limited VM.
+-
+-What the sandbox protects:
+-
+-- **Your host filesystem.** The agent only sees the mounted workspace, not the
+-  rest of your machine.
+-- **Your provider credentials.** Anthropic, OpenAI, and Google keys are injected
+-  by the host proxy at the network layer. The VM never holds them; it only sees
+-  model responses. GitHub uses the same proxy injection.
+-- **The network.** Egress is limited to the allowlist in `pi-kit/spec.yaml`. A
+-  new external host has to be added there explicitly.
+-- **Host data tools.** Google Workspace, Slack, and pack-provided connectors
+-  (containerized MCP servers or host daemons) run host-side, reached through the
+-  sbx gateway. Tokens stay on the host; the sandbox talks to a gateway, not to the
+-  service.
+-
+-## What the sandbox does NOT protect
+-
+-Be clear-eyed about these:
+-
+-- **The mounted workspace is writable.** The agent can modify or delete anything
+-  in the repo you launched it on. Commit often; the sandbox is disposable, your
+-  uncommitted work is not.
+-- **GitHub credentials authorize real actions.** Proxy-injected `gh`/git
+-  credentials can push branches and open PRs against repos your token can reach.
+-  Scope the token you give sbx accordingly.
+-- **Untrusted content is a prompt-injection vector.** Text the agent reads from
+-  Slack, email, web pages, or a repo can contain instructions aimed at the agent.
+-  The `gog` MCP server runs read-only and wraps fetched content as untrusted; the
+-  Slack server stamps message results with an untrusted-content guard. Treat any
+-  capability that returns third-party text as a channel an attacker can write to,
+-  and prefer read-only, least-privilege configuration.
+-- **Local models run on your machine.** Ollama models the memory loop uses run on
+-  the host, outside the VM boundary.
+-
+-## Host-side MCP servers run with your trust, not the sandbox's
+-
+-A local-command MCP server (a mail bridge, `gog`, a pack's host wrapper) is a
+-process the sbx gateway spawns on your **host**, not inside the sandbox. Pix
+-ships none of them: every server is declared by the active pack, which is why
+-adoption is gated. Registering one (`sbx mcp add`, `pix mcp add`) is a host-level
+-trust decision:
+-the command you register runs with whatever access the gateway's spawn
+-environment has, resolved credentials included. Review a server's registered
+-command before trusting it (`sbx mcp get <name>`), and treat a pack that ships
+-a host-executing integration as running code on your machine, not just in the
+-sandbox; `pix pack use` gates that with an explicit bill-of-materials
+-prompt before adoption. A remote MCP server (notion/atlassian/granola-style,
+-added by URL) authenticates through hosted OAuth handled entirely host-side by
+-the gateway; the sandbox never sees the token.
+-
+-**Remote content is untrusted content.** Anything a capability reads back
+-from the outside world, an email body, a Slack message, a doc, a wiki
+-page, becomes part of the prompt sent to your model provider once it's
+-recalled or returned. A server that fences its results as untrusted (`gog`'s
+-`--wrap-untrusted` is the canonical case) reduces the odds the agent treats
+-that text as an instruction, but it is a mitigation, not a guarantee: assume
+-fetched content can attempt prompt injection and keep write-capable tools off
+-by default.
+-
+-**Revoking and rotating access.** An OAuth grant (Google Workspace, a remote
+-catalog server) is revoked from that provider's own account security page,
+-not from pix; re-authorize through the pack's own setup step afterward if you
+-need the integration back, then `pix mcp add <name>` again. A 1Password-backed
+-MCP credential (an API token, a keyring password) is rotated in 1Password itself;
+-the gateway only resolves an `op://` ref at spawn time, so the new value takes
+-effect once you re-register the server (`pix mcp add <name>`), which triggers a
+-fresh spawn. `pix secret sync` is the equivalent for the cloud model provider
+-keys (Anthropic/OpenAI/Google), not MCP credentials.
+-
+-## Provider-key process exposure
+-
+-Docker Sandboxes currently accepts provider secret values through `sbx secret
+-set -t`. During `pix setup`, a resolved value therefore exists briefly in the
+-`sbx` child process argument vector and may be visible to same-user process
+-inspection or endpoint audit tooling. Pix never logs or persists that value and
+-scrubs it from subprocess errors, but it cannot remove the argv exposure until
+-`sbx` provides a stdin or file-descriptor input mode. Treat hosts with untrusted
+-same-user processes as outside the supported credential boundary. This is an
+-accepted upstream limitation, not a claim that the value never enters argv.
+-
+-## Reporting a vulnerability
+-
+-Do not open a public issue for a security problem.
+-
+-Email the maintainer (see the GitHub profile for
+-[@mcavage](https://github.com/mcavage)) with:
+-
+-- what the issue is and where (file, command, or component),
+-- how to reproduce it,
+-- the impact you see.
+-
+-You will get an acknowledgement. Fixes to the public tree ship as normal
+-releases with a note in [CHANGELOG.md](CHANGELOG.md).
+-
+-## Hardening notes
+-
+-- Give sbx the narrowest provider and GitHub tokens that still let the agent do
+-  its job.
+-- Keep the network allowlist tight; add hosts only when a task needs them.
+-- Run host MCP connectors read-only unless a workflow genuinely needs writes.
+-- Host MCP credentials resolve from 1Password (`op run`) at spawn time, so secret
+-  values never land on disk or in a registration.
+diff --git a/THIRD_PARTY_NOTICES.md b/THIRD_PARTY_NOTICES.md
+deleted file mode 100644
+index 39872188..00000000
+--- a/THIRD_PARTY_NOTICES.md
++++ /dev/null
+@@ -1,107 +0,0 @@
+-# Third-Party Notices
+-
+-This file is GENERATED by `scripts/legal/generate-third-party-notices.mjs`
+-from `scripts/legal/dependencies.json` (a hand-maintained ledger, re-derived
+-and diffed against the live dependency set by
+-`scripts/check-third-party-notices.sh` on every CI run — see
+-`docs/legal/RELEASE-SAFEGUARDS.md`). Do not hand-edit this file; edit the
+-ledger and regenerate.
+-
+-pix is a Docker, Inc. project (see `LICENSE` and `NOTICE.md`). It is not affiliated
+-with, endorsed by, or sponsored by any of the third-party organizations named
+-below; their names appear solely to attribute the open-source components pix
+-depends on.
+-
+-## Directly-downloaded/baked toolchain binaries (Dockerfile)
+-
+-These are NOT npm/go-module dependencies — they are static binaries or
+-tarballs fetched directly by `curl` in the Dockerfile from the project's own
+-GitHub Releases (or, for Go, go.dev/dl), pinned by an explicit `ARG` (never
+-`releases/latest`) so builds stay reproducible and the pin is one grep away
+-from the source of truth.
+-
+-| Tool | Version | License | Source |
+-| --- | --- | --- | --- |
+-| fd | 10.4.2 | MIT OR Apache-2.0 | https://github.com/sharkdp/fd |
+-| go | 1.26.5 | BSD-3-Clause | https://go.dev/dl/ (https://github.com/golang/go) |
+-| ruff | 0.15.22 | MIT | https://github.com/astral-sh/ruff |
+-
+-- **fd@10.4.2** (MIT OR Apache-2.0) — Dockerfile: official static binary release, fetched via `curl` from GitHub Releases (pinned by ARG FD_VERSION), installed to /usr/local/bin/fd and symlinked into ~/.pi/agent/bin/fd — fast file finder pi otherwise auto-downloads per-sandbox.
+-- **go@1.26.5** (BSD-3-Clause) — Dockerfile: official Go toolchain tarball, fetched via `curl` from go.dev/dl (pinned by ARG GO_VERSION to match services/host/go.mod's `go` directive), installed to /usr/local/go — builds/tests the host binary (pix-host) from inside a sandbox. Distributed as a runtime/compiler in the image, not imported source, but still a directly-downloaded bundled binary.
+-- **ruff@0.15.22** (MIT) — Dockerfile: official static binary release, fetched via `curl` from GitHub Releases (pinned by ARG RUFF_VERSION, not `releases/latest`), installed to /usr/local/bin/ruff — Python lint/format toolchain for agent use.
+-
+-## Go modules (services/host — pix-host)
+-
+-| Module | Version | License |
+-| --- | --- | --- |
+-| github.com/alecthomas/kong | v1.16.0 | MIT |
+-| github.com/BurntSushi/toml | v1.6.0 | MIT |
+-| github.com/chromedp/cdproto | v0.0.0-20260714215040-dc233986426f | MIT |
+-| github.com/chromedp/chromedp | v0.16.0 | MIT |
+-| github.com/chromedp/sysutil | v1.1.0 | MIT |
+-| github.com/dustin/go-humanize | v1.0.1 | MIT |
+-| github.com/fatih/color | v1.13.0 | MIT |
+-| github.com/go-json-experiment/json | v0.0.0-20260623181947-01eb4420fa68 | BSD-3-Clause |
+-| github.com/gobwas/httphead | v0.1.0 | MIT |
+-| github.com/gobwas/pool | v0.2.1 | MIT |
+-| github.com/gobwas/ws | v1.4.0 | MIT |
+-| github.com/golang/protobuf | v1.5.4 | BSD-3-Clause |
+-| github.com/google/uuid | v1.6.0 | BSD-3-Clause |
+-| github.com/hashicorp/go-hclog | v1.6.3 | MIT |
+-| github.com/hashicorp/go-plugin | v1.8.0 | MPL-2.0 |
+-| github.com/hashicorp/yamux | v0.1.2 | MPL-2.0 |
+-| github.com/mattn/go-colorable | v0.1.12 | MIT |
+-| github.com/mattn/go-isatty | v0.0.22 | MIT |
+-| github.com/ncruces/go-strftime | v1.0.0 | MIT |
+-| github.com/oklog/run | v1.1.0 | Apache-2.0 |
+-| github.com/remyoudompheng/bigfft | v0.0.0-20230129092748-24d4a6f8daec | BSD-3-Clause |
+-| github.com/thejerf/suture/v4 | v4.0.6 | MIT |
+-| golang.org/x/net | v0.53.0 | BSD-3-Clause |
+-| golang.org/x/sys | v0.47.0 | BSD-3-Clause |
+-| golang.org/x/term | v0.42.0 | BSD-3-Clause |
+-| golang.org/x/text | v0.36.0 | BSD-3-Clause |
+-| google.golang.org/genproto/googleapis/rpc | v0.0.0-20260414002931-afd174a4e478 | Apache-2.0 |
+-| google.golang.org/grpc | v1.82.1 | Apache-2.0 |
+-| google.golang.org/protobuf | v1.36.11 | BSD-3-Clause |
+-| gopkg.in/yaml.v3 | v3.0.1 | Apache-2.0 AND MIT |
+-| modernc.org/libc | v1.74.1 | BSD-3-Clause |
+-| modernc.org/mathutil | v1.7.1 | BSD-3-Clause |
+-| modernc.org/memory | v1.11.0 | BSD-3-Clause |
+-| modernc.org/sqlite | v1.53.0 | BSD-3-Clause |
+-
+-### MPL-2.0 components (weak copyleft — noted per MPL-2.0 s3.2/s3.3)
+-
+-The complete, verbatim MPL-2.0 license text ships with every pix distribution:
+-`licenses/MPL-2.0.txt`, baked into the image and bundled in the Homebrew
+-tarball. Each component below is linked into `pix-host` in Executable Form and
+-is unmodified, so pix distributes no Modifications; the Source Code Form for
+-the exact version linked is published at the URL given, which is how a
+-recipient obtains it under MPL-2.0 s3.2(a).
+-
+-- **github.com/hashicorp/go-plugin@v1.8.0** — MPL-2.0. Source Code Form (MPL-2.0 s3.2), version v1.8.0: https://github.com/hashicorp/go-plugin/tree/v1.8.0. Full license text: `licenses/MPL-2.0.txt`. File-level weak copyleft. Linked into pix-host in Executable Form via an unmodified Go module import — pix creates no Modifications (MPL-2.0 s1.10), so the only Source Code Form a recipient needs is the upstream one linked above, at the pinned version. Attribution per MPL-2.0 s3.3 is this entry plus the verbatim license text shipped at licenses/MPL-2.0.txt.
+-- **github.com/hashicorp/yamux@v0.1.2** — MPL-2.0. Source Code Form (MPL-2.0 s3.2), version v0.1.2: https://github.com/hashicorp/yamux/tree/v0.1.2. Full license text: `licenses/MPL-2.0.txt`. Same MPL-2.0 posture as go-plugin (yamux is go-plugin's multiplexed-stream transport): unmodified import, no Modifications distributed.
+-
+-## npm packages baked into the image (Dockerfile `npm install -g` / `pi install`)
+-
+-| Package | Version | License |
+-| --- | --- | --- |
+-| @earendil-works/pi-coding-agent | 0.83.0 | MIT |
+-| @earendil-works/pi-tui | 0.83.0 | MIT |
+-| @juanibiapina/pi-extension-settings | 0.9.1 | MIT |
+-| pi-manage-todo-list | 0.4.0 | MIT |
+-| pi-mcp-adapter | 2.13.0 | MIT |
+-| pi-plan | 0.1.1 | MIT |
+-| pi-simplify | 0.2.3 | MIT |
+-| pi-usage | 0.3.0 | MIT |
+-| pi-web-access | 0.13.0 | MIT |
+-| typescript | 5.9.3 | Apache-2.0 |
+-
+-### Patched at build time
+-
+-- **@earendil-works/pi-tui@0.83.0** (MIT) — transitive dependency of pi-coding-agent; PATCHED at image build time by scripts/patches/apply-tui-bottom-pin.mjs (see docs/upstream/tui-bottom-pin.md). The patch is a narrow, reviewable, idempotent modification to the installed dist/tui.js, not a fork or redistribution of modified source under a different name.
+-- **pi-manage-todo-list@0.4.0** (MIT) — pinned pi extension (Dockerfile); PATCHED by scripts/patches/apply-todo-durable-clear.mjs
+-- **pi-web-access@0.13.0** (MIT) — pinned pi extension (Dockerfile); PATCHED by scripts/patches/apply-web-access-gateway.mjs
+-
+----
+-
+-Upstream license texts: the MPL-2.0 text — the only non-permissive license in this set — IS reproduced verbatim, in `licenses/MPL-2.0.txt`, and ships with the image and the Homebrew tarball. The permissive texts (MIT/BSD/Apache-2.0) are not reproduced here; each is available from its module cache / npm package at the versions pinned above and in `go.sum` / the Dockerfile. This file enumerates what is bundled and under what terms, per the fail-closed gate in `scripts/check-third-party-notices.sh`.

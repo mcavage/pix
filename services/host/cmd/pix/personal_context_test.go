@@ -11,11 +11,9 @@ import (
 )
 
 func TestPersonalContextUsesXDGDataAndGeneratesAgentLayer(t *testing.T) {
-	data := t.TempDir()
-	state := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", data)
-	t.Setenv("XDG_STATE_HOME", state)
-	if want := filepath.Join(data, "pix", "context"); config.ContextDir() != want {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	if want := filepath.Join(home, "context"); config.ContextDir() != want {
 		t.Fatalf("ContextDir = %q, want %q", config.ContextDir(), want)
 	}
 	if err := os.MkdirAll(config.ContextDir(), 0o700); err != nil {

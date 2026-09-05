@@ -1,0 +1,100 @@
+
+=== 1. env --help (seven verbs, hidden rm) ===
+Usage: pix env <command>
+
+Named launch contexts: ls | add | use | show | edit | review | forget.
+
+A named launch context: what runs, what mounts, which models, which MCP servers.
+See docs/design/environments.md.
+
+Seven verbs: ls, add, use, show, edit, review, forget. There is no 'pix env rm':
+registering a name is not owning its files; forget only unregisters, and it
+deletes nothing. All seven work now.
+
+'edit NAME pix|sbxenv' opens pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR (exact
+positional enum, no flag), then reloads and validates: it never prompts to
+accept a host-execution change inline: a changed footprint prints 'pix env
+review NAME' as the next step instead.
+
+An environment that runs code on your host or hands it a credential halts at
+'pix env review NAME': y/N, default No. A non-TTY review fails closed unless
+--yes.
+
+Flags:
+  -h, --help    Show context-sensitive help.
+
+Config & context
+  env ls [flags]
+    List registered environments. Marks the default.
+
+  env add <name> [<path>] [flags]
+    Register a directory, or scaffold a new one, then review it.
+
+  env use <name>
+    Set the machine default. Refuses an unaccepted Tier1 environment, or one
+    whose footprint changed since review.
+
+  env show [<name>] [flags]
+    What NAME is: files, models, mounts, MCP, review state, drift.
+
+  env edit <name> [<target>]
+    Open pix.toml or .sbxenv.yaml in $VISUAL/$EDITOR, then validate.
+
+  env review <name> [flags]
+    Read and accept what NAME runs on your host.
+
+  env forget <name>
+    Unregister NAME. Never deletes the environment directory.
+exit=0
+
+=== 2. env ls (empty) ===
+no environments registered; pix runs with its own built-in defaults.
+register one: pix env add <name> [path]
+exit=0
+
+=== 3. env add home (scaffold, tier0) ===
+/tmp/wave-c-run/xdg-data/pix/envs/home
+pix: environment "home" scaffolded at /tmp/wave-c-run/xdg-data/pix/envs/home.
+
+pix env use home
+exit=0
+
+=== 4. env show home ===
+environment "home"
+  root:      /tmp/wave-c-run/xdg-data/pix/envs/home
+  files:     .sbxenv.yaml
+  declares:  0 models, 0 mounts, 0 MCP servers
+  review:    not-required (nothing runs on your host)
+  sandbox:   unknown (live-launch drift lands with a later wave)
+
+full rendered environment: pix env show home --effective
+exit=0
+
+=== 5. env show home --json ===
+{
+  "schema_version": 1,
+  "environment": "home",
+  "root": "/tmp/wave-c-run/xdg-data/pix/envs/home",
+  "sbxenv_present": true,
+  "accepted": false,
+  "review_state": "not_required"
+}
+exit=0
+
+=== 6. env show home --path ===
+/tmp/wave-c-run/xdg-data/pix/envs/home
+exit=0
+
+=== 7. env ls after add ===
+NAME  DEFAULT  REVIEW  ROOT
+home           n/a     /tmp/wave-c-run/xdg-data/pix/envs/home
+exit=0
+
+=== 8. env use home (tier0 not_required) ===
+pix: environment "home" is now the default.
+exit=0
+
+=== 9. env ls shows default marker ===
+NAME  DEFAULT  REVIEW  ROOT
+home  *        n/a     /tmp/wave-c-run/xdg-data/pix/envs/home
+exit=0

@@ -1,0 +1,454 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"pix/host/cli"
+	"pix/host/pixhome"
+	"pix/host/secret"
+	nativeenv "pix/host/workflow/env"
+)
+
+// setup_env_test.go proves `pix setup --env NAME`'s real job (surface.md
+// §3.6 step 7, wired through setupSelectedEnvironment): validate the named
+// environment's declared requirements — including any local inference its
+// pix.toml authors — and perform the SAME trust review `pix env trust NAME`
+// does, never a generic config mutation and never a machine-default change.
+
+// writeSetupEnvFixture creates <home>/envs/<name>/.sbxenv.yaml + pix.toml
+// and returns the resolved pixhome.Paths.
+func writeSetupEnvFixture(t *testing.T, home, name, sidecar string) pixhome.Paths {
+	t.Helper()
+	p := pixhome.New(home)
+	dir := p.EnvironmentDir(name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".sbxenv.yaml"), []byte("schemaVersion: \"1\"\nagent: pix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if sidecar != "" {
+		if err := os.WriteFile(filepath.Join(dir, "pix.toml"), []byte(sidecar), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return p
+}
+
+// preTrustSetupEnv writes an acceptance record for name so
+// setupSelectedEnvironment's trust review is a no-op (this test proves the
+// requirements check, not the trust prompt, which run_trust_test.go already
+// covers end to end).
+func preTrustSetupEnv(t *testing.T, home pixhome.Paths, name string) {
+	t.Helper()
+	sel, err := nativeenv.ResolveIn(home, name)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", name, err)
+	}
+	bom, fp, err := environmentBoM(sel)
+	_ = bom
+	if err != nil {
+		t.Fatalf("environmentBoM: %v", err)
+	}
+	if err := os.MkdirAll(home.StateTrustEnvironments, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rec := envTrustRecord{Root: sel.Root, Fingerprint: fp, AcceptedAt: time.Now().UTC().Format(time.RFC3339)}
+	b, _ := json.MarshalIndent(rec, "", "  ")
+	if err := os.WriteFile(trustRecordPath(home, name), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetupEnv_ValidOllamaInferenceAndRoster_Passes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[models]
+main = "ollama/qwen3.5:9b"
+
+[inference.backends.ollama]
+driver = "ollama"
+base_url = "http://host.docker.internal:11434/v1"
+auth = "none"
+
+[[inference.models]]
+id = "ollama/qwen3.5:9b"
+backend = "ollama"
+upstream_id = "qwen3.5:9b"
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
+	}
+}
+
+func TestSetupEnv_InvalidBackendDriverRefuses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[inference.backends.weird]
+driver = "carrier-pigeon"
+base_url = "http://example.invalid"
+auth = "none"
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	if err := setupSelectedEnvironment(d, p, "work"); err == nil {
+		t.Fatal("an environment naming an unsupported inference driver must refuse")
+	}
+}
+
+// TestSetupEnv_MissingDeclaredSecretRefuses proves surface.md §3.6 step
+// 7's whole point: an env_keys name with no recorded op:// ref is caught
+// generically, BEFORE any `[[setup]]` hook runs — replacing the pattern of
+// an environment shipping its own hook whose only job is failing on
+// purpose to print `pix secret set` commands.
+func TestSetupEnv_MissingDeclaredSecretRefuses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_KEYRING_PASSWORD"]
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	err := setupSelectedEnvironment(d, p, "work")
+	if err == nil {
+		t.Fatal("a declared secret with no recorded op:// ref must refuse setup")
+	}
+	if !strings.Contains(err.Error(), "requirement(s) not recorded") {
+		t.Errorf("expected a concise requirements refusal, got: %v", err)
+	}
+	if !strings.Contains(out.String(), "pix secret set GOG_KEYRING_PASSWORD op://") {
+		t.Errorf("expected the exact pix secret set remedy in output:\n%s", out.String())
+	}
+}
+
+// TestSetupEnv_DeclaredSecretRefRecordedPasses proves the same check
+// passes once the op:// ref is recorded, without needing a
+// `[[setup]]`-hook round trip to prove it.
+func TestSetupEnv_DeclaredSecretRefRecordedPasses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_KEYRING_PASSWORD"]
+`)
+	preTrustSetupEnv(t, p, "work")
+	if err := secret.SetRef(p, "GOG_KEYRING_PASSWORD", "op://Private/gog/password"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
+	}
+}
+
+// TestSetupEnv_PlainKeyPromptedInteractivelyPasses proves a plain_keys
+// name (a non-secret account string) is collected right here on a TTY and
+// recorded WITHOUT an op:// reference — never through `pix secret set`.
+func TestSetupEnv_PlainKeyPromptedInteractivelyPasses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+plain_keys = ["GOG_ACCOUNT"]
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader("you@docker.com\n"), Interactive: true}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
+	}
+	val, present := secret.PlainValue(p, "GOG_ACCOUNT")
+	if !present || val != "you@docker.com" {
+		t.Fatalf("expected GOG_ACCOUNT recorded as a plain value, got %q present=%v", val, present)
+	}
+	content, err := os.ReadFile(p.SecretsEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "op://") {
+		t.Errorf("a plain_keys value must never be stored as an op:// reference:\n%s", content)
+	}
+}
+
+// TestSetupEnv_MissingSecretRefPromptedInteractivelyPasses proves an
+// env_keys name is ALSO collected right here, on a TTY, through the exact
+// primitive `pix secret set` itself uses (secret.SetRef) — never a second
+// `pix setup --env work` rerun after a manual `pix secret set` in between.
+func TestSetupEnv_MissingSecretRefPromptedInteractivelyPasses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_KEYRING_PASSWORD"]
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader("op://Private/gog/password\n"), Interactive: true}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
+	}
+	refs, err := secret.LoadRefs(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range refs {
+		if r.Key == "GOG_KEYRING_PASSWORD" && r.IsRef && r.Value == "op://Private/gog/password" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected GOG_KEYRING_PASSWORD recorded as an op:// ref, got refs=%+v", refs)
+	}
+}
+
+// TestSetupEnv_CombinedSecretAndPlainPromptedInOneScreen proves BOTH kinds
+// are collected in the SAME run, without a rerun in between: the env_keys
+// ref first, then the plain_keys value, both answered from one piped
+// input, and neither remedy printed afterward since both were recorded.
+func TestSetupEnv_CombinedSecretAndPlainPromptedInOneScreen(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_KEYRING_PASSWORD"]
+plain_keys = ["GOG_ACCOUNT"]
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader("op://Private/gog/password\nyou@docker.com\n"), Interactive: true}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
+	}
+	refs, err := secret.LoadRefs(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	haveRef := false
+	for _, r := range refs {
+		if r.Key == "GOG_KEYRING_PASSWORD" && r.IsRef {
+			haveRef = true
+		}
+	}
+	if !haveRef {
+		t.Fatalf("expected GOG_KEYRING_PASSWORD recorded as an op:// ref from the one combined screen, refs=%+v", refs)
+	}
+	val, present := secret.PlainValue(p, "GOG_ACCOUNT")
+	if !present || val != "you@docker.com" {
+		t.Fatalf("expected GOG_ACCOUNT recorded as a plain value from the same screen, got %q present=%v", val, present)
+	}
+	if strings.Contains(out.String(), "pix secret set GOG_KEYRING_PASSWORD") {
+		t.Errorf("a value collected interactively must not also print the manual pix secret set remedy:\n%s", out.String())
+	}
+}
+
+// TestSetupEnv_DeclinedSecretPromptFallsBackToTheManualRemedy proves a
+// blank answer to the interactive op:// prompt still refuses, still names
+// the exact `pix secret set` command, and never records a bad value.
+func TestSetupEnv_DeclinedSecretPromptFallsBackToTheManualRemedy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_KEYRING_PASSWORD"]
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader("\n"), Interactive: true}
+	err := setupSelectedEnvironment(d, p, "work")
+	if err == nil {
+		t.Fatal("a blank answer to the interactive op:// prompt must still refuse")
+	}
+	if !strings.Contains(out.String(), "pix secret set GOG_KEYRING_PASSWORD op://") {
+		t.Errorf("expected the exact pix secret set remedy in output:\n%s", out.String())
+	}
+	refs, _ := secret.LoadRefs(p)
+	for _, r := range refs {
+		if r.Key == "GOG_KEYRING_PASSWORD" {
+			t.Fatalf("a declined prompt must not record anything, got %+v", r)
+		}
+	}
+}
+
+// TestSetupEnv_MissingPlainKeyNonInteractiveRefusesConcisely proves a
+// missing plain value on a non-interactive terminal is a concise,
+// actionable refusal — never a hook that fails on purpose.
+func TestSetupEnv_MissingPlainKeyNonInteractiveRefusesConcisely(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+plain_keys = ["GOG_ACCOUNT"]
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	err := setupSelectedEnvironment(d, p, "work")
+	if err == nil {
+		t.Fatal("a missing declared non-secret value must refuse on a non-interactive terminal")
+	}
+	if !strings.Contains(out.String(), "GOG_ACCOUNT is a non-secret value") {
+		t.Errorf("expected a concise, actionable remedy naming GOG_ACCOUNT, got:\n%s", out.String())
+	}
+}
+
+// TestSetup_EnvFlagSuppressesBaseParallelPrompt proves `--env NAME` skips
+// the base-install Parallel-search offer/report entirely (never called at
+// all, not merely gated on interactivity) — a named environment's own
+// declared roster makes that base-install noise irrelevant.
+
+// TestSetup_EnvFlagSuppressesBaseProviderInterview proves the OTHER half
+// of the same rule: a named `--env NAME` setup never runs the base
+// personal-provider interview either — no 1Password provider-key offer,
+// and no "no model provider key is configured yet / pix secret set
+// ANTHROPIC_API_KEY" advice — on a home whose environment brings its own
+// authenticated backends. It still establishes the refs file, because that
+// is where this environment's own declared values get recorded moments
+// later.
+
+// TestSetup_EnvFlagSuppressesBaseModelPrompt proves a named `--env NAME`
+// setup never reaches the base default-model picker at all, even when a
+// bare `pix setup` under the identical conditions would.
+
+// TestSetupEnv_HostValueMetadataRendersFriendlyLabelAndHelp proves the
+// declared-requirements prompt uses an environment's own
+// [host.values.<NAME>] label/help instead of the bare env-var name and
+// the generic "needed by <server>" sentence, when the environment
+// authored one.
+func TestSetupEnv_HostValueMetadataRendersFriendlyLabelAndHelp(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+plain_keys = ["GOG_ACCOUNT"]
+
+[host.values.GOG_ACCOUNT]
+label = "Google Workspace account email"
+help = "The Google Workspace user gog authenticates as."
+example = "you@company.com"
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader("you@docker.com\n"), Interactive: true}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "Google Workspace account email:") || strings.Contains(out.String(), "(GOG_ACCOUNT)") {
+		t.Errorf("expected the authored friendly prompt label, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "The Google Workspace user gog authenticates as.") {
+		t.Errorf("expected the authored help sentence in the prompt, got:\n%s", out.String())
+	}
+	val, present := secret.PlainValue(p, "GOG_ACCOUNT")
+	if !present || val != "you@docker.com" {
+		t.Fatalf("expected GOG_ACCOUNT recorded as a plain value, got %q present=%v", val, present)
+	}
+}
+
+// TestSetupEnv_OptionalDeclaredValueMissingDoesNotRefuse proves a value
+// whose [host.values.<NAME>] metadata sets `required = false` is still
+// asked for on a TTY, but a blank answer never fails setup: it is reported
+// as optional and skipped, never printed as one of the manual remedy
+// commands, and never turns into a non-zero error.
+func TestSetupEnv_OptionalDeclaredValueMissingDoesNotRefuse(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+plain_keys = ["GOG_ACCOUNT"]
+
+[host.values.GOG_ACCOUNT]
+required = false
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+		t.Fatalf("an optional declared value missing on a non-interactive terminal must not refuse: %v\n%s%s", err, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "GOG_ACCOUNT is optional") {
+		t.Errorf("expected an optional-and-skipped line naming GOG_ACCOUNT, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "printf 'GOG_ACCOUNT=") {
+		t.Errorf("an optional value must not print the required-value manual remedy:\n%s", out.String())
+	}
+}
+
+// TestSetupEnv_OptionalDeclaredValueAlongsideRequiredOneStillRefusesOnMissingRequired
+// proves optional and required declared values are judged independently in
+// the SAME screen: a missing required plain_keys name still refuses even
+// when a co-declared optional one is also missing.
+func TestSetupEnv_OptionalDeclaredValueAlongsideRequiredOneStillRefusesOnMissingRequired(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := writeSetupEnvFixture(t, home, "work", `schema = 1
+
+[host.mcp.google-workspace]
+plain_keys = ["GOG_ACCOUNT", "GOG_NICKNAME"]
+
+[host.values.GOG_NICKNAME]
+required = false
+`)
+	preTrustSetupEnv(t, p, "work")
+
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	err := setupSelectedEnvironment(d, p, "work")
+	if err == nil {
+		t.Fatal("a missing REQUIRED declared value must still refuse, even alongside an optional one")
+	}
+	if !strings.Contains(out.String(), "GOG_NICKNAME is optional") {
+		t.Errorf("expected GOG_NICKNAME reported as optional and skipped, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "GOG_ACCOUNT is a non-secret value") {
+		t.Errorf("expected the required-value remedy naming GOG_ACCOUNT, got:\n%s", out.String())
+	}
+}
+
+func TestSetupEnv_UnknownEnvironmentNameRefuses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	p := pixhome.New(home)
+	var out, errb bytes.Buffer
+	d := &cli.Deps{Out: &out, Err: &errb}
+	if err := setupSelectedEnvironment(d, p, "nope"); err == nil {
+		t.Fatal("an unknown --env name must refuse, never guess")
+	}
+}

@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-// isolateConfig points config.Load at a throwaway config.toml so these tests
-// never touch a real user's config.
+// isolateConfig points config.Load (via PIX_HOME) at a throwaway config.toml
+// so these tests never touch a real user's config.
 func isolateConfig(t *testing.T) {
 	t.Helper()
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("PIX_HOME", t.TempDir())
 }
 
 // TestReadProfileScope_UnscopedByDefault: a workspace with no .pix/profile

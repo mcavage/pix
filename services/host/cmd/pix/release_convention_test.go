@@ -66,7 +66,7 @@ func TestPublishWorkflowStampsVersions(t *testing.T) {
 	for _, stamp := range []string{
 		"Makefile",         // sed on VERSION ?=
 		"package.json",     // sed on "version":
-		"pi-kit/spec.yaml", // sed on image: docker.io/.../pix:<v>
+		"pi-kit/spec.yaml", // sed on image: docker.io/.../pix-agent:<v>
 	} {
 		if !strings.Contains(wf, stamp) {
 			t.Errorf("publish.yml must stamp %s with the computed version", stamp)
@@ -91,7 +91,7 @@ func TestVersionFilesAgreeAtBase(t *testing.T) {
 	if pj == nil {
 		t.Fatal("package.json: no version field")
 	}
-	spec := regexp.MustCompile(`image:\s*"docker\.io/[^"]*/pix:([^"]+)"`).FindStringSubmatch(mustReadRepoFile(t, root, "pi-kit", "spec.yaml"))
+	spec := regexp.MustCompile(`image:\s*"docker\.io/[^"]*/pix-agent:([^"]+)"`).FindStringSubmatch(mustReadRepoFile(t, root, "pi-kit", "spec.yaml"))
 	if spec == nil {
 		t.Fatal("pi-kit/spec.yaml: no pinned pix image tag")
 	}

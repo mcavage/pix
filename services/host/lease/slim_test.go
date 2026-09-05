@@ -10,6 +10,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -80,6 +81,43 @@ func TestLease_RefLeaseHasNoBlockingExclusive(t *testing.T) {
 				t.Errorf("%s: RefLease.AcquireExclusive is back — a blocking EX on refs.lock waits behind live references", file)
 			}
 		}
+	}
+}
+
+// TestTryReapProof_AcquiresRefsBeforeLifecycle pins the lock order that makes
+// simultaneous last-shell exits converge on one reaper. If lifecycle comes
+// first, shell A can hold it while finding shell B's ref, then shell B can drop
+// that ref and fail on A's lifecycle lock. Both report busy after the real last
+// reference is gone, leaving the sandbox orphaned. Taking refs EX first makes
+// losing reapers hold no lock that the eventual last holder needs.
+func TestTryReapProof_AcquiresRefsBeforeLifecycle(t *testing.T) {
+	const name = "ordering.go"
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, data, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body string
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Name.Name == "TryReapProof" {
+			start := fset.Position(fn.Body.Pos()).Offset
+			end := fset.Position(fn.Body.End()).Offset
+			body = string(data[start:end])
+			break
+		}
+	}
+	refs := strings.Index(body, "rl.TryExclusive()")
+	lifecycle := strings.Index(body, "lc.TryExclusive()")
+	if refs < 0 || lifecycle < 0 {
+		t.Fatalf("TryReapProof must try both refs and lifecycle locks; body:\n%s", body)
+	}
+	if refs > lifecycle {
+		t.Error("TryReapProof takes lifecycle before refs; simultaneous last-shell exits can make both reapers give up")
 	}
 }
 

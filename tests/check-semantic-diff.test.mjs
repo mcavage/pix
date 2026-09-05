@@ -736,7 +736,12 @@ test("every real pin holds against THIS repository right now under the shipped a
 	const pins = await loadRules(REAL_RULES_DIR);
 	assert.ok(pins.length >= 15, "should ship a meaningful pin set across all documented domains");
 	const domains = new Set(pins.map((p) => p.domain));
-	for (const expected of ["memory-rpc", "ports", "sandbox-scope", "permissions", "stdio", "subprocess-argv", "config-keys", "lifecycle"]) {
+	// memory-rpc and ports were both deleted along with the custom :11435
+	// JSON-RPC memory daemon and its reserved-port wiring in the Pix v2 cutover
+	// (docs/design/pix-v2-architecture.md §14, AC-16) — see the dedicated
+	// "ports domain was removed" test below, which pins the same deletion for
+	// that domain specifically.
+	for (const expected of ["sandbox-scope", "permissions", "stdio", "subprocess-argv", "config-keys", "lifecycle"]) {
 		assert.ok(domains.has(expected), `missing domain shard: ${expected}`);
 	}
 
@@ -778,41 +783,46 @@ test("the three formerly-staged Story04 pins now HOLD against this repo (the beh
 	assert.ok(!reap.includes('"rm", "-f"'), "the reaper must never compose a forced removal");
 });
 
-// U03B regression sentinel: BROKER_PORT/PIX_BROKER_PORT were pinned here
-// while the broker was still dormant infrastructure; W2/U03B (commit
-// cfd4522) deleted the CredentialBroker plugin seam entirely (see
-// services/host/cmd/pix/hostmode_gone_test.go's Go-side sentinel for the
-// execution-symbol half of this same deletion). A pin that still expected a
-// deleted literal was exactly the U03B gate failure this task fixed — assert
-// the ports domain never re-pins the retired broker port so a future patch
-// can't silently resurrect the requirement without this test noticing.
-test("the ports domain no longer pins the retired broker port (W2/U03B deleted it)", async () => {
+// The `ports` domain (memory-rpc.rules.mjs/ports.rules.mjs's whole subject:
+// the :11435 JSON-RPC memory daemon's reserved-port wiring in identity.go,
+// serve.go, memory.go and serve_plugin.go) was deleted OUTRIGHT in the Pix
+// v2 cutover, not merely its BROKER_PORT literal (docs/design/
+// pix-v2-architecture.md §14, AC-16; see
+// scripts/semantic-diff/intended-changes.json's
+// pix-v2-deletion-sweep.memory-rpc-and-ports-pins-removed entry and
+// services/host/deletion_sentinel_test.go's Go-side sentinel for the
+// execution-symbol half of this same deletion). There is no reserved-port
+// surface left for a `ports` domain to pin at all, so the U03B regression
+// this test used to guard (a stale BROKER_PORT literal surviving in an
+// otherwise-live domain) no longer has a domain to occur in.
+test("the ports domain was removed along with the daemon it pinned (Pix v2 cutover, not merely its retired broker port)", async () => {
 	const pins = await loadRules(REAL_RULES_DIR);
 	const portsPins = pins.filter((p) => p.domain === "ports");
-	assert.ok(portsPins.length > 0, "ports domain must still ship pins");
-	for (const pin of portsPins) {
-		for (const check of pin.checks) {
-			const values = check.values ?? check.expected ?? [];
-			const flat = Array.isArray(values) ? values : [values];
-			for (const v of flat) {
-				assert.ok(!String(v).includes("BROKER_PORT"), `${pin.id} (${check.file}) still pins a broker port literal: ${v}`);
-			}
-		}
-	}
+	assert.equal(portsPins.length, 0, "the ports domain's whole subject (the custom memory JSON-RPC daemon) is deleted; a pin reappearing here would describe a resurrected daemon");
 });
 
-// The two U04f-era manifest entries (lifecycle.session.record-before-lifecycle-unlock,
-// lifecycle.teardown.journal-bounded-0600) documented transitions that landed
-// commits ago; the base this guard now resolves to (HEAD~1, see the
-// resolveDefaultBase tests above) already has those pins in their current
-// shape, so neither entry is needed as a waiver nor to explain any real
-// drift any more. They were removed in a follow-up commit so an unrelated,
-// later PR does not fail on a stale manifest it had no part in creating.
-test("the shipped intended-changes.json no longer carries the two now-spent U04f manifest entries", () => {
+// The U04f-era `lifecycle.teardown.journal-bounded-0600` entry documented a
+// transition that landed commits ago and is spent: nothing consumes it, so it
+// stays removed rather than failing an unrelated, later PR on a stale manifest
+// it had no part in creating.
+//
+// The guard is deliberately NOT "these two pin ids may never appear again". A
+// pin id is the only key checkRuleDrift matches a manifest entry by, so
+// forbidding an id outright would make that pin permanently unchangeable —
+// any future, legitimately documented change to it could neither ship with a
+// waiver nor without one. `lifecycle.session.record-before-lifecycle-unlock`
+// is exactly that case: E2.5's cutover deleted RunSession's lease-failure
+// fallback (the second, lease-less create path PRD section 8 forbids), which is
+// where the pinned `return child.Wait()` literal lived. What actually matters —
+// and what the CLI's own stale check below proves for EVERY shipped entry — is
+// that a manifest entry is CONSUMED this run, as a waiver or as the
+// explanation of real drift, rather than lingering after its transition.
+test("the shipped intended-changes.json carries no spent U04f manifest entry, and nothing stale", () => {
 	const manifest = loadManifest(path.join(REPO_ROOT, "scripts", "semantic-diff", "intended-changes.json"));
 	const ids = manifest.map((e) => e.id);
-	assert.ok(!ids.includes("lifecycle.session.record-before-lifecycle-unlock"), "spent entry must be removed once neither a waiver nor real drift needs it");
 	assert.ok(!ids.includes("lifecycle.teardown.journal-bounded-0600"), "spent entry must be removed once neither a waiver nor real drift needs it");
+	const out = execFileSync("node", [CLI, "--root", REPO_ROOT], { encoding: "utf8" });
+	assert.doesNotMatch(out, /stale intended-change manifest entries/, "every shipped manifest entry must be consumed this run (waiver or real drift)");
 });
 
 test("the CLI exits 0 against the real repo and exits 1 against a fixture with a planted corruption", () => {
@@ -827,19 +837,21 @@ test("the CLI exits 0 against the real repo and exits 1 against a fixture with a
 	const root = mkTmpDir();
 	fs.cpSync(path.join(REPO_ROOT, "services"), path.join(root, "services"), { recursive: true });
 	fs.cpSync(path.join(REPO_ROOT, "extensions"), path.join(root, "extensions"), { recursive: true });
-	// Corrupt the memory RPC method table: rename "remember" -> "rememberFact".
-	// The table lives in serve_plugin.go (memoryStoreMux): U11j collapsed the
-	// duplicate in memory.go into it, so both :11435 entry points answer through
-	// this one map — which is exactly the file a lockstep rename would hit.
-	const muxGo = path.join(root, "services/host/serve_plugin.go");
-	fs.writeFileSync(muxGo, fs.readFileSync(muxGo, "utf8").replace('"remember": with(func(', '"rememberFact": with(func('));
+	// Corrupt the pix-* sandbox-scope refusal: the custom memory JSON-RPC
+	// daemon this planted-corruption fixture used to target (serve_plugin.go's
+	// memoryStoreMux) was deleted outright in the Pix v2 cutover (docs/design/
+	// pix-v2-architecture.md §14, AC-16), so it corrupts sandbox.go's
+	// AGENTS.md-invariant-#12 literal instead — still a real, currently-pinned
+	// production file, still enough to prove the CLI wiring end-to-end.
+	const sandboxGo = path.join(root, "services/host/workflow/launch/sandbox.go");
+	fs.writeFileSync(sandboxGo, fs.readFileSync(sandboxGo, "utf8").replace('strings.HasPrefix(n, "pix-")', 'strings.HasPrefix(n, "pix2-")'));
 
 	let failed = false;
 	try {
 		execFileSync("node", [CLI, "--root", root, "--no-git"], { encoding: "utf8" });
 	} catch (err) {
 		failed = true;
-		assert.match(err.stdout, /memory\.rpc\.methods\.server/);
+		assert.match(err.stdout, /sandbox-scope\.prefix\.rm-refuses-foreign/);
 		assert.match(err.stdout, /semantic-diff: FAIL/);
 	}
 	assert.equal(failed, true, "CLI must exit non-zero on a planted corruption");

@@ -48,13 +48,13 @@ class Pix < Formula
   end
 
   def install
-    bin.install "pix", "pix-host"
-    # The tarball carries the notices that legally have to travel with these
-    # binaries: LICENSE for pix's own MIT s2, and NOTICE.md /
+    bin.install "pix"
+    # The tarball carries the notices that legally have to travel with this
+    # binary: LICENSE for pix's own MIT s2, and NOTICE.md /
     # THIRD_PARTY_NOTICES.md / licenses/MPL-2.0.txt for the MPL-2.0
-    # go-plugin/yamux code linked into pix-host (MPL-2.0 s3.1). install.sh
-    # places the same four next to the binaries it installs; Homebrew must
-    # not be the one channel that drops them.
+    # go-plugin/yamux code linked into it (MPL-2.0 s3.1). install.sh places
+    # the same four next to the binary it installs; Homebrew must not be the
+    # one channel that drops them.
     doc.install "LICENSE", "NOTICE.md", "THIRD_PARTY_NOTICES.md", "licenses"
   end
 
@@ -78,6 +78,5 @@ class Pix < Formula
 
   test do
     assert_equal version.to_s, shell_output("#{bin}/pix version").strip
-    assert_equal version.to_s, shell_output("#{bin}/pix-host version").strip
   end
 end

@@ -49,7 +49,12 @@ permissions:
   contents: write # the bump job commits the version bump back to main
 
 env:
-  IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pix
+  # pix-agent (the sandbox image, images/agent/Dockerfile) and pix-memory (the
+  # memory MCP service, services/memory/Dockerfile) are INDEPENDENT images —
+  # see docs/design/pix-v2-architecture.md §3. Both are tagged at the same
+  # Pix VERSION.
+  AGENT_IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pix-agent
+  MEMORY_IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pix-memory
 
 jobs:
   # The pre-publish legal gate, as a job in THIS graph (not a workflow racing
@@ -113,14 +118,19 @@ jobs:
             if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
               echo "git tag v${version} exists - trying the next patch"
             else
-              verdict="$(bash scripts/release/tag-availability.sh "$IMAGE" "$version")"
-              if [ "$verdict" = "taken" ]; then
-                echo "::warning::${IMAGE}:${version} already exists in the registry with no v${version} git tag:"
+              # pix-agent AND pix-memory are independent images (both tagged at
+              # this SAME version) — a version is only selected when BOTH tags
+              # are free, so a partial prior failure can never straddle two
+              # different versions across the two images.
+              agent_verdict="$(bash scripts/release/tag-availability.sh "$AGENT_IMAGE" "$version")"
+              memory_verdict="$(bash scripts/release/tag-availability.sh "$MEMORY_IMAGE" "$version")"
+              if [ "$agent_verdict" = "taken" ] || [ "$memory_verdict" = "taken" ]; then
+                echo "::warning::${AGENT_IMAGE}:${version} or ${MEMORY_IMAGE}:${version} already exists in the registry with no v${version} git tag:"
                 echo "::warning::a previous run published it and then failed before tagging. Selecting the next patch instead of overwriting it."
-              elif [ "$verdict" = "free" ]; then
+              elif [ "$agent_verdict" = "free" ] && [ "$memory_verdict" = "free" ]; then
                 break
               else
-                echo "::error::tag-availability.sh returned an unrecognized verdict '$verdict' for ${IMAGE}:${version}"
+                echo "::error::tag-availability.sh returned an unrecognized verdict (agent=$agent_verdict memory=$memory_verdict) for version ${version}"
                 exit 1
               fi
             fi
@@ -148,12 +158,12 @@ jobs:
         with:
           node-version: "25.9.0"
 
-      - name: Resolve pinned packages from the Dockerfile
+      - name: Resolve pinned packages from images/agent/Dockerfile
         id: pins
         run: |
           set -euo pipefail
-          PI_PACKAGE="$(grep -oP '^ARG PI_PACKAGE=\K\S+' Dockerfile)"
-          TODO_PACKAGE="$(grep -oP 'pi-manage-todo-list@\S+' Dockerfile | head -1)"
+          PI_PACKAGE="$(grep -oP '^ARG PI_PACKAGE=\K\S+' images/agent/Dockerfile)"
+          TODO_PACKAGE="$(grep -oP 'pi-manage-todo-list@\S+' images/agent/Dockerfile | head -1)"
           test -n "$PI_PACKAGE" && test -n "$TODO_PACKAGE"
           echo "pi_package=$PI_PACKAGE" >> "$GITHUB_OUTPUT"
           echo "todo_package=$TODO_PACKAGE" >> "$GITHUB_OUTPUT"
@@ -236,7 +246,7 @@ jobs:
           node --check "$TODO_DIST/state-manager.js"
 
   build:
-    name: build ${{ matrix.arch }}
+    name: build pix-agent ${{ matrix.arch }}
     # legal-gate AND test-gate FIRST: this job pushes layers by digest, so it
     # must not run before the secret scan / license gate / SBOM have passed,
     # nor before the suite is green. v0.1.27 published a complete release --
@@ -260,12 +270,12 @@ jobs:
           V="${{ needs.version.outputs.version }}"
           sed -i -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $V/" Makefile
           sed -i -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$V\"/" package.json
-          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pix:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
+          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pix-agent:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # One Docker Hub PAT authenticates both registries (DHI is gated by your
-      # Docker account). dhi.io = pull the base; docker.io = push pix.
+      # Docker account). dhi.io = pull the base; docker.io = push pix-agent.
       - name: Log in to DHI (pull the hardened base)
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
@@ -284,10 +294,11 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
+          file: images/agent/Dockerfile
           platforms: ${{ matrix.platform }}
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=agent-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=agent-${{ matrix.arch }}
+          outputs: type=image,name=${{ env.AGENT_IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
         run: |
@@ -297,16 +308,63 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: digest-${{ matrix.arch }}
+          name: agent-digest-${{ matrix.arch }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
+  # pix-memory (services/memory/Dockerfile) is a small static Go binary on a
+  # minimal DHI runtime — no chromium, no Node, no curated pi packages — so a
+  # single multi-platform buildx build (QEMU for the cross-arch leg) is fast
+  # enough that it does not need the split-build-then-imagetools-merge dance
+  # the chromium-heavy pix-agent image uses above.
+  build-memory:
+    name: build + push pix-memory (multi-arch)
+    needs: [version, legal-gate, test-gate]
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Refuse to overwrite an existing :<version> tag
+        run: |
+          set -euo pipefail
+          V="${{ needs.version.outputs.version }}"
+          verdict="$(bash scripts/release/tag-availability.sh "$MEMORY_IMAGE" "$V")"
+          if [ "$verdict" != "free" ]; then
+            echo "::error::${MEMORY_IMAGE}:${V}: refusing to overwrite a published tag (verdict: $verdict)."
+            exit 1
+          fi
+
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push pix-memory :<version> + :latest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: services/memory
+          file: services/memory/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+          tags: |
+            ${{ env.MEMORY_IMAGE }}:${{ needs.version.outputs.version }}
+            ${{ env.MEMORY_IMAGE }}:latest
+          push: true
+
   merge:
-    name: merge manifest + push tags
-    # The one job that creates the VERSIONED tag. legal-gate and test-gate are
-    # named again (not just inherited through `build`) so the ordering is
-    # explicit at the step that mutates a public tag.
+    name: merge manifest + push pix-agent tags
+    # The one job that creates the VERSIONED pix-agent tag. legal-gate and
+    # test-gate are named again (not just inherited through `build`) so the
+    # ordering is explicit at the step that mutates a public tag.
     needs: [version, build, legal-gate, test-gate]
     runs-on: ubuntu-latest
     outputs:
@@ -318,7 +376,7 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: /tmp/digests
-          pattern: digest-*
+          pattern: agent-digest-*
           merge-multiple: true
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -342,13 +400,13 @@ jobs:
           # ASSIGNMENT, not `if [ "$(...)" ]`: a condition context suppresses
           # `set -e`, which would turn the script's fail-closed exit 2 into an
           # empty string and let the create proceed.
-          verdict="$(bash scripts/release/tag-availability.sh "$IMAGE" "$V")"
+          verdict="$(bash scripts/release/tag-availability.sh "$AGENT_IMAGE" "$V")"
           if [ "$verdict" != "free" ]; then
-            echo "::error::${IMAGE}:${V}: refusing to overwrite a published tag (verdict: $verdict)."
+            echo "::error::${AGENT_IMAGE}:${V}: refusing to overwrite a published tag (verdict: $verdict)."
             echo "::error::Nothing was mutated. Re-run publish: the version selector will pick the next unused patch."
             exit 1
           fi
-          echo "${IMAGE}:${V} is unused - safe to create the manifest"
+          echo "${AGENT_IMAGE}:${V} is unused - safe to create the manifest"
 
       - name: Create and push :<version> + :latest
         id: manifest
@@ -356,6 +414,7 @@ jobs:
         run: |
           set -euo pipefail
           V="${{ needs.version.outputs.version }}"
+          IMAGE="$AGENT_IMAGE"
           docker buildx imagetools create \
             -t "${IMAGE}:${V}" -t "${IMAGE}:latest" \
             $(printf "${IMAGE}@sha256:%s " *)
@@ -406,7 +465,7 @@ jobs:
         uses: docker/scout-action@5dae9c7571dd0f3de81f5b501240c593c13c3eb6 # v1.9.3
         with:
           command: sbom
-          image: ${{ env.IMAGE }}@${{ needs.merge.outputs.digest }}
+          image: ${{ env.AGENT_IMAGE }}@${{ needs.merge.outputs.digest }}
           format: spdx
           output: sbom.spdx.json
 
@@ -429,7 +488,7 @@ jobs:
       # fails the release, which is the case worth catching.
       - name: Assert the SBOM is real and describes the published artifact
         env:
-          IMAGE: ${{ env.IMAGE }}
+          IMAGE: ${{ env.AGENT_IMAGE }}
           DIGEST: ${{ needs.merge.outputs.digest }}
         run: |
           set -euo pipefail
@@ -466,9 +525,42 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  # Binds ONE Pix version to the pix-agent digest, the pix-memory digest, the
+  # runtime archive digest, and the kit revision (docs/design/pix-v2-architecture.md
+  # §3). This is the ONE manifest setup/doctor read — there is no separately
+  # maintained version map.
+  release-manifest:
+    name: emit the release manifest
+    needs: [version, merge, build-memory]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Build the runtime archive (skills + agents + Pi settings/keybindings/themes)
+        run: bash scripts/release/build-runtime-archive.sh "${{ needs.version.outputs.version }}" out/pix-runtime-"${{ needs.version.outputs.version }}".tar.gz
+
+      - name: Emit out/release-manifest.json
+        run: |
+          set -euo pipefail
+          node scripts/release/emit-manifest.mjs \
+            --version "${{ needs.version.outputs.version }}" \
+            --agent-digest "${{ needs.merge.outputs.digest }}" \
+            --memory-digest "${{ needs.build-memory.outputs.digest }}" \
+            --runtime-archive "out/pix-runtime-${{ needs.version.outputs.version }}.tar.gz" \
+            --kit-revision "${{ github.sha }}" \
+            --write out/release-manifest.json
+          cat out/release-manifest.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-manifest-${{ needs.version.outputs.version }}
+          path: out/release-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
   bump:
     name: commit version bump to main
-    needs: [version, merge, provenance]
+    needs: [version, merge, build-memory, provenance, release-manifest]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -477,7 +569,7 @@ jobs:
           V="${{ needs.version.outputs.version }}"
           sed -i -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $V/" Makefile
           sed -i -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$V\"/" package.json
-          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pix:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
+          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pix-agent:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
           if git diff --quiet; then echo "no version change — nothing to commit"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -536,12 +628,11 @@ jobs:
   # the repo-less install path: Homebrew and `install.sh` both fetch the SAME
   # tarball. Pure Go toolchain — no Docker, no DHI base.
   #
-  # AC-REL-02: the LOOSE `pix-darwin-<arch>` / `pix-host-darwin-<arch>` assets
-  # are deliberately NOT published any more. They were a bare distribution of
-  # pix (MIT s2) and of the MPL-2.0 code linked into pix-host (MPL-2.0 s3.1)
-  # with none of the required notices attached, and install.sh consumed exactly
-  # those. install.sh now consumes the tarball, so there is no remaining
-  # consumer for a notice-less asset — and the release must not offer one.
+  # AC-REL-02: the LOOSE `pix-darwin-<arch>` asset is deliberately NOT
+  # published any more. It was a bare distribution of pix (MIT s2) with none
+  # of the required notices attached, and install.sh consumed exactly that.
+  # install.sh now consumes the tarball, so there is no remaining consumer for
+  # a notice-less asset — and the release must not offer one.
   # Runs after `bump` so the `v<VER>` tag already exists and the release hangs off
   # the commit carrying the stamped spec.yaml (same commit the kit pin resolves to).
   release-binaries:
@@ -561,16 +652,15 @@ jobs:
           go-version-file: services/host/go.mod
           cache-dependency-path: services/host/go.sum
 
-      # -X main.version stamps both package-main binaries: the launcher and
-      # pix-host each define the same symbol. These are BUILD INTERMEDIATES:
-      # they are staged into the notice-bearing tarballs below and are not
-      # published as release assets. darwin ONLY: pix's host lifecycle
-      # (launchd-managed serve, the pix/pix-host binaries themselves) is
-      # macOS-only, so there is no consumer for a linux pix/pix-host release
-      # asset any more. This is unrelated to the pix SANDBOX image (built by
-      # the `build`/`patch-smoke` jobs above), which stays linux/amd64 +
-      # linux/arm64 — that is a container, not a host binary.
-      - name: Cross-compile both binaries
+      # -X main.version stamps the ONE package-main binary: services/host/cmd/pix
+      # is the only build target now (no pix-host). This is a BUILD
+      # INTERMEDIATE: it is staged into the notice-bearing tarball below and is
+      # not published as a release asset itself. darwin ONLY: pix's host
+      # lifecycle is macOS-only, so there is no consumer for a linux pix
+      # release asset any more. This is unrelated to the pix-agent SANDBOX
+      # image (built by the `build`/`patch-smoke` jobs above), which stays
+      # linux/amd64 + linux/arm64 — that is a container, not a host binary.
+      - name: Cross-compile the pix binary
         working-directory: services/host
         env:
           V: ${{ needs.version.outputs.version }}
@@ -583,9 +673,6 @@ jobs:
             GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
               go build -ldflags "-X main.version=$V" \
               -o "$GITHUB_WORKSPACE/dist/pix-$os-$arch" ./cmd/pix
-            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
-              go build -ldflags "-X main.version=$V" \
-              -o "$GITHUB_WORKSPACE/dist/pix-host-$os-$arch" ./
           done
 
       - name: Build combined Darwin tarballs for Homebrew
@@ -597,22 +684,21 @@ jobs:
           for arch in amd64 arm64; do
             stage="$(mktemp -d)"
             cp "pix-darwin-$arch" "$stage/pix"
-            cp "pix-host-darwin-$arch" "$stage/pix-host"
             # AC-REL-01/02: the Homebrew tarball is a real distribution artifact
-            # of the third-party components baked into these binaries (incl.
+            # of the third-party components baked into this binary (incl.
             # the MPL-2.0 go-plugin/yamux notice) — ship the notices alongside it.
             # (The man page, pix.1, was retired along with `pix man`/`--man`;
             # `pix help --all` is the one verb map now, so nothing bundles it.)
             cp "$GITHUB_WORKSPACE/THIRD_PARTY_NOTICES.md" "$stage/THIRD_PARTY_NOTICES.md"
             cp "$GITHUB_WORKSPACE/NOTICE.md" "$stage/NOTICE.md"
             # pix's own MIT terms (MIT s2) and the verbatim MPL-2.0 text for the
-            # go-plugin/yamux code linked into these binaries (MPL-2.0 s3.1/3.2)
-            # ship WITH the binaries, not just in the repo.
+            # go-plugin/yamux code linked into this binary (MPL-2.0 s3.1/3.2)
+            # ship WITH the binary, not just in the repo.
             cp "$GITHUB_WORKSPACE/LICENSE" "$stage/LICENSE"
             mkdir -p "$stage/licenses"
             cp "$GITHUB_WORKSPACE/licenses/MPL-2.0.txt" "$stage/licenses/MPL-2.0.txt"
-            chmod 0755 "$stage/pix" "$stage/pix-host"
-            tar -C "$stage" -czf "pix_${V}_darwin_${arch}.tar.gz" pix pix-host THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses
+            chmod 0755 "$stage/pix"
+            tar -C "$stage" -czf "pix_${V}_darwin_${arch}.tar.gz" pix THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses
             rm -rf "$stage"
           done
           ls -la pix_*.tar.gz
@@ -627,7 +713,7 @@ jobs:
           set -euo pipefail
           for t in pix_*.tar.gz; do
             listing="$(tar -tzf "$t")"
-            for required in pix pix-host THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses/MPL-2.0.txt; do
+            for required in pix THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses/MPL-2.0.txt; do
               printf '%s\n' "$listing" | grep -qx "$required" \
                 || { echo "::error::$t is missing $required"; exit 1; }
             done

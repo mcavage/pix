@@ -1,0 +1,2324 @@
+=== RUN   TestAdd_RegisterTier0_SucceedsInEveryReviewMode
+=== RUN   TestAdd_RegisterTier0_SucceedsInEveryReviewMode/tty-no-answer-needed
+=== RUN   TestAdd_RegisterTier0_SucceedsInEveryReviewMode/nontty-no-yes
+=== RUN   TestAdd_RegisterTier0_SucceedsInEveryReviewMode/yes
+--- PASS: TestAdd_RegisterTier0_SucceedsInEveryReviewMode (0.00s)
+    --- PASS: TestAdd_RegisterTier0_SucceedsInEveryReviewMode/tty-no-answer-needed (0.00s)
+    --- PASS: TestAdd_RegisterTier0_SucceedsInEveryReviewMode/nontty-no-yes (0.00s)
+    --- PASS: TestAdd_RegisterTier0_SucceedsInEveryReviewMode/yes (0.00s)
+=== RUN   TestAdd_RegisterTier1_NonTTYWithoutYesFailsClosedTransactionally
+--- PASS: TestAdd_RegisterTier1_NonTTYWithoutYesFailsClosedTransactionally (0.00s)
+=== RUN   TestAdd_RegisterTier1_YesAccepts
+--- PASS: TestAdd_RegisterTier1_YesAccepts (0.00s)
+=== RUN   TestAdd_RegisterTier1_TTYAnswerYesAccepts
+--- PASS: TestAdd_RegisterTier1_TTYAnswerYesAccepts (0.00s)
+=== RUN   TestAdd_RegisterDuplicateIsIdempotent
+--- PASS: TestAdd_RegisterDuplicateIsIdempotent (0.00s)
+=== RUN   TestAdd_RegisterRepointRequiresNewRootAcceptance
+--- PASS: TestAdd_RegisterRepointRequiresNewRootAcceptance (0.00s)
+=== RUN   TestAdd_RepointNamesOldAndNewAbsoluteRootsOnSuccess
+--- PASS: TestAdd_RepointNamesOldAndNewAbsoluteRootsOnSuccess (0.00s)
+=== RUN   TestAdd_ZeroPath_CwdHasSbxenvRefusesNamingBothIntents
+--- PASS: TestAdd_ZeroPath_CwdHasSbxenvRefusesNamingBothIntents (0.00s)
+=== RUN   TestAdd_ZeroPath_CwdGetwdErrorDoesNotProceed
+--- PASS: TestAdd_ZeroPath_CwdGetwdErrorDoesNotProceed (0.00s)
+=== RUN   TestAdd_ZeroPath_ScaffoldCollisionNeverOverwrites
+=== RUN   TestAdd_ZeroPath_ScaffoldCollisionNeverOverwrites/existing-dir
+=== RUN   TestAdd_ZeroPath_ScaffoldCollisionNeverOverwrites/existing-file
+=== RUN   TestAdd_ZeroPath_ScaffoldCollisionNeverOverwrites/existing-symlink
+--- PASS: TestAdd_ZeroPath_ScaffoldCollisionNeverOverwrites (0.00s)
+    --- PASS: TestAdd_ZeroPath_ScaffoldCollisionNeverOverwrites/existing-dir (0.00s)
+    --- PASS: TestAdd_ZeroPath_ScaffoldCollisionNeverOverwrites/existing-file (0.00s)
+    --- PASS: TestAdd_ZeroPath_ScaffoldCollisionNeverOverwrites/existing-symlink (0.00s)
+=== RUN   TestAdd_ZeroPath_ScaffoldSucceeds
+--- PASS: TestAdd_ZeroPath_ScaffoldSucceeds (0.00s)
+=== RUN   TestAdd_ZeroPath_NoPartialDirOnSaveFailure
+--- PASS: TestAdd_ZeroPath_NoPartialDirOnSaveFailure (0.00s)
+=== RUN   TestAdd_ConfigExactSave
+--- PASS: TestAdd_ConfigExactSave (0.00s)
+=== RUN   TestAdd_RegisterPath_NonexistentRefusesWithScaffoldRetry
+--- PASS: TestAdd_RegisterPath_NonexistentRefusesWithScaffoldRetry (0.00s)
+=== RUN   TestAdd_RegisterPath_NotADirectoryRefusesWithScaffoldRetry
+--- PASS: TestAdd_RegisterPath_NotADirectoryRefusesWithScaffoldRetry (0.00s)
+=== RUN   TestAdd_RegisterPath_EmptyExistingDirNeverSuggestsEdit
+--- PASS: TestAdd_RegisterPath_EmptyExistingDirNeverSuggestsEdit (0.00s)
+=== RUN   TestAdd_ScaffoldRetryForm
+--- PASS: TestAdd_ScaffoldRetryForm (0.00s)
+=== RUN   TestAdd_RegisterRetryForm
+--- PASS: TestAdd_RegisterRetryForm (0.00s)
+=== RUN   TestComputeBoM_EveryTreeHostExecFacetMapsExactlyOnce
+--- PASS: TestComputeBoM_EveryTreeHostExecFacetMapsExactlyOnce (0.00s)
+=== RUN   TestComputeBoM_IdenticalArgvAcrossDifferentRegistriesNotDeduped
+--- PASS: TestComputeBoM_IdenticalArgvAcrossDifferentRegistriesNotDeduped (0.00s)
+=== RUN   TestComputeBoM_UnboundSecretCommandStillHostCommandAndCredentialFact
+--- PASS: TestComputeBoM_UnboundSecretCommandStillHostCommandAndCredentialFact (0.00s)
+=== RUN   TestComputeBoM_InferenceKeyEnvIsCredentialTargetAndTier1
+--- PASS: TestComputeBoM_InferenceKeyEnvIsCredentialTargetAndTier1 (0.00s)
+=== RUN   TestComputeBoM_InferenceKeyEnvWithNoBaseURLFallsBackToName
+--- PASS: TestComputeBoM_InferenceKeyEnvWithNoBaseURLFallsBackToName (0.00s)
+=== RUN   TestComputeBoM_HostMCPProbeArgsIsHostCommandEvenWithNoEnvKeys
+--- PASS: TestComputeBoM_HostMCPProbeArgsIsHostCommandEvenWithNoEnvKeys (0.00s)
+=== RUN   TestComputeBoM_EffectiveMountAloneIsTier1
+--- PASS: TestComputeBoM_EffectiveMountAloneIsTier1 (0.00s)
+=== RUN   TestReview_EffectiveMountAloneRefusesNonTTY
+--- PASS: TestReview_EffectiveMountAloneRefusesNonTTY (0.00s)
+=== RUN   TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints
+=== RUN   TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/secret_command_(unbound)
+=== RUN   TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/secret_command_(bound)
+=== RUN   TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/secret_ref_(unbound)
+=== RUN   TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/registry_command
+=== RUN   TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/registry_noVerify
+=== RUN   TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/mcp_server_command
+=== RUN   TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/host.mcp_probe_args
+=== RUN   TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/host.mcp_env_keys
+=== RUN   TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/inference_key_env
+=== RUN   TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/reviewed_mount_expansion
+--- PASS: TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints (0.00s)
+    --- PASS: TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/secret_command_(unbound) (0.00s)
+    --- PASS: TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/secret_command_(bound) (0.00s)
+    --- PASS: TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/secret_ref_(unbound) (0.00s)
+    --- PASS: TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/registry_command (0.00s)
+    --- PASS: TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/registry_noVerify (0.00s)
+    --- PASS: TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/mcp_server_command (0.00s)
+    --- PASS: TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/host.mcp_probe_args (0.00s)
+    --- PASS: TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/host.mcp_env_keys (0.00s)
+    --- PASS: TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/inference_key_env (0.00s)
+    --- PASS: TestClassificationMatrix_EachFacetAloneIsTier1DefaultVisibleAndFingerprints/reviewed_mount_expansion (0.00s)
+=== RUN   TestRenderBill_DefaultTierByteExactAgainstPRD
+--- PASS: TestRenderBill_DefaultTierByteExactAgainstPRD (0.00s)
+=== RUN   TestRenderBill_VerboseAddsArgvAndDigests
+--- PASS: TestRenderBill_VerboseAddsArgvAndDigests (0.00s)
+=== RUN   TestComputeBoM_NonHostExecutingEnvironmentIsEmpty
+--- PASS: TestComputeBoM_NonHostExecutingEnvironmentIsEmpty (0.00s)
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/host_command_argv
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/host_service_port
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/credential_destination
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/mount_read-only_bit
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/secret_ref
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/registry_noVerify
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/mcp_server_url
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/port_mapping
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/kit_content_hash
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/host.mcp_env_keys
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/inference_backend
+=== RUN   TestFingerprint_ChangesOnEveryFingerprintedFact/interpolation_reference
+--- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/host_command_argv (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/host_service_port (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/credential_destination (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/mount_read-only_bit (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/secret_ref (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/registry_noVerify (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/mcp_server_url (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/port_mapping (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/kit_content_hash (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/host.mcp_env_keys (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/inference_backend (0.00s)
+    --- PASS: TestFingerprint_ChangesOnEveryFingerprintedFact/interpolation_reference (0.00s)
+=== RUN   TestFingerprint_EveryShownFactIsFingerprinted
+--- PASS: TestFingerprint_EveryShownFactIsFingerprinted (0.00s)
+=== RUN   TestBoM_InterpolationsShowVarAndKeyPathNeverResolvedValue
+--- PASS: TestBoM_InterpolationsShowVarAndKeyPathNeverResolvedValue (0.00s)
+=== RUN   TestBoM_NoVerifyDisplaysAndChangesFingerprint
+--- PASS: TestBoM_NoVerifyDisplaysAndChangesFingerprint (0.00s)
+=== RUN   TestAdd_CommitPreservesConcurrentDisjointRegistration
+--- PASS: TestAdd_CommitPreservesConcurrentDisjointRegistration (0.00s)
+=== RUN   TestAdd_ConcurrentRepointDuringPromptRefusesDeterministically
+--- PASS: TestAdd_ConcurrentRepointDuringPromptRefusesDeterministically (0.00s)
+=== RUN   TestAdd_ConcurrentSameRootRegistrationIsIdempotent
+--- PASS: TestAdd_ConcurrentSameRootRegistrationIsIdempotent (0.00s)
+=== RUN   TestUse_CommitPreservesConcurrentRegistration
+--- PASS: TestUse_CommitPreservesConcurrentRegistration (0.00s)
+=== RUN   TestUse_RefusesWhenNameForgottenConcurrently
+--- PASS: TestUse_RefusesWhenNameForgottenConcurrently (0.01s)
+=== RUN   TestForget_CommitPreservesConcurrentRegistration
+--- PASS: TestForget_CommitPreservesConcurrentRegistration (0.00s)
+=== RUN   TestForget_RefusesWhenConcurrentUseMadeItTheDefault
+--- PASS: TestForget_RefusesWhenConcurrentUseMadeItTheDefault (0.00s)
+=== RUN   TestCommit_SyncsEntireConfigIncludingUnrelatedFields
+--- PASS: TestCommit_SyncsEntireConfigIncludingUnrelatedFields (0.00s)
+=== RUN   TestEnvMutations_ParallelDisjointAddsAllSurvive
+--- PASS: TestEnvMutations_ParallelDisjointAddsAllSurvive (0.13s)
+=== RUN   TestCountSaveCalls_SelfTest
+=== RUN   TestCountSaveCalls_SelfTest/zero
+=== RUN   TestCountSaveCalls_SelfTest/one
+=== RUN   TestCountSaveCalls_SelfTest/two
+=== RUN   TestCountSaveCalls_SelfTest/comment_mention_does_not_count
+--- PASS: TestCountSaveCalls_SelfTest (0.00s)
+    --- PASS: TestCountSaveCalls_SelfTest/zero (0.00s)
+    --- PASS: TestCountSaveCalls_SelfTest/one (0.00s)
+    --- PASS: TestCountSaveCalls_SelfTest/two (0.00s)
+    --- PASS: TestCountSaveCalls_SelfTest/comment_mention_does_not_count (0.00s)
+=== RUN   TestEnvRegistryWriters_SaveOnlyInsideLockedCommit
+--- PASS: TestEnvRegistryWriters_SaveOnlyInsideLockedCommit (0.00s)
+=== RUN   TestEdit_TargetTokenTable
+=== RUN   TestEdit_TargetTokenTable/pix_token
+=== RUN   TestEdit_TargetTokenTable/sbxenv_token
+=== RUN   TestEdit_TargetTokenTable/unrecognized_token
+=== RUN   TestEdit_TargetTokenTable/empty_token,_non-TTY
+--- PASS: TestEdit_TargetTokenTable (0.01s)
+    --- PASS: TestEdit_TargetTokenTable/pix_token (0.00s)
+    --- PASS: TestEdit_TargetTokenTable/sbxenv_token (0.00s)
+    --- PASS: TestEdit_TargetTokenTable/unrecognized_token (0.00s)
+    --- PASS: TestEdit_TargetTokenTable/empty_token,_non-TTY (0.00s)
+=== RUN   TestEdit_NoSbxenvFlag
+--- PASS: TestEdit_NoSbxenvFlag (0.00s)
+=== RUN   TestEdit_TTYNoTokenPrintsSelectionAndReadsBoundedChoice
+--- PASS: TestEdit_TTYNoTokenPrintsSelectionAndReadsBoundedChoice (0.00s)
+=== RUN   TestEdit_TTYNumberedChoiceSelectsPix
+--- PASS: TestEdit_TTYNumberedChoiceSelectsPix (0.00s)
+=== RUN   TestEdit_TTYUnboundedAnswerRefusesNamingBothForms
+--- PASS: TestEdit_TTYUnboundedAnswerRefusesNamingBothForms (0.00s)
+=== RUN   TestEdit_NonTTYNoTokenExitsTwoNeverReadsStdin
+--- PASS: TestEdit_NonTTYNoTokenExitsTwoNeverReadsStdin (0.00s)
+=== RUN   TestEdit_BothUnsetPrintsOnlyAbsolutePath
+--- PASS: TestEdit_BothUnsetPrintsOnlyAbsolutePath (0.00s)
+=== RUN   TestEdit_VisualWinsOverEditor
+--- PASS: TestEdit_VisualWinsOverEditor (0.00s)
+=== RUN   TestEdit_ArgvSpacesSplitNoShell
+--- PASS: TestEdit_ArgvSpacesSplitNoShell (0.00s)
+=== RUN   TestEdit_EditorFailureIsOperationalNonTwo
+--- PASS: TestEdit_EditorFailureIsOperationalNonTwo (0.00s)
+=== RUN   TestEdit_VerdictOkWhenFootprintUnchangedAndAccepted
+--- PASS: TestEdit_VerdictOkWhenFootprintUnchangedAndAccepted (0.00s)
+=== RUN   TestEdit_VerdictReviewWhenUnaccepted
+--- PASS: TestEdit_VerdictReviewWhenUnaccepted (0.00s)
+=== RUN   TestEdit_VerdictReviewWhenChanged
+--- PASS: TestEdit_VerdictReviewWhenChanged (0.00s)
+=== RUN   TestEdit_VerdictOkForTier0RegardlessOfAcceptanceRecord
+--- PASS: TestEdit_VerdictOkForTier0RegardlessOfAcceptanceRecord (0.00s)
+=== RUN   TestEdit_VerdictInvalidLeavesConfigAndTrustByteIdentical
+--- PASS: TestEdit_VerdictInvalidLeavesConfigAndTrustByteIdentical (0.00s)
+=== RUN   TestEdit_SymlinkedTargetRefusedBeforeEditor
+=== RUN   TestEdit_SymlinkedTargetRefusedBeforeEditor/sbxenv_symlink_decoy
+=== RUN   TestEdit_SymlinkedTargetRefusedBeforeEditor/pix.toml_symlink_decoy
+--- PASS: TestEdit_SymlinkedTargetRefusedBeforeEditor (0.00s)
+    --- PASS: TestEdit_SymlinkedTargetRefusedBeforeEditor/sbxenv_symlink_decoy (0.00s)
+    --- PASS: TestEdit_SymlinkedTargetRefusedBeforeEditor/pix.toml_symlink_decoy (0.00s)
+=== RUN   TestEdit_QuotedExecutablePathWithSpacesAndQuotedArgs
+--- PASS: TestEdit_QuotedExecutablePathWithSpacesAndQuotedArgs (0.00s)
+=== RUN   TestEdit_MalformedEditorEnvRefusedNeverInvokesEditor
+--- PASS: TestEdit_MalformedEditorEnvRefusedNeverInvokesEditor (0.00s)
+=== RUN   TestEdit_EmptyQuotedEditorEnvRefused
+--- PASS: TestEdit_EmptyQuotedEditorEnvRefused (0.00s)
+=== RUN   TestAssertFamilyCopy_SelfTest
+=== RUN   TestAssertFamilyCopy_SelfTest/em_dash
+=== RUN   TestAssertFamilyCopy_SelfTest/filler_word
+=== RUN   TestAssertFamilyCopy_SelfTest/unearned_success_word
+=== RUN   TestAssertFamilyCopy_SelfTest/sbx_env_rm
+=== RUN   TestAssertFamilyCopy_SelfTest/did_you_mean
+=== RUN   TestAssertFamilyCopy_SelfTest/stray_yes/no
+--- PASS: TestAssertFamilyCopy_SelfTest (0.00s)
+    --- PASS: TestAssertFamilyCopy_SelfTest/em_dash (0.00s)
+    --- PASS: TestAssertFamilyCopy_SelfTest/filler_word (0.00s)
+    --- PASS: TestAssertFamilyCopy_SelfTest/unearned_success_word (0.00s)
+    --- PASS: TestAssertFamilyCopy_SelfTest/sbx_env_rm (0.00s)
+    --- PASS: TestAssertFamilyCopy_SelfTest/did_you_mean (0.00s)
+    --- PASS: TestAssertFamilyCopy_SelfTest/stray_yes/no (0.00s)
+=== RUN   TestErrorFamily_UnknownEnvironment
+--- PASS: TestErrorFamily_UnknownEnvironment (0.00s)
+=== RUN   TestErrorFamily_NoSelectionForPath
+--- PASS: TestErrorFamily_NoSelectionForPath (0.00s)
+=== RUN   TestErrorFamily_MissingRequiredFile
+--- PASS: TestErrorFamily_MissingRequiredFile (0.00s)
+=== RUN   TestErrorFamily_AddPathPrevalidation
+--- PASS: TestErrorFamily_AddPathPrevalidation (0.00s)
+=== RUN   TestErrorFamily_AddMissingRequiredFile_ScaffoldRetry
+--- PASS: TestErrorFamily_AddMissingRequiredFile_ScaffoldRetry (0.00s)
+=== RUN   TestErrorFamily_NoncanonicalRoot
+--- PASS: TestErrorFamily_NoncanonicalRoot (0.00s)
+=== RUN   TestErrorFamily_Containment
+--- PASS: TestErrorFamily_Containment (0.00s)
+=== RUN   TestErrorFamily_SymlinkedRoot
+--- PASS: TestErrorFamily_SymlinkedRoot (0.00s)
+=== RUN   TestErrorFamily_CwdHasSbxenv
+--- PASS: TestErrorFamily_CwdHasSbxenv (0.00s)
+=== RUN   TestErrorFamily_ScaffoldCollision
+--- PASS: TestErrorFamily_ScaffoldCollision (0.00s)
+=== RUN   TestErrorFamily_UseNotReviewed
+--- PASS: TestErrorFamily_UseNotReviewed (0.00s)
+=== RUN   TestErrorFamily_ReviewChangedDuringPrompt
+--- PASS: TestErrorFamily_ReviewChangedDuringPrompt (0.00s)
+=== RUN   TestErrorFamily_ConcurrentRegistration
+--- PASS: TestErrorFamily_ConcurrentRegistration (0.00s)
+=== RUN   TestErrorFamily_ForgetCurrentDefault
+--- PASS: TestErrorFamily_ForgetCurrentDefault (0.00s)
+=== RUN   TestErrorFamily_ForgetLiveHolder
+--- PASS: TestErrorFamily_ForgetLiveHolder (0.00s)
+=== RUN   TestErrorFamily_ForgetLiveHolder_ViaForget
+--- PASS: TestErrorFamily_ForgetLiveHolder_ViaForget (0.00s)
+=== RUN   TestErrorFamily_EditTarget
+--- PASS: TestErrorFamily_EditTarget (0.00s)
+=== RUN   TestErrorFamily_ReviewGate
+=== RUN   TestErrorFamily_ReviewGate/non-TTY_without_--yes
+=== RUN   TestErrorFamily_ReviewGate/interactive,_no_answer_at_all
+=== RUN   TestErrorFamily_ReviewGate/interactive,_explicit_no
+--- PASS: TestErrorFamily_ReviewGate (0.00s)
+    --- PASS: TestErrorFamily_ReviewGate/non-TTY_without_--yes (0.00s)
+    --- PASS: TestErrorFamily_ReviewGate/interactive,_no_answer_at_all (0.00s)
+    --- PASS: TestErrorFamily_ReviewGate/interactive,_explicit_no (0.00s)
+=== RUN   TestErrorFamily_EffectiveNotAvailableIsOperationalNotARefusal
+--- PASS: TestErrorFamily_EffectiveNotAvailableIsOperationalNotARefusal (0.00s)
+=== RUN   TestForget_UnregistersAndLeavesSourceByteIdentical
+--- PASS: TestForget_UnregistersAndLeavesSourceByteIdentical (0.00s)
+=== RUN   TestForget_UnknownNameRefuses
+--- PASS: TestForget_UnknownNameRefuses (0.00s)
+=== RUN   TestForget_CurrentDefaultRefuses
+--- PASS: TestForget_CurrentDefaultRefuses (0.00s)
+=== RUN   TestForget_LiveHolderRefuses
+--- PASS: TestForget_LiveHolderRefuses (0.00s)
+=== RUN   TestForget_UnknownHolderProbeFailsClosed
+--- PASS: TestForget_UnknownHolderProbeFailsClosed (0.00s)
+=== RUN   TestForget_NilProbeDefaultsToNoLiveHolders
+--- PASS: TestForget_NilProbeDefaultsToNoLiveHolders (0.00s)
+=== RUN   TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds
+=== RUN   TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds//tmp/TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds2272293855/003
+=== RUN   TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds//tmp/TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds2272293855/004
+=== RUN   TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds//tmp/TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds2272293855/005
+--- PASS: TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds (0.00s)
+    --- PASS: TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds//tmp/TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds2272293855/003 (0.00s)
+    --- PASS: TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds//tmp/TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds2272293855/004 (0.00s)
+    --- PASS: TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds//tmp/TestLoad_LocalSidecarSkillUnderRootSucceedsAcrossCwds2272293855/005 (0.00s)
+=== RUN   TestLoad_LocalSidecarSkillEscapingRootFails
+--- PASS: TestLoad_LocalSidecarSkillEscapingRootFails (0.00s)
+=== RUN   TestLoad_WritableMountContainingRootRefusesWithBothPaths
+--- PASS: TestLoad_WritableMountContainingRootRefusesWithBothPaths (0.00s)
+=== RUN   TestLoad_ReadOnlyMountContainingRootDoesNotRefuse
+--- PASS: TestLoad_ReadOnlyMountContainingRootDoesNotRefuse (0.00s)
+=== RUN   TestLoad_ReadOnlyRootMountDoesNotSelfRefuse
+--- PASS: TestLoad_ReadOnlyRootMountDoesNotSelfRefuse (0.00s)
+=== RUN   TestReview_NoIndependentWorkspacesParameterBypassesContainment
+--- PASS: TestReview_NoIndependentWorkspacesParameterBypassesContainment (0.00s)
+=== RUN   TestComputeShow_WithLocalSidecarSkillSucceeds
+--- PASS: TestComputeShow_WithLocalSidecarSkillSucceeds (0.00s)
+=== RUN   TestReview_WithLocalSidecarSkillSucceeds
+--- PASS: TestReview_WithLocalSidecarSkillSucceeds (0.00s)
+=== RUN   TestLoad_BothFilesParsed
+--- PASS: TestLoad_BothFilesParsed (0.00s)
+=== RUN   TestLoad_InvalidOptionalSidecarRefuses
+--- PASS: TestLoad_InvalidOptionalSidecarRefuses (0.00s)
+=== RUN   TestLoad_MissingOptionalSidecarAccepted
+--- PASS: TestLoad_MissingOptionalSidecarAccepted (0.00s)
+=== RUN   TestLoad_MissingRequiredNativeFileRefuses
+--- PASS: TestLoad_MissingRequiredNativeFileRefuses (0.00s)
+=== RUN   TestLoad_UnknownNativeFieldRefuses
+--- PASS: TestLoad_UnknownNativeFieldRefuses (0.00s)
+=== RUN   TestLoad_ContainmentCalledFromComposition
+--- PASS: TestLoad_ContainmentCalledFromComposition (0.00s)
+=== RUN   TestLoad_RootSymlinkReachedEndToEnd
+--- PASS: TestLoad_RootSymlinkReachedEndToEnd (0.00s)
+=== RUN   TestLoad_ReferencedKitSymlinkReachedEndToEnd
+--- PASS: TestLoad_ReferencedKitSymlinkReachedEndToEnd (0.00s)
+=== RUN   TestLoad_ReferencedHostServiceCommandSymlinkReachedEndToEnd
+--- PASS: TestLoad_ReferencedHostServiceCommandSymlinkReachedEndToEnd (0.00s)
+=== RUN   TestLoad_BareMCPServerCommandSymlinkReachedEndToEnd
+--- PASS: TestLoad_BareMCPServerCommandSymlinkReachedEndToEnd (0.00s)
+=== RUN   TestLoad_BareMCPServerCommandRegularPassesAndMissingSkips
+--- PASS: TestLoad_BareMCPServerCommandRegularPassesAndMissingSkips (0.00s)
+=== RUN   TestLoad_AcceptanceStateChangesOnRepoint
+--- PASS: TestLoad_AcceptanceStateChangesOnRepoint (0.00s)
+=== RUN   TestLoad_UnknownNameIsUsageError
+--- PASS: TestLoad_UnknownNameIsUsageError (0.00s)
+=== RUN   TestComputeLs_EmptyRegistry
+--- PASS: TestComputeLs_EmptyRegistry (0.00s)
+=== RUN   TestRenderLs_EmptyRegistryUsesBuiltInDefaultsProse
+--- PASS: TestRenderLs_EmptyRegistryUsesBuiltInDefaultsProse (0.00s)
+=== RUN   TestComputeLs_DeterministicAndMarksDefault
+--- PASS: TestComputeLs_DeterministicAndMarksDefault (0.00s)
+=== RUN   TestRenderLs_MarksDefaultAndReviewState
+--- PASS: TestRenderLs_MarksDefaultAndReviewState (0.00s)
+=== RUN   TestRenderLs_AllFourReviewStatesPlusInvalid
+--- PASS: TestRenderLs_AllFourReviewStatesPlusInvalid (0.00s)
+=== RUN   TestRenderLsJSON_SchemaVersionAndNoneWhenUnselected
+--- PASS: TestRenderLsJSON_SchemaVersionAndNoneWhenUnselected (0.00s)
+=== RUN   TestRenderLsJSON_CarriesReviewStateAndBackwardAcceptedBool
+--- PASS: TestRenderLsJSON_CarriesReviewStateAndBackwardAcceptedBool (0.00s)
+=== RUN   TestRegisterDelegatesToConfigAddEnvironment
+--- PASS: TestRegisterDelegatesToConfigAddEnvironment (0.00s)
+=== RUN   TestRegisterRejectsWhatConfigRejects
+--- PASS: TestRegisterRejectsWhatConfigRejects (0.00s)
+=== RUN   TestRootIsExactNoFuzzyOrPrefix
+--- PASS: TestRootIsExactNoFuzzyOrPrefix (0.00s)
+=== RUN   TestUnregisterDelegatesToConfigRemoveEnvironment
+--- PASS: TestUnregisterDelegatesToConfigRemoveEnvironment (0.00s)
+=== RUN   TestUnregisterDeletesNoSourceFile
+--- PASS: TestUnregisterDeletesNoSourceFile (0.00s)
+=== RUN   TestKnownIsSortedAndFresh
+--- PASS: TestKnownIsSortedAndFresh (0.00s)
+=== RUN   TestResolveIdenticalAcrossThreeOrMoreCwds
+=== RUN   TestResolveIdenticalAcrossThreeOrMoreCwds//tmp/TestResolveIdenticalAcrossThreeOrMoreCwds110889021/003
+=== RUN   TestResolveIdenticalAcrossThreeOrMoreCwds//tmp/TestResolveIdenticalAcrossThreeOrMoreCwds110889021/004
+=== RUN   TestResolveIdenticalAcrossThreeOrMoreCwds//tmp/TestResolveIdenticalAcrossThreeOrMoreCwds110889021/005
+=== RUN   TestResolveIdenticalAcrossThreeOrMoreCwds//tmp/TestResolveIdenticalAcrossThreeOrMoreCwds110889021/006
+--- PASS: TestResolveIdenticalAcrossThreeOrMoreCwds (0.00s)
+    --- PASS: TestResolveIdenticalAcrossThreeOrMoreCwds//tmp/TestResolveIdenticalAcrossThreeOrMoreCwds110889021/003 (0.00s)
+    --- PASS: TestResolveIdenticalAcrossThreeOrMoreCwds//tmp/TestResolveIdenticalAcrossThreeOrMoreCwds110889021/004 (0.00s)
+    --- PASS: TestResolveIdenticalAcrossThreeOrMoreCwds//tmp/TestResolveIdenticalAcrossThreeOrMoreCwds110889021/005 (0.00s)
+    --- PASS: TestResolveIdenticalAcrossThreeOrMoreCwds//tmp/TestResolveIdenticalAcrossThreeOrMoreCwds110889021/006 (0.00s)
+=== RUN   TestResolveUnknownNameIsTypedWithKnownList
+--- PASS: TestResolveUnknownNameIsTypedWithKnownList (0.00s)
+=== RUN   TestResolveNeverFuzzyMatches
+--- PASS: TestResolveNeverFuzzyMatches (0.00s)
+=== RUN   TestRefuseContainmentNestedRootNamesBothPaths
+--- PASS: TestRefuseContainmentNestedRootNamesBothPaths (0.00s)
+=== RUN   TestRefuseContainmentRootEqualsWorkspace
+--- PASS: TestRefuseContainmentRootEqualsWorkspace (0.00s)
+=== RUN   TestRefuseContainmentAllowsDisjointRoot
+--- PASS: TestRefuseContainmentAllowsDisjointRoot (0.00s)
+=== RUN   TestRefuseContainmentChecksEveryDeclaredWorkspace
+--- PASS: TestRefuseContainmentChecksEveryDeclaredWorkspace (0.00s)
+=== RUN   TestRefuseContainmentWorkspaceSymlinkAliasBypass
+--- PASS: TestRefuseContainmentWorkspaceSymlinkAliasBypass (0.00s)
+=== RUN   TestRefuseContainmentRootParentSymlinkAliasBypass
+--- PASS: TestRefuseContainmentRootParentSymlinkAliasBypass (0.00s)
+=== RUN   TestRefuseContainmentNonexistentPathsStillUsePureArithmetic
+--- PASS: TestRefuseContainmentNonexistentPathsStillUsePureArithmetic (0.00s)
+=== RUN   TestRefuseSymlinkedRootAndReference
+--- PASS: TestRefuseSymlinkedRootAndReference (0.00s)
+=== RUN   TestRequiresSymlinkCheckFailsClosedOnAmbiguousShapes
+--- PASS: TestRequiresSymlinkCheckFailsClosedOnAmbiguousShapes (0.00s)
+=== RUN   TestResolveEnvironmentFailsClosedOnHandEditedRelativeRoot
+--- PASS: TestResolveEnvironmentFailsClosedOnHandEditedRelativeRoot (0.00s)
+=== RUN   TestResolveEnvironmentFailsClosedOnHandEditedTildeRoot
+--- PASS: TestResolveEnvironmentFailsClosedOnHandEditedTildeRoot (0.00s)
+=== RUN   TestResolveEnvironmentAcceptsAlreadyCanonicalRoot
+--- PASS: TestResolveEnvironmentAcceptsAlreadyCanonicalRoot (0.00s)
+=== RUN   TestResolveLocalCommandBarePathSymlinkRegularMissing
+--- PASS: TestResolveLocalCommandBarePathSymlinkRegularMissing (0.00s)
+=== RUN   TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd
+=== RUN   TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd//tmp/TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd2336716643/002
+=== RUN   TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd//tmp/TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd2336716643/003
+=== RUN   TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd//tmp/TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd2336716643/004
+--- PASS: TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd (0.00s)
+    --- PASS: TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd//tmp/TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd2336716643/002 (0.00s)
+    --- PASS: TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd//tmp/TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd2336716643/003 (0.00s)
+    --- PASS: TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd//tmp/TestResolveLocalCommandRelativePathResolvesAgainstRootNotCwd2336716643/004 (0.00s)
+=== RUN   TestResolveLocalCommandAbsolutePathStaysAbsolute
+--- PASS: TestResolveLocalCommandAbsolutePathStaysAbsolute (0.00s)
+=== RUN   TestRepointNeverInheritsAcceptance
+--- PASS: TestRepointNeverInheritsAcceptance (0.00s)
+=== RUN   TestIsAcceptedFalseOnNilOrEmptyStore
+--- PASS: TestIsAcceptedFalseOnNilOrEmptyStore (0.00s)
+=== RUN   TestRenderBill_HostileDocumentContent_DefaultTier
+--- PASS: TestRenderBill_HostileDocumentContent_DefaultTier (0.00s)
+=== RUN   TestRenderBill_HostileDocumentContent_VerboseTier
+--- PASS: TestRenderBill_HostileDocumentContent_VerboseTier (0.00s)
+=== RUN   TestTerminalControlViolations_SelfTest
+=== RUN   TestTerminalControlViolations_SelfTest/ESC
+=== RUN   TestTerminalControlViolations_SelfTest/CR
+=== RUN   TestTerminalControlViolations_SelfTest/tab
+=== RUN   TestTerminalControlViolations_SelfTest/DEL
+=== RUN   TestTerminalControlViolations_SelfTest/C1_CSI
+=== RUN   TestTerminalControlViolations_SelfTest/bidi_RLO
+=== RUN   TestTerminalControlViolations_SelfTest/bidi_isolate
+--- PASS: TestTerminalControlViolations_SelfTest (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/ESC (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/CR (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/tab (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/DEL (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/C1_CSI (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/bidi_RLO (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/bidi_isolate (0.00s)
+=== RUN   TestReview_NonTTYWithoutYesFailsClosedAndWritesNothing
+--- PASS: TestReview_NonTTYWithoutYesFailsClosedAndWritesNothing (0.00s)
+=== RUN   TestReview_InteractivePromptYesAccepts
+--- PASS: TestReview_InteractivePromptYesAccepts (0.00s)
+=== RUN   TestReview_InteractivePromptNoRefusesAndWritesNothing
+--- PASS: TestReview_InteractivePromptNoRefusesAndWritesNothing (0.00s)
+=== RUN   TestReview_InteractivePromptEOFRefusesAndWritesNothing
+--- PASS: TestReview_InteractivePromptEOFRefusesAndWritesNothing (0.00s)
+=== RUN   TestReview_Tier0IsSilentAndWritesNothing
+--- PASS: TestReview_Tier0IsSilentAndWritesNothing (0.00s)
+=== RUN   TestReview_AcceptancePersistsRepointCannotInheritAndChangeRegates
+--- PASS: TestReview_AcceptancePersistsRepointCannotInheritAndChangeRegates (0.00s)
+=== RUN   TestReview_MutationDuringPromptFailsClosedAtCommit
+--- PASS: TestReview_MutationDuringPromptFailsClosedAtCommit (0.00s)
+=== RUN   TestRenderVerboseDetails_HostServiceDigestOnlyWhenResolvable
+--- PASS: TestRenderVerboseDetails_HostServiceDigestOnlyWhenResolvable (0.00s)
+=== RUN   TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged
+=== RUN   TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged/host_command_name/binary_swap
+=== RUN   TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged/host_command_argv_swap
+=== RUN   TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged/credential_ref_swap
+=== RUN   TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged/binding_domain_swap
+=== RUN   TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged/interpolation_expression_swap
+--- PASS: TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged (0.01s)
+    --- PASS: TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged/host_command_name/binary_swap (0.00s)
+    --- PASS: TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged/host_command_argv_swap (0.00s)
+    --- PASS: TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged/credential_ref_swap (0.00s)
+    --- PASS: TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged/binding_domain_swap (0.00s)
+    --- PASS: TestReview_ParseValidMutationDuringPromptRefusesAndStoreBytesUnchanged/interpolation_expression_swap (0.00s)
+=== RUN   TestReview_ParseValidMutationDuringPrompt_AbsentStoreStaysAbsent
+--- PASS: TestReview_ParseValidMutationDuringPrompt_AbsentStoreStaysAbsent (0.00s)
+=== RUN   TestComputeReviewState_Tier0IsNotRequired
+--- PASS: TestComputeReviewState_Tier0IsNotRequired (0.00s)
+=== RUN   TestComputeReviewState_NoRecordIsUnaccepted
+--- PASS: TestComputeReviewState_NoRecordIsUnaccepted (0.00s)
+=== RUN   TestComputeReviewState_MatchingRecordIsAccepted
+--- PASS: TestComputeReviewState_MatchingRecordIsAccepted (0.00s)
+=== RUN   TestComputeReviewState_MismatchedRecordIsChanged
+--- PASS: TestComputeReviewState_MismatchedRecordIsChanged (0.00s)
+=== RUN   TestComputeReviewState_CarriesTheComputedBoM
+--- PASS: TestComputeReviewState_CarriesTheComputedBoM (0.00s)
+=== RUN   TestRunHint_AbsentFile_NoHint
+--- PASS: TestRunHint_AbsentFile_NoHint (0.00s)
+=== RUN   TestRunHint_PresentFile_NoRegistration_Hints
+--- PASS: TestRunHint_PresentFile_NoRegistration_Hints (0.00s)
+=== RUN   TestRunHint_ExactRegisterAndSelectCommand
+--- PASS: TestRunHint_ExactRegisterAndSelectCommand (0.00s)
+=== RUN   TestRunHint_RegisteredEnvironment_Suppresses
+--- PASS: TestRunHint_RegisteredEnvironment_Suppresses (0.00s)
+=== RUN   TestRunHint_RepeatedRun_ShowsOnce
+--- PASS: TestRunHint_RepeatedRun_ShowsOnce (0.00s)
+=== RUN   TestRunHint_DifferentWorkspaces_EachShowsOnce
+--- PASS: TestRunHint_DifferentWorkspaces_EachShowsOnce (0.00s)
+=== RUN   TestRunHint_MarkerIsDurableOnDisk
+--- PASS: TestRunHint_MarkerIsDurableOnDisk (0.00s)
+=== RUN   TestShellInjection_CwdHasSbxenv
+--- PASS: TestShellInjection_CwdHasSbxenv (0.00s)
+=== RUN   TestShellInjection_ScaffoldCollision
+--- PASS: TestShellInjection_ScaffoldCollision (0.00s)
+=== RUN   TestShellInjection_ConcurrentRegistration
+--- PASS: TestShellInjection_ConcurrentRegistration (0.00s)
+=== RUN   TestShellInjection_UseNotReviewed
+--- PASS: TestShellInjection_UseNotReviewed (0.00s)
+=== RUN   TestShellInjection_ForgetLiveHolder
+--- PASS: TestShellInjection_ForgetLiveHolder (0.00s)
+=== RUN   TestShellInjection_NoncanonicalRoot
+--- PASS: TestShellInjection_NoncanonicalRoot (0.00s)
+=== RUN   TestShellInjection_MissingRequiredFile
+--- PASS: TestShellInjection_MissingRequiredFile (0.00s)
+=== RUN   TestShellInjection_AddPath
+--- PASS: TestShellInjection_AddPath (0.00s)
+=== RUN   TestShellInjection_AddMissingRequiredFileRetry
+--- PASS: TestShellInjection_AddMissingRequiredFileRetry (0.00s)
+=== RUN   TestShellInjection_ReviewChangedDuringPrompt
+--- PASS: TestShellInjection_ReviewChangedDuringPrompt (0.00s)
+=== RUN   TestShellInjection_ReviewGateRetryLines
+--- PASS: TestShellInjection_ReviewGateRetryLines (0.00s)
+=== RUN   TestShellInjection_RenderBillVerboseTip
+--- PASS: TestShellInjection_RenderBillVerboseTip (0.00s)
+=== RUN   TestShellInjection_EditTargetHeadlines
+--- PASS: TestShellInjection_EditTargetHeadlines (0.00s)
+=== RUN   TestComputeShow_NoneSelected
+--- PASS: TestComputeShow_NoneSelected (0.00s)
+=== RUN   TestRenderShowDefault_NoneSelectedNamesNone
+--- PASS: TestRenderShowDefault_NoneSelectedNamesNone (0.00s)
+=== RUN   TestRenderShowJSON_NoneSelectedEmitsEnvironmentNone
+--- PASS: TestRenderShowJSON_NoneSelectedEmitsEnvironmentNone (0.00s)
+=== RUN   TestComputeShow_OmittedNameUsesMachineDefault
+--- PASS: TestComputeShow_OmittedNameUsesMachineDefault (0.00s)
+=== RUN   TestComputeShow_CountsModelsMountsAndMCPServers
+--- PASS: TestComputeShow_CountsModelsMountsAndMCPServers (0.00s)
+=== RUN   TestComputeShow_UnknownNameExact
+--- PASS: TestComputeShow_UnknownNameExact (0.00s)
+=== RUN   TestRenderShowPath_ByteExact
+--- PASS: TestRenderShowPath_ByteExact (0.00s)
+=== RUN   TestNoSelectionForPathError
+--- PASS: TestNoSelectionForPathError (0.00s)
+=== RUN   TestRenderShowDefault_GoldenLineCountAndEffectivePointer
+--- PASS: TestRenderShowDefault_GoldenLineCountAndEffectivePointer (0.00s)
+=== RUN   TestRenderShowDefault_SidecarPresentIsListed
+--- PASS: TestRenderShowDefault_SidecarPresentIsListed (0.00s)
+=== RUN   TestRenderShowDefault_AcceptedShowsFingerprint
+--- PASS: TestRenderShowDefault_AcceptedShowsFingerprint (0.00s)
+=== RUN   TestRenderShowDefault_UnacceptedNamesReviewCommand
+--- PASS: TestRenderShowDefault_UnacceptedNamesReviewCommand (0.00s)
+=== RUN   TestRenderShowDefault_ChangedNamesReviewCommandExactlyOnce
+--- PASS: TestRenderShowDefault_ChangedNamesReviewCommandExactlyOnce (0.00s)
+=== RUN   TestErrEffectiveNotAvailable_IsOperationalNotUsage
+--- PASS: TestErrEffectiveNotAvailable_IsOperationalNotUsage (0.00s)
+=== RUN   TestErrEffectiveNotAvailable_NamesNoInternalUnitID
+--- PASS: TestErrEffectiveNotAvailable_NamesNoInternalUnitID (0.00s)
+=== RUN   TestRenderShowJSON_SelectedCarriesFacts
+--- PASS: TestRenderShowJSON_SelectedCarriesFacts (0.00s)
+=== RUN   TestRenderShowJSON_CarriesReviewStateAndCounts
+--- PASS: TestRenderShowJSON_CarriesReviewStateAndCounts (0.00s)
+=== RUN   TestRenderShowJSON_AcceptedBoolNeverOmitted
+--- PASS: TestRenderShowJSON_AcceptedBoolNeverOmitted (0.00s)
+=== RUN   TestUse_Tier0NeedsNoReview
+--- PASS: TestUse_Tier0NeedsNoReview (0.00s)
+=== RUN   TestUse_Tier1UnreviewedRefuses
+--- PASS: TestUse_Tier1UnreviewedRefuses (0.00s)
+=== RUN   TestUse_Tier1ReviewedAndUnchangedSucceeds
+--- PASS: TestUse_Tier1ReviewedAndUnchangedSucceeds (0.00s)
+=== RUN   TestUse_Tier1ChangedSinceReviewRefuses
+--- PASS: TestUse_Tier1ChangedSinceReviewRefuses (0.00s)
+=== RUN   TestUse_UnknownNameRefuses
+--- PASS: TestUse_UnknownNameRefuses (0.00s)
+=== RUN   TestUse_ConfigMutationIsOnlyTheEnvironmentKey
+--- PASS: TestUse_ConfigMutationIsOnlyTheEnvironmentKey (0.00s)
+PASS
+ok  	pix/host/workflow/env	0.245s
+=== RUN   TestReset_NeverDeletesAnEnvironmentSource
+--- PASS: TestReset_NeverDeletesAnEnvironmentSource (0.00s)
+=== RUN   TestDeleteCallSentinelDetectsAPlantedViolation
+--- PASS: TestDeleteCallSentinelDetectsAPlantedViolation (0.00s)
+=== RUN   TestReset_ExternalEnvironmentSource_UntouchedByteIdenticalAcceptanceGone
+--- PASS: TestReset_ExternalEnvironmentSource_UntouchedByteIdenticalAcceptanceGone (0.00s)
+=== RUN   TestReset_ScaffoldedEnvironmentSource_TravelsWithDataDirRename
+--- PASS: TestReset_ScaffoldedEnvironmentSource_TravelsWithDataDirRename (0.00s)
+=== RUN   TestReset_DataBlockedFailure_StillInvalidatesAcceptance_NeverMovesTheSource
+--- PASS: TestReset_DataBlockedFailure_StillInvalidatesAcceptance_NeverMovesTheSource (0.00s)
+=== RUN   TestPlan_DefaultIsTheWholeStack
+--- PASS: TestPlan_DefaultIsTheWholeStack (0.00s)
+=== RUN   TestPlan_KeepMemory_DropsTheDataRootTarget
+--- PASS: TestPlan_KeepMemory_DropsTheDataRootTarget (0.00s)
+=== RUN   TestPlan_KeepSandboxes_LeavesSbxAlone
+--- PASS: TestPlan_KeepSandboxes_LeavesSbxAlone (0.00s)
+=== RUN   TestPlan_CustomMemoryDBOutsideDataRoot_MovesTheFileNotTheDir
+--- PASS: TestPlan_CustomMemoryDBOutsideDataRoot_MovesTheFileNotTheDir (0.00s)
+=== RUN   TestRun_MovesEveryDirectoryAside
+--- PASS: TestRun_MovesEveryDirectoryAside (0.00s)
+=== RUN   TestRun_TaskCheckoutSurvivesInsideTheBackup
+--- PASS: TestRun_TaskCheckoutSurvivesInsideTheBackup (0.00s)
+=== RUN   TestReset_NeverDeletes
+--- PASS: TestReset_NeverDeletes (0.00s)
+=== RUN   TestRun_KeepMemory_PreservesTheStoreAndMovesTheRest
+--- PASS: TestRun_KeepMemory_PreservesTheStoreAndMovesTheRest (0.00s)
+=== RUN   TestRun_ServeStillUp_RefusesTheDataMove
+--- PASS: TestRun_ServeStillUp_RefusesTheDataMove (0.00s)
+=== RUN   TestRun_ForceMovesDataButNeverTheStateDir
+--- PASS: TestRun_ForceMovesDataButNeverTheStateDir (0.00s)
+=== RUN   TestRun_SweepRunsBeforeTheStateDirMoves
+--- PASS: TestRun_SweepRunsBeforeTheStateDirMoves (0.00s)
+=== RUN   TestRun_SweepFailure_StillResetsHostState
+--- PASS: TestRun_SweepFailure_StillResetsHostState (0.00s)
+=== RUN   TestRun_KeepSandboxes_TouchesNoSbx
+--- PASS: TestRun_KeepSandboxes_TouchesNoSbx (0.00s)
+=== RUN   TestRun_UnregistersConfiguredMCP
+--- PASS: TestRun_UnregistersConfiguredMCP (0.00s)
+=== RUN   TestRun_SbxAbsent_PrintsTheManualCommands
+--- PASS: TestRun_SbxAbsent_PrintsTheManualCommands (0.00s)
+=== RUN   TestRun_RestartsOnlyWhatWasRunning
+=== RUN   TestRun_RestartsOnlyWhatWasRunning/was_running
+=== RUN   TestRun_RestartsOnlyWhatWasRunning/never_running
+=== RUN   TestRun_RestartsOnlyWhatWasRunning/orphan_the_probe_could_not_see
+--- PASS: TestRun_RestartsOnlyWhatWasRunning (0.00s)
+    --- PASS: TestRun_RestartsOnlyWhatWasRunning/was_running (0.00s)
+    --- PASS: TestRun_RestartsOnlyWhatWasRunning/never_running (0.00s)
+    --- PASS: TestRun_RestartsOnlyWhatWasRunning/orphan_the_probe_could_not_see (0.00s)
+=== RUN   TestRun_NonInteractiveWithoutYes_ChangesNothing
+--- PASS: TestRun_NonInteractiveWithoutYes_ChangesNothing (0.00s)
+=== RUN   TestRun_InteractiveNo_Aborts
+--- PASS: TestRun_InteractiveNo_Aborts (0.00s)
+=== RUN   TestRun_InteractiveYes_Proceeds
+--- PASS: TestRun_InteractiveYes_Proceeds (0.00s)
+=== RUN   TestRun_PlanIsPrintedBeforeThePrompt
+--- PASS: TestRun_PlanIsPrintedBeforeThePrompt (0.00s)
+=== RUN   TestResolvePaths_XDGWins
+--- PASS: TestResolvePaths_XDGWins (0.00s)
+=== RUN   TestResolvePaths_PixConfigOverride
+--- PASS: TestResolvePaths_PixConfigOverride (0.00s)
+=== RUN   TestResettableStateDir
+--- PASS: TestResettableStateDir (0.00s)
+=== RUN   TestMoveAside_NeverOverwritesAnExistingBackup
+--- PASS: TestMoveAside_NeverOverwritesAnExistingBackup (0.00s)
+=== RUN   TestMoveAside_MissingPathIsSoft
+--- PASS: TestMoveAside_MissingPathIsSoft (0.00s)
+=== RUN   TestRun_CleanMachine_SaysSo
+--- PASS: TestRun_CleanMachine_SaysSo (0.00s)
+=== RUN   TestExecute_PostStopSettleIsGenerousEnoughForALaunchdBootOut
+--- PASS: TestExecute_PostStopSettleIsGenerousEnoughForALaunchdBootOut (0.00s)
+PASS
+ok  	pix/host/workflow/reset	0.023s
+=== RUN   TestRenderStatusConfigError_ExitsZeroAndRendersTheIssue
+--- PASS: TestRenderStatusConfigError_ExitsZeroAndRendersTheIssue (0.00s)
+=== RUN   TestRenderStatusConfigError_JSONPublishesDoctorsVerdict
+--- PASS: TestRenderStatusConfigError_JSONPublishesDoctorsVerdict (0.00s)
+=== RUN   TestConfigLoadSnapshot_IsABlockingRequiredGap
+--- PASS: TestConfigLoadSnapshot_IsABlockingRequiredGap (0.00s)
+=== RUN   TestRunDoctor_TooOldSbxFailsClosedWithExactCopy
+--- PASS: TestRunDoctor_TooOldSbxFailsClosedWithExactCopy (0.09s)
+=== RUN   TestRunDoctor_UnparsableSbxFailsClosed
+--- PASS: TestRunDoctor_UnparsableSbxFailsClosed (0.00s)
+=== RUN   TestRunDoctor_GoodVersionsAreNotBlocked
+=== RUN   TestRunDoctor_GoodVersionsAreNotBlocked/0.39.0
+=== RUN   TestRunDoctor_GoodVersionsAreNotBlocked/0.40.1
+--- PASS: TestRunDoctor_GoodVersionsAreNotBlocked (0.00s)
+    --- PASS: TestRunDoctor_GoodVersionsAreNotBlocked/0.39.0 (0.00s)
+    --- PASS: TestRunDoctor_GoodVersionsAreNotBlocked/0.40.1 (0.00s)
+=== RUN   TestRunDoctor_JSONModeStillFailsClosed
+--- PASS: TestRunDoctor_JSONModeStillFailsClosed (0.00s)
+=== RUN   TestRunDoctor_JSONModeUnparsableCarriesFix
+--- PASS: TestRunDoctor_JSONModeUnparsableCarriesFix (0.00s)
+=== RUN   TestProbes_CoverTheWholeHostSurface
+--- PASS: TestProbes_CoverTheWholeHostSurface (0.00s)
+=== RUN   TestProbes_RequirementFollowsTheConfiguredServices
+--- PASS: TestProbes_RequirementFollowsTheConfiguredServices (0.00s)
+=== RUN   TestStatus_EmptyEnvironmentsHasNoEnvironmentRow
+--- PASS: TestStatus_EmptyEnvironmentsHasNoEnvironmentRow (0.00s)
+=== RUN   TestDoctor_HealthyHostIsReadyAndPrintsNoFixes
+--- PASS: TestDoctor_HealthyHostIsReadyAndPrintsNoFixes (0.00s)
+=== RUN   TestDoctor_UnknownAloneIsNotAFailure
+--- PASS: TestDoctor_UnknownAloneIsNotAFailure (0.00s)
+=== RUN   TestDoctor_VerifiedGapsFailWithTheExactFix
+--- PASS: TestDoctor_VerifiedGapsFailWithTheExactFix (0.01s)
+=== RUN   TestDoctor_KeylessInferenceIsNotAMissingKey
+--- PASS: TestDoctor_KeylessInferenceIsNotAMissingKey (0.01s)
+=== RUN   TestKeylessInference_AgreesWithTheLaunchGate
+--- PASS: TestKeylessInference_AgreesWithTheLaunchGate (0.00s)
+=== RUN   TestKeylessInference_EmptyBackendSetIsNotKeyless
+--- PASS: TestKeylessInference_EmptyBackendSetIsNotKeyless (0.00s)
+=== RUN   TestDoctor_MemoryReportsTheUnitNotThePort
+--- PASS: TestDoctor_MemoryReportsTheUnitNotThePort (0.00s)
+=== RUN   TestStatus_AlwaysExitsZeroAndSendsYouToDoctor
+--- PASS: TestStatus_AlwaysExitsZeroAndSendsYouToDoctor (0.00s)
+=== RUN   TestStatusAndDoctorTellTheSameStory
+--- PASS: TestStatusAndDoctorTellTheSameStory (0.00s)
+=== RUN   TestReportJSON_SchemaAndFixes
+--- PASS: TestReportJSON_SchemaAndFixes (0.00s)
+=== RUN   TestDoctor_VerboseAddsEvidenceForReadyChecks
+--- PASS: TestDoctor_VerboseAddsEvidenceForReadyChecks (0.00s)
+=== RUN   TestDoctor_SbxAloneIsARequiredGap
+--- PASS: TestDoctor_SbxAloneIsARequiredGap (0.00s)
+=== RUN   TestClassifyMCPServer_PackDeclarationDecidesTheKind
+--- PASS: TestClassifyMCPServer_PackDeclarationDecidesTheKind (0.00s)
+=== RUN   TestClassifyMCPServer_UndeclaredNameHasNoHonestRepair
+--- PASS: TestClassifyMCPServer_UndeclaredNameHasNoHonestRepair (0.00s)
+=== RUN   TestMCPServers_ConfigOrderAndEmptyConfig
+--- PASS: TestMCPServers_ConfigOrderAndEmptyConfig (0.00s)
+=== RUN   TestClassifyMCPServer_ProbeRunsThroughTheSameOpRunWrapper
+--- PASS: TestClassifyMCPServer_ProbeRunsThroughTheSameOpRunWrapper (0.00s)
+=== RUN   TestSchemaV5_TopLevelKeysAreExactlyTheContract
+--- PASS: TestSchemaV5_TopLevelKeysAreExactlyTheContract (0.00s)
+=== RUN   TestSchemaV5_CarriesNoRetiredKey
+--- PASS: TestSchemaV5_CarriesNoRetiredKey (0.00s)
+=== RUN   TestSchemaV5_RowKeysAreExactlyTheContract
+--- PASS: TestSchemaV5_RowKeysAreExactlyTheContract (0.00s)
+=== RUN   TestSchemaRetirement_IsCompleteAndConsistent
+--- PASS: TestSchemaRetirement_IsCompleteAndConsistent (0.00s)
+=== RUN   TestSchemaV5_IsPublishedByBothSurfaces
+--- PASS: TestSchemaV5_IsPublishedByBothSurfaces (0.00s)
+=== RUN   TestReadSupervisorSnapshot_SharedContract
+=== RUN   TestReadSupervisorSnapshot_SharedContract/fresh_snapshot_from_the_live_pid
+=== RUN   TestReadSupervisorSnapshot_SharedContract/fresh_snapshot_with_zero_supervised_units_is_healthy,_not_unknown
+=== RUN   TestReadSupervisorSnapshot_SharedContract/no_snapshot_on_disk_at_all,_daemon_running
+=== RUN   TestReadSupervisorSnapshot_SharedContract/snapshot_aged_past_the_stale_budget_hides_its_units,_not_just_flags_them
+=== RUN   TestReadSupervisorSnapshot_SharedContract/snapshot_on_a_schema_this_build_does_not_read
+--- PASS: TestReadSupervisorSnapshot_SharedContract (0.00s)
+    --- PASS: TestReadSupervisorSnapshot_SharedContract/fresh_snapshot_from_the_live_pid (0.00s)
+    --- PASS: TestReadSupervisorSnapshot_SharedContract/fresh_snapshot_with_zero_supervised_units_is_healthy,_not_unknown (0.00s)
+    --- PASS: TestReadSupervisorSnapshot_SharedContract/no_snapshot_on_disk_at_all,_daemon_running (0.00s)
+    --- PASS: TestReadSupervisorSnapshot_SharedContract/snapshot_aged_past_the_stale_budget_hides_its_units,_not_just_flags_them (0.00s)
+    --- PASS: TestReadSupervisorSnapshot_SharedContract/snapshot_on_a_schema_this_build_does_not_read (0.00s)
+=== RUN   TestSupervisorSnapshotAvailability
+--- PASS: TestSupervisorSnapshotAvailability (0.00s)
+=== RUN   TestReportJSONCarriesTheSupervisorObject
+--- PASS: TestReportJSONCarriesTheSupervisorObject (0.00s)
+=== RUN   TestRetiredSchemasNamesV4
+--- PASS: TestRetiredSchemasNamesV4 (0.00s)
+PASS
+ok  	pix/host/workflow/doctor	0.132s
+=== RUN   TestApplyConfigChange_RefusesEnvironmentSet
+--- PASS: TestApplyConfigChange_RefusesEnvironmentSet (0.00s)
+=== RUN   TestApplyConfigChange_RefusesEnvironmentUnset
+--- PASS: TestApplyConfigChange_RefusesEnvironmentUnset (0.00s)
+=== RUN   TestApplyConfigChange_RefusesEnvironmentsRegistrySet
+--- PASS: TestApplyConfigChange_RefusesEnvironmentsRegistrySet (0.00s)
+=== RUN   TestApplyConfigChange_RefusesEnvironmentsRegistryUnset
+--- PASS: TestApplyConfigChange_RefusesEnvironmentsRegistryUnset (0.00s)
+=== RUN   TestApplyConfigChange_EnvironmentRefusalDoesNotMutate
+--- PASS: TestApplyConfigChange_EnvironmentRefusalDoesNotMutate (0.00s)
+=== RUN   TestConfigKeysHelp_MentionsEnvironmentRefusal
+--- PASS: TestConfigKeysHelp_MentionsEnvironmentRefusal (0.00s)
+=== RUN   TestApplyConfigChange_RefusesExactEnvironmentsKeySet
+--- PASS: TestApplyConfigChange_RefusesExactEnvironmentsKeySet (0.00s)
+=== RUN   TestApplyConfigChange_RefusesExactEnvironmentsKeyUnset
+--- PASS: TestApplyConfigChange_RefusesExactEnvironmentsKeyUnset (0.00s)
+=== RUN   TestApplyConfigChange_RefusesEnvironmentNamedEnvironmentsSet
+--- PASS: TestApplyConfigChange_RefusesEnvironmentNamedEnvironmentsSet (0.00s)
+=== RUN   TestApplyConfigChange_RefusesEnvironmentNamedEnvironmentsUnset
+--- PASS: TestApplyConfigChange_RefusesEnvironmentNamedEnvironmentsUnset (0.00s)
+=== RUN   TestConfigKeysHelp_NoDeletedKnowledgeSurface
+--- PASS: TestConfigKeysHelp_NoDeletedKnowledgeSurface (0.00s)
+=== RUN   TestMemoryCaptureSummaryIsAsymmetric
+--- PASS: TestMemoryCaptureSummaryIsAsymmetric (0.00s)
+=== RUN   TestValidateOnboarding_Allowlist
+--- PASS: TestValidateOnboarding_Allowlist (0.00s)
+=== RUN   TestValidateOnboarding_PackDeclarationIsTheAllowlist
+--- PASS: TestValidateOnboarding_PackDeclarationIsTheAllowlist (0.00s)
+=== RUN   TestValidateOnboardingShape_PreAdoptionAcceptsUndeclaredNames
+--- PASS: TestValidateOnboardingShape_PreAdoptionAcceptsUndeclaredNames (0.00s)
+=== RUN   TestApplyOnboarding_FieldsThenIdempotent
+--- PASS: TestApplyOnboarding_FieldsThenIdempotent (0.00s)
+=== RUN   TestReconcileOnboarding_AppliesFromFile
+--- PASS: TestReconcileOnboarding_AppliesFromFile (0.00s)
+=== RUN   TestReconcileOnboarding_LeavesFileWhenNotApplied
+=== RUN   TestReconcileOnboarding_LeavesFileWhenNotApplied/no_consent
+=== RUN   TestReconcileOnboarding_LeavesFileWhenNotApplied/refused_name
+--- PASS: TestReconcileOnboarding_LeavesFileWhenNotApplied (0.00s)
+    --- PASS: TestReconcileOnboarding_LeavesFileWhenNotApplied/no_consent (0.00s)
+    --- PASS: TestReconcileOnboarding_LeavesFileWhenNotApplied/refused_name (0.00s)
+=== RUN   TestParseSetupArgs
+--- PASS: TestParseSetupArgs (0.00s)
+=== RUN   TestApplyThenSecondCheckIsTheOnlySuccess
+--- PASS: TestApplyThenSecondCheckIsTheOnlySuccess (0.00s)
+=== RUN   TestApplyThatLiesIsNotSuccess
+--- PASS: TestApplyThatLiesIsNotSuccess (0.00s)
+=== RUN   TestAlreadyReadyIsNeverMutated
+--- PASS: TestAlreadyReadyIsNeverMutated (0.00s)
+=== RUN   TestProbeProvesSubsetStillApplies
+--- PASS: TestProbeProvesSubsetStillApplies (0.00s)
+=== RUN   TestProbeProvesSubsetIsOptIn
+--- PASS: TestProbeProvesSubsetIsOptIn (0.00s)
+=== RUN   TestOffIsSkippedSilentlyLikeReady
+--- PASS: TestOffIsSkippedSilentlyLikeReady (0.00s)
+=== RUN   TestUnknownIsNeverApplied
+--- PASS: TestUnknownIsNeverApplied (0.00s)
+=== RUN   TestDeniedIsReportedNotApplied
+--- PASS: TestDeniedIsReportedNotApplied (0.00s)
+=== RUN   TestApplyErrorIsRecordedAndOtherStepsStillRun
+--- PASS: TestApplyErrorIsRecordedAndOtherStepsStillRun (0.00s)
+=== RUN   TestApplyRunsRealCommandAndSecondCheckSeesIt
+--- PASS: TestApplyRunsRealCommandAndSecondCheckSeesIt (0.00s)
+=== RUN   TestCancelledContextStopsApplyingAndClaimsNothing
+--- PASS: TestCancelledContextStopsApplyingAndClaimsNothing (0.00s)
+=== RUN   TestRenderNamesWhatWasAppliedAndWhatRemains
+--- PASS: TestRenderNamesWhatWasAppliedAndWhatRemains (0.00s)
+=== RUN   TestRender_ClosingEnvironmentPointer
+--- PASS: TestRender_ClosingEnvironmentPointer (0.00s)
+=== RUN   TestBudgetIsHonoured
+--- PASS: TestBudgetIsHonoured (0.10s)
+=== RUN   TestOutcomeRender_FailedPhaseIsNotHeadlinedReady
+--- PASS: TestOutcomeRender_FailedPhaseIsNotHeadlinedReady (0.00s)
+=== RUN   TestApplyDecliningIsASkipNotAFailure
+--- PASS: TestApplyDecliningIsASkipNotAFailure (0.00s)
+=== RUN   TestProgressNarratesBothChecks
+--- PASS: TestProgressNarratesBothChecks (0.00s)
+=== RUN   TestEnsureSetupSbxSession_NotSignedInFailsClosedNonInteractive
+--- PASS: TestEnsureSetupSbxSession_NotSignedInFailsClosedNonInteractive (0.00s)
+=== RUN   TestEnsureSetupSbxSession_AlreadySignedInIsANoOp
+--- PASS: TestEnsureSetupSbxSession_AlreadySignedInIsANoOp (0.00s)
+=== RUN   TestSetupSteps_NoEnvironmentStep
+--- PASS: TestSetupSteps_NoEnvironmentStep (0.00s)
+=== RUN   TestSetupSteps_EveryConsentedCapabilityApplies
+--- PASS: TestSetupSteps_EveryConsentedCapabilityApplies (0.00s)
+=== RUN   TestSetupSteps_ProvidersAppliesOnlyWhenItCanAsk
+=== RUN   TestSetupSteps_ProvidersAppliesOnlyWhenItCanAsk/a_terminal,_no_--yes:_ask
+=== RUN   TestSetupSteps_ProvidersAppliesOnlyWhenItCanAsk/no_terminal:_never_ask
+=== RUN   TestSetupSteps_ProvidersAppliesOnlyWhenItCanAsk/--yes_is_not_an_answer
+=== RUN   TestSetupSteps_ProvidersAppliesOnlyWhenItCanAsk/neither
+--- PASS: TestSetupSteps_ProvidersAppliesOnlyWhenItCanAsk (0.00s)
+    --- PASS: TestSetupSteps_ProvidersAppliesOnlyWhenItCanAsk/a_terminal,_no_--yes:_ask (0.00s)
+    --- PASS: TestSetupSteps_ProvidersAppliesOnlyWhenItCanAsk/no_terminal:_never_ask (0.00s)
+    --- PASS: TestSetupSteps_ProvidersAppliesOnlyWhenItCanAsk/--yes_is_not_an_answer (0.00s)
+    --- PASS: TestSetupSteps_ProvidersAppliesOnlyWhenItCanAsk/neither (0.00s)
+=== RUN   TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt
+=== RUN   TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt/no_flags:_no_pull
+=== RUN   TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt/--yes_alone_is_not_consent
+=== RUN   TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt/--pull-models
+=== RUN   TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt/no_flags:_no_pack_adoption
+=== RUN   TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt/--pack
+--- PASS: TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt (0.00s)
+    --- PASS: TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt/no_flags:_no_pull (0.00s)
+    --- PASS: TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt/--yes_alone_is_not_consent (0.00s)
+    --- PASS: TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt/--pull-models (0.00s)
+    --- PASS: TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt/no_flags:_no_pack_adoption (0.00s)
+    --- PASS: TestSetupSteps_ApplyOnlyWhenAFlagAskedForIt/--pack (0.00s)
+=== RUN   TestPackApply_RefusedPackAbortsAndConfigUnchanged
+--- PASS: TestPackApply_RefusedPackAbortsAndConfigUnchanged (0.00s)
+=== RUN   TestPackApply_SuccessIsVerifiedAgainstTheRootApplyJustWrote
+--- PASS: TestPackApply_SuccessIsVerifiedAgainstTheRootApplyJustWrote (0.01s)
+=== RUN   TestNeutralHostSteps_LaunchdGapNeverReachesTheRealInstaller
+--- PASS: TestNeutralHostSteps_LaunchdGapNeverReachesTheRealInstaller (0.00s)
+=== RUN   TestSetupSteps_KeylessInferenceNeedsNoProviderKey
+--- PASS: TestSetupSteps_KeylessInferenceNeedsNoProviderKey (0.00s)
+=== RUN   TestSetupSteps_ProviderKeysAreAnyOfAndTriState
+=== RUN   TestSetupSteps_ProviderKeysAreAnyOfAndTriState/one_key_is_enough
+=== RUN   TestSetupSteps_ProviderKeysAreAnyOfAndTriState/answered_without_keys
+=== RUN   TestSetupSteps_ProviderKeysAreAnyOfAndTriState/store_failed
+--- PASS: TestSetupSteps_ProviderKeysAreAnyOfAndTriState (0.00s)
+    --- PASS: TestSetupSteps_ProviderKeysAreAnyOfAndTriState/one_key_is_enough (0.00s)
+    --- PASS: TestSetupSteps_ProviderKeysAreAnyOfAndTriState/answered_without_keys (0.00s)
+    --- PASS: TestSetupSteps_ProviderKeysAreAnyOfAndTriState/store_failed (0.00s)
+=== RUN   TestOllamaModelsProbe_ClassifiesTheListing
+=== RUN   TestOllamaModelsProbe_ClassifiesTheListing/all_pulled
+=== RUN   TestOllamaModelsProbe_ClassifiesTheListing/one_missing
+=== RUN   TestOllamaModelsProbe_ClassifiesTheListing/list_failed
+--- PASS: TestOllamaModelsProbe_ClassifiesTheListing (0.00s)
+    --- PASS: TestOllamaModelsProbe_ClassifiesTheListing/all_pulled (0.00s)
+    --- PASS: TestOllamaModelsProbe_ClassifiesTheListing/one_missing (0.00s)
+    --- PASS: TestOllamaModelsProbe_ClassifiesTheListing/list_failed (0.00s)
+=== RUN   TestOllamaModelsProbe_ZeroTagsIsOff
+--- PASS: TestOllamaModelsProbe_ZeroTagsIsOff (0.00s)
+=== RUN   TestOllamaModelsProbe_NoOllamaIsUnknownAndOptional
+--- PASS: TestOllamaModelsProbe_NoOllamaIsUnknownAndOptional (0.00s)
+=== RUN   TestModelsApply_PullsOnlyConfirmedMissingTags
+--- PASS: TestModelsApply_PullsOnlyConfirmedMissingTags (0.00s)
+=== RUN   TestModelsApply_UnreadableListingPullsNothing
+--- PASS: TestModelsApply_UnreadableListingPullsNothing (0.00s)
+=== RUN   TestSetupSteps_UnprovableWorldIsNotReady
+--- PASS: TestSetupSteps_UnprovableWorldIsNotReady (0.00s)
+=== RUN   TestProvidersApply_AsksAndDelegatesTheAnswer
+--- PASS: TestProvidersApply_AsksAndDelegatesTheAnswer (0.00s)
+=== RUN   TestProvidersApply_DefaultsAndDeclines
+=== RUN   TestProvidersApply_DefaultsAndDeclines/bare_Enter_takes_the_default
+=== RUN   TestProvidersApply_DefaultsAndDeclines/explicit_provider
+=== RUN   TestProvidersApply_DefaultsAndDeclines/skip
+=== RUN   TestProvidersApply_DefaultsAndDeclines/no
+--- PASS: TestProvidersApply_DefaultsAndDeclines (0.00s)
+    --- PASS: TestProvidersApply_DefaultsAndDeclines/bare_Enter_takes_the_default (0.00s)
+    --- PASS: TestProvidersApply_DefaultsAndDeclines/explicit_provider (0.00s)
+    --- PASS: TestProvidersApply_DefaultsAndDeclines/skip (0.00s)
+    --- PASS: TestProvidersApply_DefaultsAndDeclines/no (0.00s)
+=== RUN   TestProvidersApply_UnwiredCompositionFails
+--- PASS: TestProvidersApply_UnwiredCompositionFails (0.00s)
+=== RUN   TestProvidersApply_KeylessInferenceIsNeverAskedForAKey
+--- PASS: TestProvidersApply_KeylessInferenceIsNeverAskedForAKey (0.00s)
+=== RUN   TestProvidersProbe_MatchesTheNameTheKeyStoreLists
+--- PASS: TestProvidersProbe_MatchesTheNameTheKeyStoreLists (0.00s)
+=== RUN   TestProvidersProbe_EmptyStoreIsStillAGap
+--- PASS: TestProvidersProbe_EmptyStoreIsStillAGap (0.00s)
+PASS
+ok  	pix/host/workflow/provision	0.140s
+=== RUN   TestAdapters_SandboxProbeUsesCanonicalJSON
+--- PASS: TestAdapters_SandboxProbeUsesCanonicalJSON (0.00s)
+=== RUN   TestAdapters_LeaseCleanupSandboxRemoveArgv
+--- PASS: TestAdapters_LeaseCleanupSandboxRemoveArgv (0.00s)
+=== RUN   TestAdapters_LeaseCleanupAcceptsAlreadyAbsentSandbox
+--- PASS: TestAdapters_LeaseCleanupAcceptsAlreadyAbsentSandbox (0.00s)
+=== RUN   TestAdapters_GitShowArgv
+--- PASS: TestAdapters_GitShowArgv (0.00s)
+=== RUN   TestAdapters_MCPAddArgv
+--- PASS: TestAdapters_MCPAddArgv (0.00s)
+=== RUN   TestAdapters_Integration
+--- PASS: TestAdapters_Integration (0.01s)
+=== RUN   TestAdapters_MCPAuthCaptureSuccess
+--- PASS: TestAdapters_MCPAuthCaptureSuccess (0.00s)
+=== RUN   TestAdapters_MCPAuthCaptureTimeout
+--- PASS: TestAdapters_MCPAuthCaptureTimeout (0.20s)
+=== RUN   TestAdapters_MCPAuthExitZeroBeforeCapture
+--- PASS: TestAdapters_MCPAuthExitZeroBeforeCapture (0.00s)
+=== RUN   TestAdapters_MCPAuthExitBeforeCapture
+--- PASS: TestAdapters_MCPAuthExitBeforeCapture (0.00s)
+=== RUN   TestAdapters_MCPAuthCaptureSuccessWaitSettle
+--- PASS: TestAdapters_MCPAuthCaptureSuccessWaitSettle (0.10s)
+=== RUN   TestAdapters_LeaseCleanupRemovesGlobalTemporaryProfile
+--- PASS: TestAdapters_LeaseCleanupRemovesGlobalTemporaryProfile (0.00s)
+=== RUN   TestAdapters_LeaseRecords
+--- PASS: TestAdapters_LeaseRecords (0.00s)
+=== RUN   TestMCPAuthCaptureErrorImmediate
+--- PASS: TestMCPAuthCaptureErrorImmediate (0.00s)
+=== RUN   TestAdapters_MCPAuthDeadlineOutranksTheKilledProcess
+--- PASS: TestAdapters_MCPAuthDeadlineOutranksTheKilledProcess (1.94s)
+=== RUN   TestReadCaptureFileNoFollow_Unix
+--- PASS: TestReadCaptureFileNoFollow_Unix (0.00s)
+=== RUN   TestCheckLink
+=== RUN   TestCheckLink/success
+=== RUN   TestCheckLink/redirect_to_disallowed
+=== RUN   TestCheckLink/invalid_initial_url
+--- PASS: TestCheckLink (0.00s)
+    --- PASS: TestCheckLink/success (0.00s)
+    --- PASS: TestCheckLink/redirect_to_disallowed (0.00s)
+    --- PASS: TestCheckLink/invalid_initial_url (0.00s)
+=== RUN   TestCandidateSmokeNeverCallsLinkedEnvMatrix
+--- PASS: TestCandidateSmokeNeverCallsLinkedEnvMatrix (0.00s)
+=== RUN   TestCandidateSmokeSentinelDetectsAPlantedViolation
+--- PASS: TestCandidateSmokeSentinelDetectsAPlantedViolation (0.00s)
+=== RUN   TestCandidateSmokeSentinelAllowsCheckNames
+--- PASS: TestCandidateSmokeSentinelAllowsCheckNames (0.00s)
+=== RUN   TestRunCandidateEnvMatrix_ExactBinaryArgvAndCwd
+--- PASS: TestRunCandidateEnvMatrix_ExactBinaryArgvAndCwd (0.00s)
+=== RUN   TestRunCandidateEnvMatrix_NeverCallsSetEnv
+--- PASS: TestRunCandidateEnvMatrix_NeverCallsSetEnv (0.00s)
+=== RUN   TestRunCandidateEnvMatrix_ListsCandidateChecksAsEvidenceBeforeExecution
+--- PASS: TestRunCandidateEnvMatrix_ListsCandidateChecksAsEvidenceBeforeExecution (0.00s)
+=== RUN   TestRunCandidateEnvMatrix_ListChecksBoundRejectsImplausibleCount
+--- PASS: TestRunCandidateEnvMatrix_ListChecksBoundRejectsImplausibleCount (0.00s)
+=== RUN   TestRunCandidateEnvMatrix_ListChecksBoundRejectsEmpty
+--- PASS: TestRunCandidateEnvMatrix_ListChecksBoundRejectsEmpty (0.00s)
+=== RUN   TestRunCandidateEnvMatrix_BoundedLogOnNonzeroFailure
+--- PASS: TestRunCandidateEnvMatrix_BoundedLogOnNonzeroFailure (0.00s)
+=== RUN   TestRunEnvMatrixStep_NilSeamFailsClosed
+--- PASS: TestRunEnvMatrixStep_NilSeamFailsClosed (0.00s)
+=== RUN   TestRunEnvMatrixStep_DelegatesToWiredSeam
+--- PASS: TestRunEnvMatrixStep_DelegatesToWiredSeam (0.00s)
+=== RUN   TestEventLog_UnopenableLogFailsInsteadOfFaulting
+--- PASS: TestEventLog_UnopenableLogFailsInsteadOfFaulting (0.00s)
+=== RUN   TestPublicLinkPolicy
+--- PASS: TestPublicLinkPolicy (0.00s)
+=== RUN   TestProfilePath
+--- PASS: TestProfilePath (0.00s)
+=== RUN   TestTempProfilePath
+--- PASS: TestTempProfilePath (0.00s)
+=== RUN   TestOAuthPolicy
+--- PASS: TestOAuthPolicy (0.00s)
+=== RUN   TestBrowserMethodsRace
+--- PASS: TestBrowserMethodsRace (0.10s)
+=== RUN   TestSubresourceValidationRace
+--- PASS: TestSubresourceValidationRace (0.00s)
+=== RUN   TestBrowserPolicyHandler
+--- PASS: TestBrowserPolicyHandler (0.00s)
+=== RUN   TestBuildNavigateActions
+--- PASS: TestBuildNavigateActions (0.00s)
+=== RUN   TestBrowserAllocatorArgv
+--- PASS: TestBrowserAllocatorArgv (1.12s)
+=== RUN   TestOAuthBrowserConcurrency
+--- PASS: TestOAuthBrowserConcurrency (0.00s)
+=== RUN   TestOAuthBrowserLockHeldDuringLifetime
+    real_browser_test.go:188: skipping because real chrome failed to start: chrome is not installed
+--- SKIP: TestOAuthBrowserLockHeldDuringLifetime (0.00s)
+=== RUN   TestOAuthBrowserCloseIdempotent
+--- PASS: TestOAuthBrowserCloseIdempotent (0.00s)
+=== RUN   TestOAuthBrowserPanicRecovery
+--- PASS: TestOAuthBrowserPanicRecovery (0.00s)
+=== RUN   TestBrowserPolicyRedirectTracking
+--- PASS: TestBrowserPolicyRedirectTracking (0.00s)
+=== RUN   TestDelayedResolverNonBlocking
+--- PASS: TestDelayedResolverNonBlocking (0.20s)
+=== RUN   TestCandidateSmokeFailures
+=== RUN   TestCandidateSmokeFailures/clone_fail
+=== RUN   TestCandidateSmokeFailures/image_build_fail
+=== RUN   TestCandidateSmokeFailures/pix_build_fail
+=== RUN   TestCandidateSmokeFailures/pix-host_build_fail
+=== RUN   TestCandidateSmokeFailures/save_fail
+=== RUN   TestCandidateSmokeFailures/template_load_fail
+=== RUN   TestCandidateSmokeFailures/image_probe_fail
+=== RUN   TestCandidateSmokeFailures/candidate_spawn_fail
+=== RUN   TestCandidateSmokeFailures/sandbox_probe_fail
+--- PASS: TestCandidateSmokeFailures (0.13s)
+    --- PASS: TestCandidateSmokeFailures/clone_fail (0.03s)
+    --- PASS: TestCandidateSmokeFailures/image_build_fail (0.01s)
+    --- PASS: TestCandidateSmokeFailures/pix_build_fail (0.01s)
+    --- PASS: TestCandidateSmokeFailures/pix-host_build_fail (0.01s)
+    --- PASS: TestCandidateSmokeFailures/save_fail (0.01s)
+    --- PASS: TestCandidateSmokeFailures/template_load_fail (0.01s)
+    --- PASS: TestCandidateSmokeFailures/image_probe_fail (0.01s)
+    --- PASS: TestCandidateSmokeFailures/candidate_spawn_fail (0.01s)
+    --- PASS: TestCandidateSmokeFailures/sandbox_probe_fail (0.01s)
+=== RUN   TestSubmitDryRun
+--- PASS: TestSubmitDryRun (0.00s)
+=== RUN   TestSubmitDryRunCandidateSmokeDescribesIsolation
+--- PASS: TestSubmitDryRunCandidateSmokeDescribesIsolation (0.00s)
+=== RUN   TestSubmitAndStatus
+--- PASS: TestSubmitAndStatus (0.11s)
+=== RUN   TestSubmitAndAbort
+--- PASS: TestSubmitAndAbort (0.00s)
+=== RUN   TestCandidateSmoke
+--- PASS: TestCandidateSmoke (0.11s)
+=== RUN   TestCandidateSmoke_DefaultMemoryMatrixFailsClosed
+--- PASS: TestCandidateSmoke_DefaultMemoryMatrixFailsClosed (0.11s)
+=== RUN   TestRunner_Janitor
+--- PASS: TestRunner_Janitor (0.01s)
+=== RUN   TestRunner_CandidateBuildConcurrency
+--- PASS: TestRunner_CandidateBuildConcurrency (1.07s)
+=== RUN   TestMCPServerCapabilitiesExposeVocabularyCoverageAndBrowserState
+--- PASS: TestMCPServerCapabilitiesExposeVocabularyCoverageAndBrowserState (0.02s)
+=== RUN   TestMCPServerDryRunReturnsStructuredIsolationPlan
+--- PASS: TestMCPServerDryRunReturnsStructuredIsolationPlan (0.00s)
+=== RUN   TestMCPServerConcurrency
+--- PASS: TestMCPServerConcurrency (0.91s)
+=== RUN   TestMCPServerIsolation
+--- PASS: TestMCPServerIsolation (0.01s)
+=== RUN   TestMCPServer_EOF_CancelsInFlight
+--- PASS: TestMCPServer_EOF_CancelsInFlight (0.10s)
+=== RUN   TestMCPServer_ShutdownTimeout
+--- PASS: TestMCPServer_ShutdownTimeout (0.06s)
+=== RUN   TestMCPServer_ShutdownWithBlockedWriter
+--- PASS: TestMCPServer_ShutdownWithBlockedWriter (0.10s)
+=== RUN   TestMCPServer_ConcurrentOneFactory
+--- PASS: TestMCPServer_ConcurrentOneFactory (0.15s)
+=== RUN   TestMCPServer_HungStartupShutdown
+--- PASS: TestMCPServer_HungStartupShutdown (0.16s)
+=== RUN   TestMCPServer_ShutdownRacingFactory
+--- PASS: TestMCPServer_ShutdownRacingFactory (0.26s)
+PASS
+ok  	pix/host/workflow/uat	7.028s
+=== RUN   TestParseAgent
+--- PASS: TestParseAgent (0.00s)
+=== RUN   TestParseAgentCRLF
+--- PASS: TestParseAgentCRLF (0.00s)
+=== RUN   TestResolveAgentModel
+--- PASS: TestResolveAgentModel (0.00s)
+=== RUN   TestAgentLs
+--- PASS: TestAgentLs (0.00s)
+=== RUN   TestAgentLsMalformedYAML
+--- PASS: TestAgentLsMalformedYAML (0.00s)
+=== RUN   TestAgentLs_WorksFromAnySubdirectory
+--- PASS: TestAgentLs_WorksFromAnySubdirectory (0.00s)
+=== RUN   TestResolveAgentsDir_NoRosterFound_AccurateGuidance
+--- PASS: TestResolveAgentsDir_NoRosterFound_AccurateGuidance (0.00s)
+=== RUN   TestResolveAgentsDir_ExplicitEnvMustExist
+--- PASS: TestResolveAgentsDir_ExplicitEnvMustExist (0.00s)
+=== RUN   TestScanEmDashSource_SelfTest
+--- PASS: TestScanEmDashSource_SelfTest (0.00s)
+=== RUN   TestPrimaryHelpAndStatusAvoidEmDashes
+--- PASS: TestPrimaryHelpAndStatusAvoidEmDashes (0.00s)
+=== RUN   TestBootstrapProviderKeys_PresentNoOp
+--- PASS: TestBootstrapProviderKeys_PresentNoOp (0.00s)
+=== RUN   TestBootstrapProviderKeys_MissingNoTTY
+--- PASS: TestBootstrapProviderKeys_MissingNoTTY (0.00s)
+=== RUN   TestProbeSbxSecrets_Absent
+--- PASS: TestProbeSbxSecrets_Absent (0.00s)
+=== RUN   TestProbeSbxSecrets_CommandFails
+--- PASS: TestProbeSbxSecrets_CommandFails (0.00s)
+=== RUN   TestSbxAllModelKeysPresent_DistinguishesAbsentFromError
+--- PASS: TestSbxAllModelKeysPresent_DistinguishesAbsentFromError (0.00s)
+=== RUN   TestApplyConfigChange_GoogleWorkspaceAccountRetired
+--- PASS: TestApplyConfigChange_GoogleWorkspaceAccountRetired (0.00s)
+=== RUN   TestApplyConfigChange_MCP
+--- PASS: TestApplyConfigChange_MCP (0.00s)
+=== RUN   TestApplyConfigChange_Services
+--- PASS: TestApplyConfigChange_Services (0.00s)
+=== RUN   TestApplyConfigChange_KnowledgeBundlesRetired
+--- PASS: TestApplyConfigChange_KnowledgeBundlesRetired (0.00s)
+=== RUN   TestApplyConfigChange_Models
+--- PASS: TestApplyConfigChange_Models (0.00s)
+=== RUN   TestApplyConfigChange_MemoryCapture
+--- PASS: TestApplyConfigChange_MemoryCapture (0.00s)
+=== RUN   TestApplyConfigChange_UnknownKey
+--- PASS: TestApplyConfigChange_UnknownKey (0.00s)
+=== RUN   TestConfigSaveRoundTrip
+--- PASS: TestConfigSaveRoundTrip (0.00s)
+=== RUN   TestConfigCmd_Show
+--- PASS: TestConfigCmd_Show (0.00s)
+=== RUN   TestConfigCmd_ShowIsDefault
+--- PASS: TestConfigCmd_ShowIsDefault (0.00s)
+=== RUN   TestConfigCmd_Path
+--- PASS: TestConfigCmd_Path (0.00s)
+=== RUN   TestConfigCmd_PathOpRefs
+--- PASS: TestConfigCmd_PathOpRefs (0.00s)
+=== RUN   TestConfigCmd_PathBadArgument
+--- PASS: TestConfigCmd_PathBadArgument (0.00s)
+=== RUN   TestConfigCmd_GetStdoutIsClean
+--- PASS: TestConfigCmd_GetStdoutIsClean (0.00s)
+=== RUN   TestConfigCmd_GetUnknownKey
+--- PASS: TestConfigCmd_GetUnknownKey (0.00s)
+=== RUN   TestConfigCmd_GetRemovedKey
+--- PASS: TestConfigCmd_GetRemovedKey (0.00s)
+=== RUN   TestConfigCmd_SetAndUnset
+--- PASS: TestConfigCmd_SetAndUnset (0.00s)
+=== RUN   TestConfigCmd_SetArityError
+--- PASS: TestConfigCmd_SetArityError (0.00s)
+=== RUN   TestConfigCmd_SetRemovedKey
+--- PASS: TestConfigCmd_SetRemovedKey (0.00s)
+=== RUN   TestConfigCmd_SetUnknownKey
+--- PASS: TestConfigCmd_SetUnknownKey (0.00s)
+=== RUN   TestConfigCmd_Help
+--- PASS: TestConfigCmd_Help (0.00s)
+=== RUN   TestConfigCmd_BadFlag
+--- PASS: TestConfigCmd_BadFlag (0.00s)
+=== RUN   TestConfigCmd_SetEnvironmentRefused
+--- PASS: TestConfigCmd_SetEnvironmentRefused (0.00s)
+=== RUN   TestConfigCmd_UnsetEnvironmentRefused
+--- PASS: TestConfigCmd_UnsetEnvironmentRefused (0.00s)
+=== RUN   TestConfigCmd_SetEnvironmentsRegistryRefused
+--- PASS: TestConfigCmd_SetEnvironmentsRegistryRefused (0.00s)
+=== RUN   TestConfigCmd_UnsetEnvironmentsRegistryRefused
+--- PASS: TestConfigCmd_UnsetEnvironmentsRegistryRefused (0.00s)
+=== RUN   TestConfigCmd_SetExactEnvironmentsKeyRefused
+--- PASS: TestConfigCmd_SetExactEnvironmentsKeyRefused (0.00s)
+=== RUN   TestConfigCmd_UnsetExactEnvironmentsKeyRefused
+--- PASS: TestConfigCmd_UnsetExactEnvironmentsKeyRefused (0.00s)
+=== RUN   TestConfigCmd_EnvironmentRefusalDoesNotWriteFile
+--- PASS: TestConfigCmd_EnvironmentRefusalDoesNotWriteFile (0.00s)
+=== RUN   TestConfigValue
+=== RUN   TestConfigValue/mcp
+=== RUN   TestConfigValue/services
+=== RUN   TestConfigValue/memory_watcher_model
+=== RUN   TestConfigValue/memory_embed_model
+=== RUN   TestConfigValue/ollama_bridge_model
+=== RUN   TestConfigValue/run_intent
+=== RUN   TestConfigValue/memory_capture
+=== RUN   TestConfigValue/pack
+=== RUN   TestConfigValue/host.autoserve
+=== RUN   TestConfigValue/nope
+=== RUN   TestConfigValue/#00
+=== RUN   TestConfigValue/google_workspace_account
+--- PASS: TestConfigValue (0.00s)
+    --- PASS: TestConfigValue/mcp (0.00s)
+    --- PASS: TestConfigValue/services (0.00s)
+    --- PASS: TestConfigValue/memory_watcher_model (0.00s)
+    --- PASS: TestConfigValue/memory_embed_model (0.00s)
+    --- PASS: TestConfigValue/ollama_bridge_model (0.00s)
+    --- PASS: TestConfigValue/run_intent (0.00s)
+    --- PASS: TestConfigValue/memory_capture (0.00s)
+    --- PASS: TestConfigValue/pack (0.00s)
+    --- PASS: TestConfigValue/host.autoserve (0.00s)
+    --- PASS: TestConfigValue/nope (0.00s)
+    --- PASS: TestConfigValue/#00 (0.00s)
+    --- PASS: TestConfigValue/google_workspace_account (0.00s)
+=== RUN   TestConfigValue_KnowledgeBundlesRetired
+--- PASS: TestConfigValue_KnowledgeBundlesRetired (0.00s)
+=== RUN   TestConfigValue_EmptyList
+--- PASS: TestConfigValue_EmptyList (0.00s)
+=== RUN   TestNoRawGogAuthLoginInProductionSource
+--- PASS: TestNoRawGogAuthLoginInProductionSource (0.00s)
+=== RUN   TestDefaultShellEnvWriteFile_CreatesRegularFile
+--- PASS: TestDefaultShellEnvWriteFile_CreatesRegularFile (0.00s)
+=== RUN   TestDefaultShellEnvWriteFile_ReplacesLeafSymlinkTargetUntouched
+--- PASS: TestDefaultShellEnvWriteFile_ReplacesLeafSymlinkTargetUntouched (0.00s)
+=== RUN   TestEnvBareIsLs
+--- PASS: TestEnvBareIsLs (0.01s)
+=== RUN   TestEnvShow_NoSelection
+--- PASS: TestEnvShow_NoSelection (0.00s)
+=== RUN   TestEnvShow_NoSelectionJSON
+--- PASS: TestEnvShow_NoSelectionJSON (0.00s)
+=== RUN   TestEnvShow_PathByteExact
+--- PASS: TestEnvShow_PathByteExact (0.00s)
+=== RUN   TestEnvShow_PathWithNoSelectionRefuses
+--- PASS: TestEnvShow_PathWithNoSelectionRefuses (0.00s)
+=== RUN   TestEnvShow_UnknownNameExact
+--- PASS: TestEnvShow_UnknownNameExact (0.00s)
+=== RUN   TestEnvShow_EffectiveNotYetAvailable
+--- PASS: TestEnvShow_EffectiveNotYetAvailable (0.00s)
+=== RUN   TestEnvShow_FlagsMutuallyExclusive
+--- PASS: TestEnvShow_FlagsMutuallyExclusive (0.01s)
+=== RUN   TestEnvReview_NonTTYFailsClosed
+--- PASS: TestEnvReview_NonTTYFailsClosed (0.00s)
+=== RUN   TestEnvReview_YesAccepts
+--- PASS: TestEnvReview_YesAccepts (0.01s)
+=== RUN   TestEnvShow_WithLocalSidecarSkillSucceeds
+--- PASS: TestEnvShow_WithLocalSidecarSkillSucceeds (0.00s)
+=== RUN   TestEnvReview_WithLocalSidecarSkillSucceeds
+--- PASS: TestEnvReview_WithLocalSidecarSkillSucceeds (0.00s)
+=== RUN   TestEnvAdd_RegisterTier0
+--- PASS: TestEnvAdd_RegisterTier0 (0.01s)
+=== RUN   TestEnvAdd_RegisterTier1_NonTTYFailsClosedTransactionally
+--- PASS: TestEnvAdd_RegisterTier1_NonTTYFailsClosedTransactionally (0.01s)
+=== RUN   TestEnvAdd_NonTTYRetryCommandIsShellTokenizableAndRedispatchSucceeds
+--- PASS: TestEnvAdd_NonTTYRetryCommandIsShellTokenizableAndRedispatchSucceeds (0.01s)
+=== RUN   TestEnvAdd_RegisterTier1_YesAccepts
+--- PASS: TestEnvAdd_RegisterTier1_YesAccepts (0.00s)
+=== RUN   TestEnvAdd_ZeroPathScaffoldsUnderDataDir
+--- PASS: TestEnvAdd_ZeroPathScaffoldsUnderDataDir (0.00s)
+=== RUN   TestEnvAdd_ZeroPathCwdAmbiguityRefusesNamingBothForms
+--- PASS: TestEnvAdd_ZeroPathCwdAmbiguityRefusesNamingBothForms (0.00s)
+=== RUN   TestEnvUse_Tier0Succeeds
+--- PASS: TestEnvUse_Tier0Succeeds (0.00s)
+=== RUN   TestEnvUse_UnreviewedTier1Refuses
+--- PASS: TestEnvUse_UnreviewedTier1Refuses (0.00s)
+=== RUN   TestEnvUse_ReviewedThenChangedRefuses
+--- PASS: TestEnvUse_ReviewedThenChangedRefuses (0.01s)
+=== RUN   TestEnvUse_ConfigMutationIsOnlyTheEnvironmentKey
+--- PASS: TestEnvUse_ConfigMutationIsOnlyTheEnvironmentKey (0.00s)
+=== RUN   TestEnvForget_SucceedsAndLeavesSourceByteIdentical
+--- PASS: TestEnvForget_SucceedsAndLeavesSourceByteIdentical (0.00s)
+=== RUN   TestEnvForget_CurrentDefaultRefuses
+--- PASS: TestEnvForget_CurrentDefaultRefuses (0.01s)
+=== RUN   TestEnvForget_UnknownNameRefuses
+--- PASS: TestEnvForget_UnknownNameRefuses (0.00s)
+=== RUN   TestEnvRm_IsAPointerErrorWithZeroMutation
+--- PASS: TestEnvRm_IsAPointerErrorWithZeroMutation (0.01s)
+=== RUN   TestRmPointerName_SkipsFlagsFindsFirstPositional
+--- PASS: TestRmPointerName_SkipsFlagsFindsFirstPositional (0.00s)
+=== RUN   TestSanitizeRmPointerName_DropsControlCharsAndCapsLength
+--- PASS: TestSanitizeRmPointerName_DropsControlCharsAndCapsLength (0.00s)
+=== RUN   TestEnvRm_ControlCharArgNeverForgesExtraOutputLine
+--- PASS: TestEnvRm_ControlCharArgNeverForgesExtraOutputLine (0.00s)
+=== RUN   TestEnvRmPointerError_ShellQuotesMetacharacters
+--- PASS: TestEnvRmPointerError_ShellQuotesMetacharacters (0.00s)
+=== RUN   TestEnvRmPointerError_QuotedInjectionIsInertUnderShellTokenizer
+--- PASS: TestEnvRmPointerError_QuotedInjectionIsInertUnderShellTokenizer (0.00s)
+=== RUN   TestEnvRmPointerError_SandboxNamingIsFrozenPRDContractNotCurrentNaming
+--- PASS: TestEnvRmPointerError_SandboxNamingIsFrozenPRDContractNotCurrentNaming (0.00s)
+=== RUN   TestEnvRm_AbsentFromHelp
+--- PASS: TestEnvRm_AbsentFromHelp (0.00s)
+=== RUN   TestEnvRm_HelpListsExactlySevenWorkingVerbs
+--- PASS: TestEnvRm_HelpListsExactlySevenWorkingVerbs (0.00s)
+=== RUN   TestEnvUse_HelpNamesTheActualGate
+--- PASS: TestEnvUse_HelpNamesTheActualGate (0.00s)
+=== RUN   TestEnvEdit_TargetTokenTable
+=== RUN   TestEnvEdit_TargetTokenTable/pix
+=== RUN   TestEnvEdit_TargetTokenTable/sbxenv
+=== RUN   TestEnvEdit_TargetTokenTable/unrecognized
+--- PASS: TestEnvEdit_TargetTokenTable (0.01s)
+    --- PASS: TestEnvEdit_TargetTokenTable/pix (0.00s)
+    --- PASS: TestEnvEdit_TargetTokenTable/sbxenv (0.00s)
+    --- PASS: TestEnvEdit_TargetTokenTable/unrecognized (0.00s)
+=== RUN   TestEnvEdit_NonTTYNoTargetExitsTwo
+--- PASS: TestEnvEdit_NonTTYNoTargetExitsTwo (0.00s)
+=== RUN   TestEnvEdit_TTYNoTargetPromptsAndReadsChoice
+--- PASS: TestEnvEdit_TTYNoTargetPromptsAndReadsChoice (0.00s)
+=== RUN   TestEnvEdit_BothUnsetPrintsPathAndExitsZero
+--- PASS: TestEnvEdit_BothUnsetPrintsPathAndExitsZero (0.00s)
+=== RUN   TestEnvEdit_ArgvSpacesNoShell
+--- PASS: TestEnvEdit_ArgvSpacesNoShell (0.00s)
+=== RUN   TestEnvEdit_EditorFailureIsOperationalNonTwo
+--- PASS: TestEnvEdit_EditorFailureIsOperationalNonTwo (0.00s)
+=== RUN   TestEnvEdit_VerdictOkReviewInvalid
+=== RUN   TestEnvEdit_VerdictOkReviewInvalid/ok:_accepted_and_unchanged
+=== RUN   TestEnvEdit_VerdictOkReviewInvalid/review:_never_accepted
+=== RUN   TestEnvEdit_VerdictOkReviewInvalid/ok:_Tier0_with_no_acceptance_record_at_all
+=== RUN   TestEnvEdit_VerdictOkReviewInvalid/invalid:_corrupted_by_the_editor
+--- PASS: TestEnvEdit_VerdictOkReviewInvalid (0.02s)
+    --- PASS: TestEnvEdit_VerdictOkReviewInvalid/ok:_accepted_and_unchanged (0.01s)
+    --- PASS: TestEnvEdit_VerdictOkReviewInvalid/review:_never_accepted (0.00s)
+    --- PASS: TestEnvEdit_VerdictOkReviewInvalid/ok:_Tier0_with_no_acceptance_record_at_all (0.01s)
+    --- PASS: TestEnvEdit_VerdictOkReviewInvalid/invalid:_corrupted_by_the_editor (0.00s)
+=== RUN   TestEnvEdit_NoSbxenvFlagInHelp
+--- PASS: TestEnvEdit_NoSbxenvFlagInHelp (0.00s)
+=== RUN   TestEnvUse_StaleDepsCacheCannotLoseConcurrentRegistration
+--- PASS: TestEnvUse_StaleDepsCacheCannotLoseConcurrentRegistration (0.00s)
+=== RUN   TestEnvForget_StaleDepsCacheCannotLoseConcurrentRegistration
+--- PASS: TestEnvForget_StaleDepsCacheCannotLoseConcurrentRegistration (0.00s)
+=== RUN   TestEnvCmd_NoDirectConfigSaveInEnvVerbs
+--- PASS: TestEnvCmd_NoDirectConfigSaveInEnvVerbs (0.00s)
+=== RUN   TestEnvCopyLint_SelfTest
+=== RUN   TestEnvCopyLint_SelfTest/em_dash
+=== RUN   TestEnvCopyLint_SelfTest/filler_word
+=== RUN   TestEnvCopyLint_SelfTest/unearned_success_word
+=== RUN   TestEnvCopyLint_SelfTest/sbx_env_rm
+--- PASS: TestEnvCopyLint_SelfTest (0.00s)
+    --- PASS: TestEnvCopyLint_SelfTest/em_dash (0.00s)
+    --- PASS: TestEnvCopyLint_SelfTest/filler_word (0.00s)
+    --- PASS: TestEnvCopyLint_SelfTest/unearned_success_word (0.00s)
+    --- PASS: TestEnvCopyLint_SelfTest/sbx_env_rm (0.00s)
+=== RUN   TestEnvCopyLint_SourceLiterals
+--- PASS: TestEnvCopyLint_SourceLiterals (0.00s)
+=== RUN   TestEnvCopyLint_UnknownNameNeverAsksAQuestion
+--- PASS: TestEnvCopyLint_UnknownNameNeverAsksAQuestion (0.01s)
+=== RUN   TestEnvCopyLint_RmPointerNamesRealCommandsOnly
+--- PASS: TestEnvCopyLint_RmPointerNamesRealCommandsOnly (0.00s)
+=== RUN   TestEnvCopyLint_SevenVerbsExactOrderNoRetiredFlags
+--- PASS: TestEnvCopyLint_SevenVerbsExactOrderNoRetiredFlags (0.00s)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/bare_env
+    env_nontty_test.go:166: dispatch([env]) = 0 (stdout 109B, stderr 0B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_ls
+    env_nontty_test.go:166: dispatch([env ls]) = 0 (stdout 109B, stderr 0B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_add_missing_NAME
+    env_nontty_test.go:166: dispatch([env add]) = 2 (stdout 0B, stderr 23B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_add_zero-path_tier0
+    env_nontty_test.go:166: dispatch([env add home]) = 2 (stdout 0B, stderr 189B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_add_tier1_non-interactive_(TTY-sensitive)
+    env_nontty_test.go:166: dispatch([env add work /tmp/TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCodeenv_add3923532925/002]) = 2 (stdout 433B, stderr 254B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_use_missing_NAME
+    env_nontty_test.go:166: dispatch([env use]) = 2 (stdout 0B, stderr 23B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_use_unknown
+    env_nontty_test.go:166: dispatch([env use ghost]) = 2 (stdout 0B, stderr 97B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_show_no_args
+    env_nontty_test.go:166: dispatch([env show]) = 0 (stdout 100B, stderr 0B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_show_unknown
+    env_nontty_test.go:166: dispatch([env show ghost]) = 2 (stdout 0B, stderr 97B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_edit_missing_NAME
+    env_nontty_test.go:166: dispatch([env edit]) = 2 (stdout 0B, stderr 23B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_edit_no_target,_registered_(TTY-sensitive)
+    env_nontty_test.go:166: dispatch([env edit work]) = 2 (stdout 0B, stderr 173B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_review_missing_NAME
+    env_nontty_test.go:166: dispatch([env review]) = 2 (stdout 0B, stderr 23B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_review_registered_tier1_(TTY-sensitive)
+    env_nontty_test.go:166: dispatch([env review work]) = 2 (stdout 433B, stderr 174B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_forget_missing_NAME
+    env_nontty_test.go:166: dispatch([env forget]) = 2 (stdout 0B, stderr 23B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_forget_unknown
+    env_nontty_test.go:166: dispatch([env forget ghost]) = 2 (stdout 0B, stderr 97B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_rm_bare
+    env_nontty_test.go:166: dispatch([env rm]) = 2 (stdout 0B, stderr 253B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_rm_with_name_and_flags
+    env_nontty_test.go:166: dispatch([env rm home --force]) = 2 (stdout 0B, stderr 253B)
+=== RUN   TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_unknown_verb
+    env_nontty_test.go:166: dispatch([env bogus]) = 2 (stdout 0B, stderr 31B)
+--- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode (0.04s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/bare_env (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_ls (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_add_missing_NAME (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_add_zero-path_tier0 (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_add_tier1_non-interactive_(TTY-sensitive) (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_use_missing_NAME (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_use_unknown (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_show_no_args (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_show_unknown (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_edit_missing_NAME (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_edit_no_target,_registered_(TTY-sensitive) (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_review_missing_NAME (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_review_registered_tier1_(TTY-sensitive) (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_forget_missing_NAME (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_forget_unknown (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_rm_bare (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_rm_with_name_and_flags (0.00s)
+    --- PASS: TestEnvNonTTY_EverySurfaceTerminatesWithADefinedExitCode/env_unknown_verb (0.00s)
+=== RUN   TestCleanupGeneratedKitDirsRemovesSynthesizedKitsOnly
+--- PASS: TestCleanupGeneratedKitDirsRemovesSynthesizedKitsOnly (0.00s)
+=== RUN   TestEveryHealthFix_IsALiveCommand
+--- PASS: TestEveryHealthFix_IsALiveCommand (0.01s)
+=== RUN   TestRendererPurity
+--- PASS: TestRendererPurity (0.03s)
+=== RUN   TestGlyphExemptIsShrinking
+--- PASS: TestGlyphExemptIsShrinking (0.00s)
+=== RUN   TestRendererPuritySelfTest
+--- PASS: TestRendererPuritySelfTest (0.00s)
+=== RUN   TestReadinessModelIsRetired
+--- PASS: TestReadinessModelIsRetired (0.05s)
+=== RUN   TestLaunchGateRefusesOnlyAPositiveNoKey
+=== RUN   TestLaunchGateRefusesOnlyAPositiveNoKey/listing_names_a_key
+=== RUN   TestLaunchGateRefusesOnlyAPositiveNoKey/listing_answers_with_no_model_key
+=== RUN   TestLaunchGateRefusesOnlyAPositiveNoKey/store_fails
+=== RUN   TestLaunchGateRefusesOnlyAPositiveNoKey/store_refuses
+--- PASS: TestLaunchGateRefusesOnlyAPositiveNoKey (0.00s)
+    --- PASS: TestLaunchGateRefusesOnlyAPositiveNoKey/listing_names_a_key (0.00s)
+    --- PASS: TestLaunchGateRefusesOnlyAPositiveNoKey/listing_answers_with_no_model_key (0.00s)
+    --- PASS: TestLaunchGateRefusesOnlyAPositiveNoKey/store_fails (0.00s)
+    --- PASS: TestLaunchGateRefusesOnlyAPositiveNoKey/store_refuses (0.00s)
+=== RUN   TestLaunchGateTimeoutIsUnknownAndNeverRefuses
+--- PASS: TestLaunchGateTimeoutIsUnknownAndNeverRefuses (0.05s)
+=== RUN   TestLaunchGateProbeModelKeysUsesTheProductionBudget
+--- PASS: TestLaunchGateProbeModelKeysUsesTheProductionBudget (0.00s)
+=== RUN   TestLaunchGateEvidenceCarriesARunnableFix
+--- PASS: TestLaunchGateEvidenceCarriesARunnableFix (0.00s)
+=== RUN   TestRunWarningsAreCappedAndNeverBlock
+--- PASS: TestRunWarningsAreCappedAndNeverBlock (0.00s)
+=== RUN   TestRunWarningsRenderThroughTheSharedVocabulary
+--- PASS: TestRunWarningsRenderThroughTheSharedVocabulary (0.00s)
+=== RUN   TestWantsHelp
+--- PASS: TestWantsHelp (0.00s)
+=== RUN   TestParseRunArgs_NonDirWorkspaceRejected
+--- PASS: TestParseRunArgs_NonDirWorkspaceRejected (0.01s)
+=== RUN   TestParseRunArgs_ExistingDirOK
+--- PASS: TestParseRunArgs_ExistingDirOK (0.00s)
+=== RUN   TestValidateRunWorkspace
+--- PASS: TestValidateRunWorkspace (0.00s)
+=== RUN   TestRunHelpIsGeneratedUsage
+--- PASS: TestRunHelpIsGeneratedUsage (0.01s)
+=== RUN   TestFlagSetHelp
+--- PASS: TestFlagSetHelp (0.00s)
+=== RUN   TestFlagSetJSONOptIn
+--- PASS: TestFlagSetJSONOptIn (0.00s)
+=== RUN   TestMemoryHelp_NoRPC
+--- PASS: TestMemoryHelp_NoRPC (0.00s)
+=== RUN   TestHelpVerb_RoutesToGeneratedUsage
+--- PASS: TestHelpVerb_RoutesToGeneratedUsage (0.05s)
+=== RUN   TestHelpAll_ListsExpertVerbs
+--- PASS: TestHelpAll_ListsExpertVerbs (0.00s)
+=== RUN   TestHelpAll_EnvIsFirstUnderConfigAndContext
+--- PASS: TestHelpAll_EnvIsFirstUnderConfigAndContext (0.00s)
+=== RUN   TestHelpAll_NoEnvCurrentVerb
+--- PASS: TestHelpAll_NoEnvCurrentVerb (0.00s)
+=== RUN   TestEnvHelp_PerVerbFirstLinesMatchPRD
+--- PASS: TestEnvHelp_PerVerbFirstLinesMatchPRD (0.00s)
+=== RUN   TestSuggestVerb
+--- PASS: TestSuggestVerb (0.00s)
+=== RUN   TestStatusAndDoctorFlagsAreTyped
+--- PASS: TestStatusAndDoctorFlagsAreTyped (0.01s)
+=== RUN   TestMCPHelpListsEverySubcommand
+--- PASS: TestMCPHelpListsEverySubcommand (0.00s)
+=== RUN   TestHostAutoserveConfigKey
+--- PASS: TestHostAutoserveConfigKey (0.00s)
+=== RUN   TestFindHostBinaryRejectsVersionSkew
+--- PASS: TestFindHostBinaryRejectsVersionSkew (0.00s)
+=== RUN   TestFindHostBinaryAcceptsExactVersion
+--- PASS: TestFindHostBinaryAcceptsExactVersion (0.00s)
+=== RUN   TestNoHostModeExecutionSymbols
+--- PASS: TestNoHostModeExecutionSymbols (0.03s)
+=== RUN   TestNoKnowledgeExecutionSymbols
+--- PASS: TestNoKnowledgeExecutionSymbols (0.02s)
+=== RUN   TestForbiddenSymbolSentinelDetectsAPlantedViolation
+--- PASS: TestForbiddenSymbolSentinelDetectsAPlantedViolation (0.00s)
+=== RUN   TestNoExtensionBranchesOnHostMode
+--- PASS: TestNoExtensionBranchesOnHostMode (0.00s)
+=== RUN   TestHostGuardExtensionDeleted
+--- PASS: TestHostGuardExtensionDeleted (0.00s)
+=== RUN   TestRunHostRefusesAndExecutesNothing
+--- PASS: TestRunHostRefusesAndExecutesNothing (0.47s)
+=== RUN   TestBuildHostState
+--- PASS: TestBuildHostState (0.00s)
+=== RUN   TestBuildHostState_NotProvisioned
+--- PASS: TestBuildHostState_NotProvisioned (0.00s)
+=== RUN   TestBuildHostState_KeylessGatewayCountsAsResolvedInference
+--- PASS: TestBuildHostState_KeylessGatewayCountsAsResolvedInference (0.00s)
+=== RUN   TestReadGitIdentity
+--- PASS: TestReadGitIdentity (0.00s)
+=== RUN   TestSanitizeIdentity
+--- PASS: TestSanitizeIdentity (0.00s)
+=== RUN   TestSbxModelKeyState
+--- PASS: TestSbxModelKeyState (0.00s)
+=== RUN   TestInjectTrustedHostState_GeneratedPromptGetsJSON
+--- PASS: TestInjectTrustedHostState_GeneratedPromptGetsJSON (0.00s)
+=== RUN   TestInjectTrustedHostState_UserPromptUntouched
+--- PASS: TestInjectTrustedHostState_UserPromptUntouched (0.00s)
+=== RUN   TestInjectTrustedHostState_NoGeneratedArg_NoProbe
+--- PASS: TestInjectTrustedHostState_NoGeneratedArg_NoProbe (0.00s)
+=== RUN   TestInjectTrustedHostState_ReturnsCopy
+--- PASS: TestInjectTrustedHostState_ReturnsCopy (0.00s)
+=== RUN   TestEncodeTrustedHostState_EncodingFailureReturnsError
+--- PASS: TestEncodeTrustedHostState_EncodingFailureReturnsError (0.00s)
+=== RUN   TestBuildTrustedHostState_MatchesBuildHostStateShape
+--- PASS: TestBuildTrustedHostState_MatchesBuildHostStateShape (0.00s)
+=== RUN   TestInjectTrustedHostState_ReportsMCPNamesOnly
+--- PASS: TestInjectTrustedHostState_ReportsMCPNamesOnly (0.00s)
+=== RUN   TestInjectTrustedHostState_IgnoresStaleWorkspaceFile
+--- PASS: TestInjectTrustedHostState_IgnoresStaleWorkspaceFile (0.00s)
+=== RUN   TestResolveHostStatePack_DefaultExistsButInactive
+--- PASS: TestResolveHostStatePack_DefaultExistsButInactive (0.00s)
+=== RUN   TestResolveHostStatePack_NothingConfiguredNothingOnDisk
+--- PASS: TestResolveHostStatePack_NothingConfiguredNothingOnDisk (0.00s)
+=== RUN   TestResolveHostStatePack_ActiveAlternate
+--- PASS: TestResolveHostStatePack_ActiveAlternate (0.00s)
+=== RUN   TestResolveHostStatePack_ActiveDefault
+--- PASS: TestResolveHostStatePack_ActiveDefault (0.00s)
+=== RUN   TestConfigureOllamaInferenceBindsUnverifiedCandidates
+--- PASS: TestConfigureOllamaInferenceBindsUnverifiedCandidates (0.00s)
+=== RUN   TestOllamaLocalSelectionBindsNoCloudModel
+--- PASS: TestOllamaLocalSelectionBindsNoCloudModel (0.00s)
+=== RUN   TestOllamaLocalWithNoCatalogModelPulledSucceeds
+--- PASS: TestOllamaLocalWithNoCatalogModelPulledSucceeds (0.00s)
+=== RUN   TestOllamaLocalSkipsRungsThisMachineCannotRun
+--- PASS: TestOllamaLocalSkipsRungsThisMachineCannotRun (0.00s)
+=== RUN   TestVerifyOllamaInferencePromotesOnlyAnsweringModels
+--- PASS: TestVerifyOllamaInferencePromotesOnlyAnsweringModels (0.00s)
+=== RUN   TestVerifiedBindingRecordsProbeProvenance
+--- PASS: TestVerifiedBindingRecordsProbeProvenance (0.00s)
+=== RUN   TestNilOllamaProbeSeamLeavesBindingsUnverified
+--- PASS: TestNilOllamaProbeSeamLeavesBindingsUnverified (0.00s)
+=== RUN   TestVerifyOllamaInferenceUsesResolvedEndpoint
+--- PASS: TestVerifyOllamaInferenceUsesResolvedEndpoint (5.00s)
+=== RUN   TestLocalOllamaProbesAreSerialized
+--- PASS: TestLocalOllamaProbesAreSerialized (0.06s)
+=== RUN   TestLocalProbeOrderIsLargestRungFirst
+--- PASS: TestLocalProbeOrderIsLargestRungFirst (0.01s)
+=== RUN   TestLocalProbeBudgetMarksRemainderNotProbedNotFailed
+--- PASS: TestLocalProbeBudgetMarksRemainderNotProbedNotFailed (0.08s)
+=== RUN   TestLocalProbeSendsKeepAliveZeroAndRungContext
+--- PASS: TestLocalProbeSendsKeepAliveZeroAndRungContext (0.00s)
+=== RUN   TestLiveOllamaProbeRejectsUnauthorized
+--- PASS: TestLiveOllamaProbeRejectsUnauthorized (0.00s)
+=== RUN   TestUnverifiedOllamaBindingIsNotCallable
+--- PASS: TestUnverifiedOllamaBindingIsNotCallable (0.00s)
+=== RUN   TestPackDeclaredOllamaBindingStaysCallableWithoutHostProof
+--- PASS: TestPackDeclaredOllamaBindingStaysCallableWithoutHostProof (0.02s)
+=== RUN   TestNonInteractiveModelsFlagRejectsUnprobedModel
+--- PASS: TestNonInteractiveModelsFlagRejectsUnprobedModel (0.00s)
+=== RUN   TestSynthesizeInferenceKitErrorNamesTheFix
+--- PASS: TestSynthesizeInferenceKitErrorNamesTheFix (0.00s)
+=== RUN   TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears
+--- PASS: TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears (0.01s)
+=== RUN   TestPackOnePasswordBindingStillNeedsHostProof
+--- PASS: TestPackOnePasswordBindingStillNeedsHostProof (0.00s)
+=== RUN   TestEmptyOllamaSelectionPersistsNothing
+=== RUN   TestEmptyOllamaSelectionPersistsNothing/cloud_selected_while_signed_out
+=== RUN   TestEmptyOllamaSelectionPersistsNothing/local_selected_on_a_machine_under_the_floor
+--- PASS: TestEmptyOllamaSelectionPersistsNothing (0.00s)
+    --- PASS: TestEmptyOllamaSelectionPersistsNothing/cloud_selected_while_signed_out (0.00s)
+    --- PASS: TestEmptyOllamaSelectionPersistsNothing/local_selected_on_a_machine_under_the_floor (0.00s)
+=== RUN   TestConfigureOllamaInferenceBindsUnknownPulledLocalModel
+--- PASS: TestConfigureOllamaInferenceBindsUnknownPulledLocalModel (0.00s)
+=== RUN   TestConfigureOllamaInferenceClassifiesUnknownCloudTagAndSkipsRAMGate
+--- PASS: TestConfigureOllamaInferenceClassifiesUnknownCloudTagAndSkipsRAMGate (0.00s)
+=== RUN   TestConfigureOllamaInferenceUnclassifiedUnknownTagFailsClosed
+--- PASS: TestConfigureOllamaInferenceUnclassifiedUnknownTagFailsClosed (0.00s)
+=== RUN   TestConfigureOllamaInferenceUnknownTagIdempotent
+--- PASS: TestConfigureOllamaInferenceUnknownTagIdempotent (0.00s)
+=== RUN   TestConfigureOllamaInferenceUnreachableDaemonStaysNonFatal
+--- PASS: TestConfigureOllamaInferenceUnreachableDaemonStaysNonFatal (0.00s)
+=== RUN   TestConfigureOllamaInferenceNeverPrintsSuccessWordsForAListing
+--- PASS: TestConfigureOllamaInferenceNeverPrintsSuccessWordsForAListing (0.00s)
+=== RUN   TestCompileInferenceRuntimeNoModelAndExclusiveFiltering
+--- PASS: TestCompileInferenceRuntimeNoModelAndExclusiveFiltering (0.00s)
+=== RUN   TestCompileInferenceRuntimeCarriesAdaptiveThinkingFromCatalog
+--- PASS: TestCompileInferenceRuntimeCarriesAdaptiveThinkingFromCatalog (0.00s)
+=== RUN   TestConfigureDirectInferenceUsesCatalog
+--- PASS: TestConfigureDirectInferenceUsesCatalog (0.00s)
+=== RUN   TestConfigureModelRosterRestrictsRuntimeAndRoutes
+--- PASS: TestConfigureModelRosterRestrictsRuntimeAndRoutes (0.00s)
+=== RUN   TestConfigureModelRosterPreservesPersonalChoiceUnderExclusivePack
+--- PASS: TestConfigureModelRosterPreservesPersonalChoiceUnderExclusivePack (0.00s)
+=== RUN   TestConfigureModelRosterRejectsUnavailableChoice
+--- PASS: TestConfigureModelRosterRejectsUnavailableChoice (0.00s)
+=== RUN   TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey
+=== RUN   TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey/provider_rejected_model_request_(HTTP_401)
+=== RUN   TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey/probe_unavailable
+--- PASS: TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey (0.00s)
+    --- PASS: TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey/provider_rejected_model_request_(HTTP_401) (0.00s)
+    --- PASS: TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey/probe_unavailable (0.00s)
+=== RUN   TestDirectInferenceProbeVerifiesOnlySuccessfulModel
+--- PASS: TestDirectInferenceProbeVerifiesOnlySuccessfulModel (0.00s)
+=== RUN   TestExclusiveKeylessInferenceIgnoresDormantOnePasswordBackend
+--- PASS: TestExclusiveKeylessInferenceIgnoresDormantOnePasswordBackend (0.00s)
+=== RUN   TestExclusiveBackendKeylessInferenceIgnoresDormantOnePasswordBackend
+--- PASS: TestExclusiveBackendKeylessInferenceIgnoresDormantOnePasswordBackend (0.00s)
+=== RUN   TestActiveUnverifiedOnePasswordBindingStillNeedsOnePassword
+--- PASS: TestActiveUnverifiedOnePasswordBindingStillNeedsOnePassword (0.00s)
+=== RUN   TestBuildSbxArgsConstrainsModelCycleToCallableBindings
+--- PASS: TestBuildSbxArgsConstrainsModelCycleToCallableBindings (0.00s)
+=== RUN   TestInferenceAllowsOnlyMaterializedRuntimeID
+--- PASS: TestInferenceAllowsOnlyMaterializedRuntimeID (0.00s)
+=== RUN   TestSetupPackFlagIsRepeatableAndOrdered
+--- PASS: TestSetupPackFlagIsRepeatableAndOrdered (0.00s)
+=== RUN   TestInferenceKitSpecGeneratesSessionCredentialAndEgress
+--- PASS: TestInferenceKitSpecGeneratesSessionCredentialAndEgress (0.00s)
+=== RUN   TestInferenceKitSpecPreservesAPIKeyHeaderWithoutBearerPrefix
+--- PASS: TestInferenceKitSpecPreservesAPIKeyHeaderWithoutBearerPrefix (0.00s)
+=== RUN   TestInferenceKitSpecUsesAmbientDockerSessionContract
+--- PASS: TestInferenceKitSpecUsesAmbientDockerSessionContract (0.00s)
+=== RUN   TestInferenceKitSpecRejectsSbxSessionBackendMissingBothCredentialFields
+--- PASS: TestInferenceKitSpecRejectsSbxSessionBackendMissingBothCredentialFields (0.00s)
+=== RUN   TestInferenceKitSpecRejectsSbxSessionBackendMissingKeyEnvOnly
+--- PASS: TestInferenceKitSpecRejectsSbxSessionBackendMissingKeyEnvOnly (0.00s)
+=== RUN   TestInferenceKitSpecRejectsSbxSessionBackendMissingCredentialServiceOnly
+--- PASS: TestInferenceKitSpecRejectsSbxSessionBackendMissingCredentialServiceOnly (0.00s)
+=== RUN   TestInferenceKitSpecMergesTwoHeadersUnderOneCredentialIdentity
+--- PASS: TestInferenceKitSpecMergesTwoHeadersUnderOneCredentialIdentity (0.00s)
+=== RUN   TestInferenceKitSpecCollapsesIdenticalInjectRule
+--- PASS: TestInferenceKitSpecCollapsesIdenticalInjectRule (0.00s)
+=== RUN   TestInferenceKitSpecCoversTwoDomainsUnderOneCredentialIdentitySorted
+--- PASS: TestInferenceKitSpecCoversTwoDomainsUnderOneCredentialIdentitySorted (0.00s)
+=== RUN   TestInferenceKitSpecOrdersCredentialsByServiceThenNameDeterministically
+--- PASS: TestInferenceKitSpecOrdersCredentialsByServiceThenNameDeterministically (0.00s)
+=== RUN   TestLocalKitArgs
+--- PASS: TestLocalKitArgs (0.00s)
+=== RUN   TestValidateCreateKitsFailsBeforeLaunchWithUpgrade
+--- PASS: TestValidateCreateKitsFailsBeforeLaunchWithUpgrade (0.00s)
+=== RUN   TestValidateCreateKitsSkipsRemoteRefs
+--- PASS: TestValidateCreateKitsSkipsRemoteRefs (0.00s)
+=== RUN   TestValidateSetupKitChecksUnreleasedCheckout
+--- PASS: TestValidateSetupKitChecksUnreleasedCheckout (0.00s)
+=== RUN   TestBaseKitUsesStrictV2Grammar
+--- PASS: TestBaseKitUsesStrictV2Grammar (0.00s)
+=== RUN   TestResolveKitRef_Precedence
+=== RUN   TestResolveKitRef_Precedence/flag_beats_everything
+=== RUN   TestResolveKitRef_Precedence/config_pin_becomes_a_tag
+=== RUN   TestResolveKitRef_Precedence/config_pin_accepts_a_v_prefix
+=== RUN   TestResolveKitRef_Precedence/config_pin_passes_a_branch_through
+=== RUN   TestResolveKitRef_Precedence/released_default_stays_stamped
+=== RUN   TestResolveKitRef_Precedence/unreleased_build_uses_local_handling
+=== RUN   TestResolveKitRef_Precedence/dev_build_uses_local_handling
+--- PASS: TestResolveKitRef_Precedence (0.00s)
+    --- PASS: TestResolveKitRef_Precedence/flag_beats_everything (0.00s)
+    --- PASS: TestResolveKitRef_Precedence/config_pin_becomes_a_tag (0.00s)
+    --- PASS: TestResolveKitRef_Precedence/config_pin_accepts_a_v_prefix (0.00s)
+    --- PASS: TestResolveKitRef_Precedence/config_pin_passes_a_branch_through (0.00s)
+    --- PASS: TestResolveKitRef_Precedence/released_default_stays_stamped (0.00s)
+    --- PASS: TestResolveKitRef_Precedence/unreleased_build_uses_local_handling (0.00s)
+    --- PASS: TestResolveKitRef_Precedence/dev_build_uses_local_handling (0.00s)
+=== RUN   TestResolveKitRef_UnreleasedUsesLocalHandling
+--- PASS: TestResolveKitRef_UnreleasedUsesLocalHandling (0.00s)
+=== RUN   TestKitRefNotice
+--- PASS: TestKitRefNotice (0.00s)
+=== RUN   TestBuildSbxArgs_KitRefOverridesStampedPin
+--- PASS: TestBuildSbxArgs_KitRefOverridesStampedPin (0.00s)
+=== RUN   TestParseRunArgs_KitRef
+--- PASS: TestParseRunArgs_KitRef (0.00s)
+=== RUN   TestBuildSbxArgs_PackKits_NeverSuppressesBaseKit
+--- PASS: TestBuildSbxArgs_PackKits_NeverSuppressesBaseKit (0.00s)
+=== RUN   TestApplyPackToLaunch_BrokenActivePackFailsClosed
+--- PASS: TestApplyPackToLaunch_BrokenActivePackFailsClosed (0.00s)
+=== RUN   TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy
+--- PASS: TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy (0.00s)
+=== RUN   TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix
+=== RUN   TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/host_proxy_script_bytes
+=== RUN   TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/external_bin_pin
+=== RUN   TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/container_image
+=== RUN   TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/host_command_argv
+=== RUN   TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/remote_MCP_endpoint
+=== RUN   TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/setup_hook_bytes
+=== RUN   TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/service_unit_pin
+=== RUN   TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/inference_credential_routing
+--- PASS: TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix (0.01s)
+    --- PASS: TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/host_proxy_script_bytes (0.00s)
+    --- PASS: TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/external_bin_pin (0.00s)
+    --- PASS: TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/container_image (0.00s)
+    --- PASS: TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/host_command_argv (0.00s)
+    --- PASS: TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/remote_MCP_endpoint (0.00s)
+    --- PASS: TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/setup_hook_bytes (0.00s)
+    --- PASS: TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/service_unit_pin (0.00s)
+    --- PASS: TestLaunchTrust_Tier1MutationAfterAcceptanceMatrix/inference_credential_routing (0.00s)
+=== RUN   TestLaunchTrust_Tier0PackNeedsNoAcceptance
+--- PASS: TestLaunchTrust_Tier0PackNeedsNoAcceptance (0.00s)
+=== RUN   TestLaunchTrust_HostCommandMCPIsGatedAtLaunch
+--- PASS: TestLaunchTrust_HostCommandMCPIsGatedAtLaunch (0.00s)
+=== RUN   TestLaunchTrust_TransportlessIntegrationRefusedAtLoad
+--- PASS: TestLaunchTrust_TransportlessIntegrationRefusedAtLoad (0.00s)
+=== RUN   TestKitRef
+--- PASS: TestKitRef (0.00s)
+=== RUN   TestIsReleased
+--- PASS: TestIsReleased (0.00s)
+=== RUN   TestBuildSbxArgs_UnreleasedWithCheckout
+--- PASS: TestBuildSbxArgs_UnreleasedWithCheckout (0.00s)
+=== RUN   TestBuildSbxArgs_UnreleasedWithCheckoutNoImageTag
+--- PASS: TestBuildSbxArgs_UnreleasedWithCheckoutNoImageTag (0.00s)
+=== RUN   TestBuildSbxArgs_UnreleasedNoCheckoutTracksMain
+--- PASS: TestBuildSbxArgs_UnreleasedNoCheckoutTracksMain (0.00s)
+=== RUN   TestBuildSbxArgs_KitOverrideWins
+--- PASS: TestBuildSbxArgs_KitOverrideWins (0.00s)
+=== RUN   TestBuildSbxArgs_ExplicitTemplate
+--- PASS: TestBuildSbxArgs_ExplicitTemplate (0.00s)
+=== RUN   TestBuildSbxArgs_ExplicitTemplateBeatsLocalImageTag
+--- PASS: TestBuildSbxArgs_ExplicitTemplateBeatsLocalImageTag (0.00s)
+=== RUN   TestBuildSbxArgs_TemplateOrthogonalToKit
+--- PASS: TestBuildSbxArgs_TemplateOrthogonalToKit (0.00s)
+=== RUN   TestParseRunArgs_Template
+--- PASS: TestParseRunArgs_Template (0.00s)
+=== RUN   TestTemplateTag
+--- PASS: TestTemplateTag (0.00s)
+=== RUN   TestKitResolveFailureMsg
+--- PASS: TestKitResolveFailureMsg (0.00s)
+=== RUN   TestBuildSbxArgs_VersionPin
+--- PASS: TestBuildSbxArgs_VersionPin (0.00s)
+=== RUN   TestBuildSbxArgs_DevVersionTracksMain
+--- PASS: TestBuildSbxArgs_DevVersionTracksMain (0.00s)
+=== RUN   TestBuildSbxArgs_KitStacking
+--- PASS: TestBuildSbxArgs_KitStacking (0.00s)
+=== RUN   TestBuildSbxArgs_StackWithoutOverride
+--- PASS: TestBuildSbxArgs_StackWithoutOverride (0.00s)
+=== RUN   TestBuildSbxArgs_MCPExpansion
+--- PASS: TestBuildSbxArgs_MCPExpansion (0.00s)
+=== RUN   TestAllPreloadedMCP
+--- PASS: TestAllPreloadedMCP (0.00s)
+=== RUN   TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded
+--- PASS: TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded (0.00s)
+=== RUN   TestBuildSbxArgs_DevBranch
+--- PASS: TestBuildSbxArgs_DevBranch (0.00s)
+=== RUN   TestBuildSbxArgs_NameModelPassthrough
+--- PASS: TestBuildSbxArgs_NameModelPassthrough (0.00s)
+=== RUN   TestApplyConfiguredSessionModel_DefaultAndOptOut
+--- PASS: TestApplyConfiguredSessionModel_DefaultAndOptOut (0.00s)
+=== RUN   TestBuildSbxArgs_LiveSkillsMountedAndLoaded
+--- PASS: TestBuildSbxArgs_LiveSkillsMountedAndLoaded (0.00s)
+=== RUN   TestParseRunArgs
+=== RUN   TestParseRunArgs/defaults
+=== RUN   TestParseRunArgs/dir_first
+=== RUN   TestParseRunArgs/flags_then_dir
+=== RUN   TestParseRunArgs/dir_then_flags
+=== RUN   TestParseRunArgs/eq_form
+=== RUN   TestParseRunArgs/dev
+=== RUN   TestParseRunArgs/repeatable
+=== RUN   TestParseRunArgs/passthrough
+--- PASS: TestParseRunArgs (0.01s)
+    --- PASS: TestParseRunArgs/defaults (0.00s)
+    --- PASS: TestParseRunArgs/dir_first (0.00s)
+    --- PASS: TestParseRunArgs/flags_then_dir (0.00s)
+    --- PASS: TestParseRunArgs/dir_then_flags (0.00s)
+    --- PASS: TestParseRunArgs/eq_form (0.00s)
+    --- PASS: TestParseRunArgs/dev (0.00s)
+    --- PASS: TestParseRunArgs/repeatable (0.00s)
+    --- PASS: TestParseRunArgs/passthrough (0.00s)
+=== RUN   TestParseRunArgs_Errors
+--- PASS: TestParseRunArgs_Errors (0.00s)
+=== RUN   TestAnyModelKeyPresent
+=== RUN   TestAnyModelKeyPresent/no_model_key
+=== RUN   TestAnyModelKeyPresent/model_key_present
+=== RUN   TestAnyModelKeyPresent/sbx_absent_->_cannot_verify_(false)
+--- PASS: TestAnyModelKeyPresent (0.00s)
+    --- PASS: TestAnyModelKeyPresent/no_model_key (0.00s)
+    --- PASS: TestAnyModelKeyPresent/model_key_present (0.00s)
+    --- PASS: TestAnyModelKeyPresent/sbx_absent_->_cannot_verify_(false) (0.00s)
+=== RUN   TestModelKeyMissingMessage
+--- PASS: TestModelKeyMissingMessage (0.00s)
+=== RUN   TestClassifyBareArg
+=== RUN   TestClassifyBareArg/path-like_->_no_such_directory
+=== RUN   TestClassifyBareArg/bare-word_typo_->_did_you_mean
+--- PASS: TestClassifyBareArg (0.00s)
+    --- PASS: TestClassifyBareArg/path-like_->_no_such_directory (0.00s)
+    --- PASS: TestClassifyBareArg/bare-word_typo_->_did_you_mean (0.00s)
+=== RUN   TestBareInvocationLaunchesOnlyAtATerminal
+--- PASS: TestBareInvocationLaunchesOnlyAtATerminal (0.00s)
+=== RUN   TestMemoryCmd_ServiceDownMessage_NeverTellsUserToStartAnotherDaemon
+--- PASS: TestMemoryCmd_ServiceDownMessage_NeverTellsUserToStartAnotherDaemon (0.00s)
+=== RUN   TestEnsureMemoryTimeoutIsPinnedAt3s
+--- PASS: TestEnsureMemoryTimeoutIsPinnedAt3s (0.00s)
+=== RUN   TestMemoryCmd_ForgetMiss_Exit1AndStderr
+--- PASS: TestMemoryCmd_ForgetMiss_Exit1AndStderr (0.00s)
+=== RUN   TestMemoryCmd_ForgetMissJSON_ParseableStdoutHonestExit
+--- PASS: TestMemoryCmd_ForgetMissJSON_ParseableStdoutHonestExit (0.00s)
+=== RUN   TestMemoryCmd_ForgetHit_Exit0AndStdout
+--- PASS: TestMemoryCmd_ForgetHit_Exit0AndStdout (0.00s)
+=== RUN   TestNoRetiredMemorySymbols
+--- PASS: TestNoRetiredMemorySymbols (0.02s)
+=== RUN   TestModelsStatus_RendersToDepsOut
+--- PASS: TestModelsStatus_RendersToDepsOut (0.00s)
+=== RUN   TestModelsAdd_RejectsOllamaFlagsOnAKeyedProvider
+--- PASS: TestModelsAdd_RejectsOllamaFlagsOnAKeyedProvider (0.00s)
+=== RUN   TestModelsAdd_ValidatesProviderFromOneList
+--- PASS: TestModelsAdd_ValidatesProviderFromOneList (0.01s)
+=== RUN   TestModelsHasNoRouteVerb
+--- PASS: TestModelsHasNoRouteVerb (0.00s)
+=== RUN   TestExitCodeTable
+--- PASS: TestExitCodeTable (0.00s)
+=== RUN   TestModelsAddAcceptsOllama
+--- PASS: TestModelsAddAcceptsOllama (0.00s)
+=== RUN   TestReconcileOllamaInference_BindsProbesAndWidens
+--- PASS: TestReconcileOllamaInference_BindsProbesAndWidens (0.00s)
+=== RUN   TestReconcileOllamaInference_RefusesUnderExclusivePack
+--- PASS: TestReconcileOllamaInference_RefusesUnderExclusivePack (0.00s)
+=== RUN   TestWidenRosterForProvider_OnlyTouchesTheNamedProvider
+--- PASS: TestWidenRosterForProvider_OnlyTouchesTheNamedProvider (0.00s)
+=== RUN   TestInferenceManifestCarriesOllamaModels
+--- PASS: TestInferenceManifestCarriesOllamaModels (0.00s)
+=== RUN   TestVerify_NilProbeSeamIsLoud
+--- PASS: TestVerify_NilProbeSeamIsLoud (0.00s)
+=== RUN   TestReconcileWidensRosterForNewProviderOnLegacyConfig
+--- PASS: TestReconcileWidensRosterForNewProviderOnLegacyConfig (0.00s)
+=== RUN   TestReconcileWithNoNewProviderLeavesRosterAlone
+--- PASS: TestReconcileWithNoNewProviderLeavesRosterAlone (0.00s)
+=== RUN   TestReconcileRefusesUnderMandatoryPack
+--- PASS: TestReconcileRefusesUnderMandatoryPack (0.00s)
+=== RUN   TestUnwiredProviderKeysReportsOnlyTheGap
+--- PASS: TestUnwiredProviderKeysReportsOnlyTheGap (0.00s)
+=== RUN   TestSecretSetNudgesTowardWiring
+--- PASS: TestSecretSetNudgesTowardWiring (0.00s)
+=== RUN   TestPackBinary_SuccessWritesStdoutAndExitsZero
+--- PASS: TestPackBinary_SuccessWritesStdoutAndExitsZero (0.00s)
+=== RUN   TestPackBinary_OperationErrorIsExit1OnStdout
+--- PASS: TestPackBinary_OperationErrorIsExit1OnStdout (0.00s)
+=== RUN   TestPackBinary_Tier1NonTTYFailsClosed
+--- PASS: TestPackBinary_Tier1NonTTYFailsClosed (0.00s)
+=== RUN   TestPackInferenceValidationIsGenericAndFailClosed
+--- PASS: TestPackInferenceValidationIsGenericAndFailClosed (0.00s)
+=== RUN   TestPackInferenceReapplyPreservesOnlyMatchingEvidence
+--- PASS: TestPackInferenceReapplyPreservesOnlyMatchingEvidence (0.00s)
+=== RUN   TestPackInferenceSbxSessionAcceptedPackYieldsCallableBindingAndRoute
+--- PASS: TestPackInferenceSbxSessionAcceptedPackYieldsCallableBindingAndRoute (0.00s)
+=== RUN   TestPackInference1PasswordBindingRemainsUnavailableUntilProbe
+--- PASS: TestPackInference1PasswordBindingRemainsUnavailableUntilProbe (0.00s)
+=== RUN   TestPackInferenceCannotReplaceBackendFromAnotherSource
+--- PASS: TestPackInferenceCannotReplaceBackendFromAnotherSource (0.00s)
+=== RUN   TestPackInferenceCredentialRoutingIsTrustGatedAndValidated
+--- PASS: TestPackInferenceCredentialRoutingIsTrustGatedAndValidated (0.00s)
+=== RUN   TestPackInferenceCredentialRoutingIsReverifiedAtLaunch
+--- PASS: TestPackInferenceCredentialRoutingIsReverifiedAtLaunch (0.00s)
+=== RUN   TestPackInferenceRejectsModelOutsideCatalog
+--- PASS: TestPackInferenceRejectsModelOutsideCatalog (0.00s)
+=== RUN   TestPackInferenceRejectsUnknownBackend
+--- PASS: TestPackInferenceRejectsUnknownBackend (0.00s)
+=== RUN   TestPersistPackStackComposesInferenceInOrder
+--- PASS: TestPersistPackStackComposesInferenceInOrder (0.00s)
+=== RUN   TestPersistPackStackLaterNonExclusiveClearsExclusivity
+--- PASS: TestPersistPackStackLaterNonExclusiveClearsExclusivity (0.00s)
+=== RUN   TestClearPackInferencePreservesUserBackends
+--- PASS: TestClearPackInferencePreservesUserBackends (0.00s)
+=== RUN   TestWritePackContextFiles_WritesMemoryScopeAndOllamaModel
+--- PASS: TestWritePackContextFiles_WritesMemoryScopeAndOllamaModel (0.00s)
+=== RUN   TestWritePackContextFiles_NoPack_UnscopedMemoryDefaultModel
+--- PASS: TestWritePackContextFiles_NoPack_UnscopedMemoryDefaultModel (0.00s)
+=== RUN   TestWritePackContextFiles_PackOverrideWins
+--- PASS: TestWritePackContextFiles_PackOverrideWins (0.00s)
+=== RUN   TestPersonalContextUsesXDGDataAndGeneratesAgentLayer
+--- PASS: TestPersonalContextUsesXDGDataAndGeneratesAgentLayer (0.00s)
+=== RUN   TestFirstRunFlowNudgesNeverHandles
+--- PASS: TestFirstRunFlowNudgesNeverHandles (0.00s)
+=== RUN   TestReadmeHasOnePrimaryPath
+--- PASS: TestReadmeHasOnePrimaryPath (0.00s)
+=== RUN   TestReadmePrimaryPathUsesHomebrew
+--- PASS: TestReadmePrimaryPathUsesHomebrew (0.00s)
+=== RUN   TestReadmeHasNoLegacyInstallerPath
+--- PASS: TestReadmeHasNoLegacyInstallerPath (0.00s)
+=== RUN   TestReadmePackExamplesStayPublic
+--- PASS: TestReadmePackExamplesStayPublic (0.00s)
+=== RUN   TestReadmePrimaryPathCommandsExist
+--- PASS: TestReadmePrimaryPathCommandsExist (0.00s)
+=== RUN   TestRouteUsage_ConsumerPathsAreLiveOverrideDir
+--- PASS: TestRouteUsage_ConsumerPathsAreLiveOverrideDir (0.00s)
+=== RUN   TestRouteUsage_EmbeddedRepoSourceIsLabeledMaintainerOnly
+--- PASS: TestRouteUsage_EmbeddedRepoSourceIsLabeledMaintainerOnly (0.00s)
+=== RUN   TestNoUnlabeledRepoRoutingDefaultsInSource
+--- PASS: TestNoUnlabeledRepoRoutingDefaultsInSource (0.00s)
+=== RUN   TestRunMcpLs_AbsentSbxExitsServiceDown
+--- PASS: TestRunMcpLs_AbsentSbxExitsServiceDown (0.00s)
+=== RUN   TestRunMcpAuth_AbsentSbxExitsServiceDown
+--- PASS: TestRunMcpAuth_AbsentSbxExitsServiceDown (0.00s)
+=== RUN   TestRunMcpAddURL_AbsentSbxExitsServiceDown
+--- PASS: TestRunMcpAddURL_AbsentSbxExitsServiceDown (0.00s)
+=== RUN   TestRunMcpAdd_AbsentSbxExitsServiceDownNoConfigMutation
+--- PASS: TestRunMcpAdd_AbsentSbxExitsServiceDownNoConfigMutation (0.00s)
+=== RUN   TestVerifyCatalogMCPReady_Ready
+--- PASS: TestVerifyCatalogMCPReady_Ready (0.00s)
+=== RUN   TestVerifyCatalogMCPReady_UnregisteredNamesAddAndAuth
+--- PASS: TestVerifyCatalogMCPReady_UnregisteredNamesAddAndAuth (0.00s)
+=== RUN   TestVerifyCatalogMCPReady_UnauthorizedNamesAuthCommand
+--- PASS: TestVerifyCatalogMCPReady_UnauthorizedNamesAuthCommand (0.00s)
+=== RUN   TestVerifyCatalogMCPReady_ExplicitPolicyDenial
+--- PASS: TestVerifyCatalogMCPReady_ExplicitPolicyDenial (0.00s)
+=== RUN   TestVerifyCatalogMCPReady_ProbeFailureIsUnverifiableRetry
+--- PASS: TestVerifyCatalogMCPReady_ProbeFailureIsUnverifiableRetry (0.00s)
+=== RUN   TestVerifyCatalogMCPReady_NonCatalogNamesNeverProbed
+--- PASS: TestVerifyCatalogMCPReady_NonCatalogNamesNeverProbed (0.00s)
+=== RUN   TestReconcileOnboarding_CatalogGateLeavesFileAndConfig
+--- PASS: TestReconcileOnboarding_CatalogGateLeavesFileAndConfig (0.00s)
+=== RUN   TestRunWithTimeoutD_HangingProcessBounded
+--- PASS: TestRunWithTimeoutD_HangingProcessBounded (0.10s)
+=== RUN   TestProbeSbxSecrets_HangingSbxIsErrorNotAbsent
+--- PASS: TestProbeSbxSecrets_HangingSbxIsErrorNotAbsent (0.10s)
+=== RUN   TestSbxModelKeyState_HangingProbeUnknownProceeds
+--- PASS: TestSbxModelKeyState_HangingProbeUnknownProceeds (0.10s)
+=== RUN   TestMcpLoadSandbox_IsRunsOwnDefaultName
+--- PASS: TestMcpLoadSandbox_IsRunsOwnDefaultName (0.00s)
+=== RUN   TestPublishWorkflowStampsVersions
+--- PASS: TestPublishWorkflowStampsVersions (0.00s)
+=== RUN   TestVersionFilesAgreeAtBase
+--- PASS: TestVersionFilesAgreeAtBase (0.00s)
+=== RUN   TestProbeTaskSandbox_HangingSbxIsUnknownBounded
+--- PASS: TestProbeTaskSandbox_HangingSbxIsUnknownBounded (0.10s)
+=== RUN   TestProbeTaskSandbox_UsesBoundedSeam
+--- PASS: TestProbeTaskSandbox_UsesBoundedSeam (0.00s)
+=== RUN   TestSetupHandoff_HangingSbxFailsClosed
+--- PASS: TestSetupHandoff_HangingSbxFailsClosed (0.11s)
+=== RUN   TestLocalImageLoaded_HangingSbxBounded
+--- PASS: TestLocalImageLoaded_HangingSbxBounded (0.11s)
+=== RUN   TestEnsureProviderKeysFromRefs_HangingSbxBoundedNoMutation
+--- PASS: TestEnsureProviderKeysFromRefs_HangingSbxBoundedNoMutation (0.10s)
+=== RUN   TestBuildTrustedHostState_HangingSbxBounded
+--- PASS: TestBuildTrustedHostState_HangingSbxBounded (0.21s)
+=== RUN   TestResolveSandboxName_ExplicitNameIsVerbatim
+--- PASS: TestResolveSandboxName_ExplicitNameIsVerbatim (0.00s)
+=== RUN   TestResolveSandboxName_DefaultIsDigestForm
+--- PASS: TestResolveSandboxName_DefaultIsDigestForm (0.00s)
+=== RUN   TestResolveSandboxName_SameBasenameCollision
+--- PASS: TestResolveSandboxName_SameBasenameCollision (0.00s)
+=== RUN   TestSessionKeyFor_IsTheFinalResolvedName
+--- PASS: TestSessionKeyFor_IsTheFinalResolvedName (0.00s)
+=== RUN   TestSessionKeyFor_DifferentExplicitNamesOnOneWorkspaceNeverCollide
+--- PASS: TestSessionKeyFor_DifferentExplicitNamesOnOneWorkspaceNeverCollide (0.00s)
+=== RUN   TestResumeOptsTargetsExactSession
+--- PASS: TestResumeOptsTargetsExactSession (0.00s)
+=== RUN   TestResumeOptsRejectsMissingWorkspace
+--- PASS: TestResumeOptsRejectsMissingWorkspace (0.00s)
+=== RUN   TestRootOwnsEveryVerb
+--- PASS: TestRootOwnsEveryVerb (0.01s)
+=== RUN   TestKnownVerbsDerivedFromRoot
+--- PASS: TestKnownVerbsDerivedFromRoot (0.05s)
+=== RUN   TestTieredHelpStaysShort
+--- PASS: TestTieredHelpStaysShort (0.00s)
+=== RUN   TestHelpTextMoreLine_NamesOnlyLiveVerbs
+--- PASS: TestHelpTextMoreLine_NamesOnlyLiveVerbs (0.01s)
+=== RUN   TestTieredHelpTiersMatchGeneratedGroups
+--- PASS: TestTieredHelpTiersMatchGeneratedGroups (0.00s)
+=== RUN   TestRootHelpIsTheCuratedScreen
+--- PASS: TestRootHelpIsTheCuratedScreen (0.01s)
+=== RUN   TestDispatch_BareNonTTY_RefusesWithNoCreate
+--- PASS: TestDispatch_BareNonTTY_RefusesWithNoCreate (0.00s)
+=== RUN   TestDispatch_BareInteractive_StillLaunches
+--- PASS: TestDispatch_BareInteractive_StillLaunches (0.00s)
+=== RUN   TestDispatch_BareInteractive_NeverTouchesARealSandbox
+--- PASS: TestDispatch_BareInteractive_NeverTouchesARealSandbox (0.00s)
+=== RUN   TestMigratedVerbHelpIsGenerated
+--- PASS: TestMigratedVerbHelpIsGenerated (0.02s)
+=== RUN   TestExitMapper
+--- PASS: TestExitMapper (0.02s)
+=== RUN   TestLegacyVerbsArePassthrough
+--- PASS: TestLegacyVerbsArePassthrough (0.00s)
+=== RUN   TestVersionIsTyped
+--- PASS: TestVersionIsTyped (0.00s)
+=== RUN   TestBareDevFlagMeansRunDev
+--- PASS: TestBareDevFlagMeansRunDev (0.00s)
+=== RUN   TestTaskNameThenVerbRewrite
+--- PASS: TestTaskNameThenVerbRewrite (0.00s)
+=== RUN   TestBareTaskPrintsUsage
+--- PASS: TestBareTaskPrintsUsage (0.00s)
+=== RUN   TestComposeStaticMCP_IncludesPackContributionWithoutMutatingCfg
+--- PASS: TestComposeStaticMCP_IncludesPackContributionWithoutMutatingCfg (0.00s)
+=== RUN   TestGateSbxVersion_TooOldFailsClosedWithExactCopy
+--- PASS: TestGateSbxVersion_TooOldFailsClosedWithExactCopy (0.00s)
+=== RUN   TestGateSbxVersion_UnparsableFailsClosed
+--- PASS: TestGateSbxVersion_UnparsableFailsClosed (0.00s)
+=== RUN   TestGateSbxVersion_AcceptedVersionsProceedSilently
+=== RUN   TestGateSbxVersion_AcceptedVersionsProceedSilently/0.39.0
+=== RUN   TestGateSbxVersion_AcceptedVersionsProceedSilently/0.40.1
+--- PASS: TestGateSbxVersion_AcceptedVersionsProceedSilently (0.00s)
+    --- PASS: TestGateSbxVersion_AcceptedVersionsProceedSilently/0.39.0 (0.00s)
+    --- PASS: TestGateSbxVersion_AcceptedVersionsProceedSilently/0.40.1 (0.00s)
+=== RUN   TestGateSbxVersion_MissingSbxDoesNotBlock
+--- PASS: TestGateSbxVersion_MissingSbxDoesNotBlock (0.00s)
+=== RUN   TestGateSbxVersion_DeniedDoesNotBlock
+--- PASS: TestGateSbxVersion_DeniedDoesNotBlock (0.00s)
+=== RUN   TestUATSmokeProviderKeyGateBypassIsExplicit
+--- PASS: TestUATSmokeProviderKeyGateBypassIsExplicit (0.00s)
+=== RUN   TestRunPassthrough_TailReachesPiVerbatim
+--- PASS: TestRunPassthrough_TailReachesPiVerbatim (0.00s)
+=== RUN   TestRunPassthrough_HelpAfterTerminatorIsPis
+--- PASS: TestRunPassthrough_HelpAfterTerminatorIsPis (0.00s)
+=== RUN   TestRewriteRunPassthrough_OnlyTheTail
+--- PASS: TestRewriteRunPassthrough_OnlyTheTail (0.00s)
+=== RUN   TestBareDirIsRun
+--- PASS: TestBareDirIsRun (0.00s)
+=== RUN   TestPlanSandboxLaunch_AbsentCreates
+--- PASS: TestPlanSandboxLaunch_AbsentCreates (0.00s)
+=== RUN   TestPlanSandboxLaunch_RunningReattaches
+--- PASS: TestPlanSandboxLaunch_RunningReattaches (0.00s)
+=== RUN   TestPlanSandboxLaunch_StoppedReattaches
+--- PASS: TestPlanSandboxLaunch_StoppedReattaches (0.00s)
+=== RUN   TestPlanSandboxLaunch_UnknownFailsClosed
+--- PASS: TestPlanSandboxLaunch_UnknownFailsClosed (0.00s)
+=== RUN   TestBuildReattachArgs_NoPassthrough
+--- PASS: TestBuildReattachArgs_NoPassthrough (0.00s)
+=== RUN   TestBuildReattachArgs_ForwardsModel
+--- PASS: TestBuildReattachArgs_ForwardsModel (0.00s)
+=== RUN   TestBuildReattachArgs_ModelAndPassthrough
+--- PASS: TestBuildReattachArgs_ModelAndPassthrough (0.00s)
+=== RUN   TestBuildReattachArgs_PassthroughOnly_NoModel
+--- PASS: TestBuildReattachArgs_PassthroughOnly_NoModel (0.00s)
+=== RUN   TestBuildReattachArgs_NeitherModelNorPassthrough
+--- PASS: TestBuildReattachArgs_NeitherModelNorPassthrough (0.00s)
+=== RUN   TestRunDevResolution_SkippedOnAttach
+--- PASS: TestRunDevResolution_SkippedOnAttach (0.00s)
+=== RUN   TestRunHasNoReplaceFlag
+--- PASS: TestRunHasNoReplaceFlag (0.00s)
+=== RUN   TestLocalImageLoaded
+--- PASS: TestLocalImageLoaded (0.00s)
+=== RUN   TestRunCmd_OnlyExecHandoffUsesRawOSStdio
+--- PASS: TestRunCmd_OnlyExecHandoffUsesRawOSStdio (0.00s)
+=== RUN   TestParsePixBoxes
+--- PASS: TestParsePixBoxes (0.00s)
+=== RUN   TestParsePixBoxes_DoesNotMistakePackMountForWorkspace
+--- PASS: TestParsePixBoxes_DoesNotMistakePackMountForWorkspace (0.00s)
+=== RUN   TestParsePixBoxes_Empty
+--- PASS: TestParsePixBoxes_Empty (0.00s)
+=== RUN   TestRunLs_AbsentSbxExitsServiceDown
+--- PASS: TestRunLs_AbsentSbxExitsServiceDown (0.00s)
+=== RUN   TestRunRm_AbsentSbxExitsServiceDown
+--- PASS: TestRunRm_AbsentSbxExitsServiceDown (0.00s)
+=== RUN   TestSecretCheckRejectsTrailingArg
+--- PASS: TestSecretCheckRejectsTrailingArg (0.00s)
+=== RUN   TestSecretCmdArgCounts
+=== RUN   TestSecretCmdArgCounts/set_too_few
+=== RUN   TestSecretCmdArgCounts/set_too_many
+=== RUN   TestSecretCmdArgCounts/rm_too_many
+=== RUN   TestSecretCmdArgCounts/unknown
+--- PASS: TestSecretCmdArgCounts (0.01s)
+    --- PASS: TestSecretCmdArgCounts/set_too_few (0.00s)
+    --- PASS: TestSecretCmdArgCounts/set_too_many (0.00s)
+    --- PASS: TestSecretCmdArgCounts/rm_too_many (0.00s)
+    --- PASS: TestSecretCmdArgCounts/unknown (0.00s)
+=== RUN   TestSecretHelpConfigIndependent
+--- PASS: TestSecretHelpConfigIndependent (0.00s)
+=== RUN   TestSecretSetWriteFailure_DispatcherExitsNonzero
+--- PASS: TestSecretSetWriteFailure_DispatcherExitsNonzero (0.00s)
+=== RUN   TestSecretRm_DispatcherExitsNonzeroOnFailure
+--- PASS: TestSecretRm_DispatcherExitsNonzeroOnFailure (0.00s)
+=== RUN   TestGworkspaceSkill_DisclosesConversationExposure
+--- PASS: TestGworkspaceSkill_DisclosesConversationExposure (0.00s)
+=== RUN   TestNormalizeSetupPackArg
+--- PASS: TestNormalizeSetupPackArg (0.00s)
+=== RUN   TestEnvShow_FlagConflictRetryShellQuotesInjectedName
+--- PASS: TestEnvShow_FlagConflictRetryShellQuotesInjectedName (0.00s)
+=== RUN   TestShellQuoteAudit_SelfTest
+--- PASS: TestShellQuoteAudit_SelfTest (0.00s)
+=== RUN   TestShellQuoteAudit_SourceLiterals
+--- PASS: TestShellQuoteAudit_SourceLiterals (0.00s)
+=== RUN   TestTaskNewCmd_RequiresName
+--- PASS: TestTaskNewCmd_RequiresName (0.00s)
+=== RUN   TestTaskNewCmd_UnknownFlagRejected
+--- PASS: TestTaskNewCmd_UnknownFlagRejected (0.00s)
+=== RUN   TestTaskNewCmd_WorktreeFlag
+--- PASS: TestTaskNewCmd_WorktreeFlag (0.00s)
+=== RUN   TestTaskNewCmd_DefaultMechanismIsClone
+--- PASS: TestTaskNewCmd_DefaultMechanismIsClone (0.00s)
+=== RUN   TestTaskNewPassthrough_StripsLeadingDashDash
+--- PASS: TestTaskNewPassthrough_StripsLeadingDashDash (0.00s)
+=== RUN   TestTaskNewPassthrough_Empty
+--- PASS: TestTaskNewPassthrough_Empty (0.00s)
+=== RUN   TestTaskNewPassthrough_RequiresDashDash
+--- PASS: TestTaskNewPassthrough_RequiresDashDash (0.00s)
+=== RUN   TestTaskNewCmd_ExtraArgWithoutDashDash
+--- PASS: TestTaskNewCmd_ExtraArgWithoutDashDash (0.00s)
+=== RUN   TestResolveTaskRunArgv
+--- PASS: TestResolveTaskRunArgv (0.01s)
+=== RUN   TestRunTaskFlag_NoFlagLeavesTheWorkspaceAlone
+--- PASS: TestRunTaskFlag_NoFlagLeavesTheWorkspaceAlone (0.00s)
+=== RUN   TestRunTaskFlag_ResolvesToCheckoutAndName
+--- PASS: TestRunTaskFlag_ResolvesToCheckoutAndName (0.01s)
+=== RUN   TestRunTaskFlag_UnknownTaskErrors
+--- PASS: TestRunTaskFlag_UnknownTaskErrors (0.01s)
+=== RUN   TestTaskLs_HumanAndJSON
+--- PASS: TestTaskLs_HumanAndJSON (0.02s)
+=== RUN   TestTaskLsCmd_JSONFlagThroughKong
+--- PASS: TestTaskLsCmd_JSONFlagThroughKong (0.02s)
+=== RUN   TestTaskPath_PrintsCheckoutDir
+--- PASS: TestTaskPath_PrintsCheckoutDir (0.01s)
+=== RUN   TestTaskPathCmd_ThroughKong
+--- PASS: TestTaskPathCmd_ThroughKong (0.01s)
+=== RUN   TestTaskRm_RefusesAndLeavesCheckoutIntact
+pix task rm: refusing to remove "dirty": cannot determine the sandbox's state; resolve, then retry
+sbx not on PATH; install it to remove this task's sandbox: brew install docker/tap/sbx: sbx not on PATH
+--- PASS: TestTaskRm_RefusesAndLeavesCheckoutIntact (0.02s)
+=== RUN   TestRunTaskCmd_BareAndHelpPrintUsage
+--- PASS: TestRunTaskCmd_BareAndHelpPrintUsage (0.01s)
+=== RUN   TestRunTaskCmd_NameThenVerbShorthand
+--- PASS: TestRunTaskCmd_NameThenVerbShorthand (0.01s)
+=== RUN   TestRunTaskCmd_NameThenVerbShorthand_DoesNotShadowRealVerbs
+--- PASS: TestRunTaskCmd_NameThenVerbShorthand_DoesNotShadowRealVerbs (0.00s)
+=== RUN   TestTaskNew_ProbesSbxBeforeCreatingCheckout
+pix: sbx not on PATH; install it to create a task sandbox: brew install docker/tap/sbx: sbx not on PATH
+--- PASS: TestTaskNew_ProbesSbxBeforeCreatingCheckout (0.00s)
+=== RUN   TestTaskRm_UnknownDisposition_SbxAbsentNamesExactInstallFix
+--- PASS: TestTaskRm_UnknownDisposition_SbxAbsentNamesExactInstallFix (0.02s)
+=== RUN   TestTaskRm_UnknownDisposition_SbxPresentButFailingNamesExactRetry
+--- PASS: TestTaskRm_UnknownDisposition_SbxPresentButFailingNamesExactRetry (0.02s)
+=== RUN   TestUatBrowserBootstrapURLIsUseful
+--- PASS: TestUatBrowserBootstrapURLIsUseful (0.00s)
+=== RUN   TestUatStatus_ReadOnlyProfile
+--- PASS: TestUatStatus_ReadOnlyProfile (0.00s)
+=== RUN   TestUATLifecycle_SuccessHandsRegistrationToSandboxTeardown
+--- PASS: TestUATLifecycle_SuccessHandsRegistrationToSandboxTeardown (0.00s)
+=== RUN   TestUATLifecycle_CreateDev
+--- PASS: TestUATLifecycle_CreateDev (0.00s)
+=== RUN   TestEnsureUatWorkerOrFail_AdoptsLiveWorkerWithoutResolvingHostBinary
+--- PASS: TestEnsureUatWorkerOrFail_AdoptsLiveWorkerWithoutResolvingHostBinary (0.00s)
+=== RUN   TestEnsureUatWorkerOrFail_FailsClosedWhenHostBinaryUnresolved
+--- PASS: TestEnsureUatWorkerOrFail_FailsClosedWhenHostBinaryUnresolved (0.00s)
+=== RUN   TestEnsureUatWorkerOrFail_FailsClosedWhenTheWorkerCannotStart
+--- PASS: TestEnsureUatWorkerOrFail_FailsClosedWhenTheWorkerCannotStart (0.00s)
+=== RUN   TestUatWorkerLifecycle_CreateStartsAfterRegisterAndBeforeRunSession
+--- PASS: TestUatWorkerLifecycle_CreateStartsAfterRegisterAndBeforeRunSession (0.00s)
+=== RUN   TestUatWorkerLifecycle_CreateFailureRollsBackRegistrationAndMCP
+--- PASS: TestUatWorkerLifecycle_CreateFailureRollsBackRegistrationAndMCP (0.00s)
+=== RUN   TestUatWorkerLifecycle_AttachEnsuresWorkerBeforeRunSession
+--- PASS: TestUatWorkerLifecycle_AttachEnsuresWorkerBeforeRunSession (0.00s)
+=== RUN   TestHelpListsEveryTopLevelVerb
+--- PASS: TestHelpListsEveryTopLevelVerb (0.02s)
+=== RUN   TestEveryDispatchedSubcommandAppearsInItsUsage
+--- PASS: TestEveryDispatchedSubcommandAppearsInItsUsage (0.02s)
+=== RUN   TestReleaseVersionsLockstep
+--- PASS: TestReleaseVersionsLockstep (0.00s)
+=== RUN   TestWorkspaceMarkerInventory_MatchesEnumeratedSet
+--- PASS: TestWorkspaceMarkerInventory_MatchesEnumeratedSet (0.00s)
+=== RUN   TestMarkerRoundTrip_Profile
+--- PASS: TestMarkerRoundTrip_Profile (0.00s)
+=== RUN   TestMarkerRoundTrip_OllamaBridgeModel
+--- PASS: TestMarkerRoundTrip_OllamaBridgeModel (0.00s)
+=== RUN   TestMarkerRoundTrip_MemoryCapture
+--- PASS: TestMarkerRoundTrip_MemoryCapture (0.00s)
+=== RUN   TestMarkerRoundTrip_OnboardingJSON
+--- PASS: TestMarkerRoundTrip_OnboardingJSON (0.00s)
+=== RUN   TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile
+--- PASS: TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile (0.00s)
+=== RUN   TestRoutingAndArtifactsAreHostDataRootNotWorkspaceMarkers
+--- PASS: TestRoutingAndArtifactsAreHostDataRootNotWorkspaceMarkers (0.00s)
+=== RUN   TestWriteMemoryScopeSymlinkSafe
+--- PASS: TestWriteMemoryScopeSymlinkSafe (0.00s)
+PASS
+ok  	pix/host/cmd/pix	7.717s
+=== RUN   TestLoadShards_ValidatesRealShards
+--- PASS: TestLoadShards_ValidatesRealShards (0.00s)
+=== RUN   TestLoadShards_VerbMatchesFilename
+--- PASS: TestLoadShards_VerbMatchesFilename (0.00s)
+=== RUN   TestValidateShard_RejectsEmptyVerb
+--- PASS: TestValidateShard_RejectsEmptyVerb (0.00s)
+=== RUN   TestValidateShard_RejectsZeroCases
+--- PASS: TestValidateShard_RejectsZeroCases (0.00s)
+=== RUN   TestValidateShard_RejectsDuplicateCaseNames
+--- PASS: TestValidateShard_RejectsDuplicateCaseNames (0.00s)
+=== RUN   TestValidateShard_RejectsEmptyArgs
+--- PASS: TestValidateShard_RejectsEmptyArgs (0.00s)
+=== RUN   TestValidateShard_RejectsBadJSONKeysWithoutStream
+--- PASS: TestValidateShard_RejectsBadJSONKeysWithoutStream (0.00s)
+=== RUN   TestCoverage_EveryKnownVerbHasShard
+--- PASS: TestCoverage_EveryKnownVerbHasShard (0.00s)
+=== RUN   TestExtractKnownVerbsFromSource_MatchesTheRealBinary
+--- PASS: TestExtractKnownVerbsFromSource_MatchesTheRealBinary (0.46s)
+=== RUN   TestValidateRegenTarget_ForbidsWholesale
+--- PASS: TestValidateRegenTarget_ForbidsWholesale (0.00s)
+=== RUN   TestRegenerateShard_OnlyTouchesTarget
+--- PASS: TestRegenerateShard_OnlyTouchesTarget (0.00s)
+=== RUN   TestRegenerateShard_RejectsEmptyCases
+--- PASS: TestRegenerateShard_RejectsEmptyCases (0.00s)
+=== RUN   TestRegenerateShard_VerbMustMatchNonEmpty
+--- PASS: TestRegenerateShard_VerbMustMatchNonEmpty (0.00s)
+=== RUN   TestCorpusCases_MatchRealBinary
+=== RUN   TestCorpusCases_MatchRealBinary/agent
+=== RUN   TestCorpusCases_MatchRealBinary/agent/help
+=== RUN   TestCorpusCases_MatchRealBinary/agent/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/agent/ls-json-key-contract
+=== RUN   TestCorpusCases_MatchRealBinary/config
+=== RUN   TestCorpusCases_MatchRealBinary/config/help
+=== RUN   TestCorpusCases_MatchRealBinary/config/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/config/show-safe-read-only-shape
+=== RUN   TestCorpusCases_MatchRealBinary/config/path-safe-read-only-shape
+=== RUN   TestCorpusCases_MatchRealBinary/config/get-safe-read-only-scalar
+=== RUN   TestCorpusCases_MatchRealBinary/doctor
+=== RUN   TestCorpusCases_MatchRealBinary/doctor/help
+=== RUN   TestCorpusCases_MatchRealBinary/doctor/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/doctor/help-names-the-schema-version
+=== RUN   TestCorpusCases_MatchRealBinary/doctor/json-schema-v5
+=== RUN   TestCorpusCases_MatchRealBinary/env
+=== RUN   TestCorpusCases_MatchRealBinary/env/help
+=== RUN   TestCorpusCases_MatchRealBinary/env/bare-is-ls
+=== RUN   TestCorpusCases_MatchRealBinary/env/show-no-selection
+=== RUN   TestCorpusCases_MatchRealBinary/env/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/help
+=== RUN   TestCorpusCases_MatchRealBinary/help/help
+=== RUN   TestCorpusCases_MatchRealBinary/help/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/help/help-all-safe-read-only-shape
+=== RUN   TestCorpusCases_MatchRealBinary/ls
+=== RUN   TestCorpusCases_MatchRealBinary/ls/help
+=== RUN   TestCorpusCases_MatchRealBinary/mcp
+=== RUN   TestCorpusCases_MatchRealBinary/mcp/help
+=== RUN   TestCorpusCases_MatchRealBinary/mcp/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/memory
+=== RUN   TestCorpusCases_MatchRealBinary/memory/help
+=== RUN   TestCorpusCases_MatchRealBinary/memory/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/models
+=== RUN   TestCorpusCases_MatchRealBinary/models/help
+=== RUN   TestCorpusCases_MatchRealBinary/models/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/pack
+=== RUN   TestCorpusCases_MatchRealBinary/pack/help
+=== RUN   TestCorpusCases_MatchRealBinary/pack/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/reset
+=== RUN   TestCorpusCases_MatchRealBinary/reset/help
+=== RUN   TestCorpusCases_MatchRealBinary/reset/bad-flag
+=== RUN   TestCorpusCases_MatchRealBinary/resume
+=== RUN   TestCorpusCases_MatchRealBinary/resume/help
+=== RUN   TestCorpusCases_MatchRealBinary/resume/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/rm
+=== RUN   TestCorpusCases_MatchRealBinary/rm/help
+=== RUN   TestCorpusCases_MatchRealBinary/rm/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/run
+=== RUN   TestCorpusCases_MatchRealBinary/run/help
+=== RUN   TestCorpusCases_MatchRealBinary/run/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/secret
+=== RUN   TestCorpusCases_MatchRealBinary/secret/help
+=== RUN   TestCorpusCases_MatchRealBinary/secret/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/secret/set-rejects-a-non-env-var-name
+=== RUN   TestCorpusCases_MatchRealBinary/secret/set-rejects-a-literal-value
+=== RUN   TestCorpusCases_MatchRealBinary/secret/check-without-a-refs-file
+=== RUN   TestCorpusCases_MatchRealBinary/secret/sync-without-a-refs-file
+=== RUN   TestCorpusCases_MatchRealBinary/serve
+=== RUN   TestCorpusCases_MatchRealBinary/serve/help
+=== RUN   TestCorpusCases_MatchRealBinary/serve/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/serve/install-help
+=== RUN   TestCorpusCases_MatchRealBinary/serve/install-rejects-an-argument
+=== RUN   TestCorpusCases_MatchRealBinary/serve/uninstall-rejects-an-argument
+=== RUN   TestCorpusCases_MatchRealBinary/setup
+=== RUN   TestCorpusCases_MatchRealBinary/setup/help
+=== RUN   TestCorpusCases_MatchRealBinary/setup/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/status
+=== RUN   TestCorpusCases_MatchRealBinary/status/help
+=== RUN   TestCorpusCases_MatchRealBinary/status/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/status/json-schema-v5
+=== RUN   TestCorpusCases_MatchRealBinary/status/help-names-the-schema-version
+=== RUN   TestCorpusCases_MatchRealBinary/task
+=== RUN   TestCorpusCases_MatchRealBinary/task/help
+=== RUN   TestCorpusCases_MatchRealBinary/task/bad-invocation
+=== RUN   TestCorpusCases_MatchRealBinary/uat
+=== RUN   TestCorpusCases_MatchRealBinary/uat/help
+=== RUN   TestCorpusCases_MatchRealBinary/uat/status
+=== RUN   TestCorpusCases_MatchRealBinary/version
+=== RUN   TestCorpusCases_MatchRealBinary/version/help
+=== RUN   TestCorpusCases_MatchRealBinary/version/bad-invocation
+--- PASS: TestCorpusCases_MatchRealBinary (0.23s)
+    --- PASS: TestCorpusCases_MatchRealBinary/agent (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/agent/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/agent/bad-invocation (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/agent/ls-json-key-contract (0.01s)
+    --- PASS: TestCorpusCases_MatchRealBinary/config (0.02s)
+        --- PASS: TestCorpusCases_MatchRealBinary/config/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/config/bad-invocation (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/config/show-safe-read-only-shape (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/config/path-safe-read-only-shape (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/config/get-safe-read-only-scalar (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/doctor (0.02s)
+        --- PASS: TestCorpusCases_MatchRealBinary/doctor/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/doctor/bad-invocation (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/doctor/help-names-the-schema-version (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/doctor/json-schema-v5 (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/env (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/env/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/env/bare-is-ls (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/env/show-no-selection (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/env/bad-invocation (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/help (0.02s)
+        --- PASS: TestCorpusCases_MatchRealBinary/help/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/help/bad-invocation (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/help/help-all-safe-read-only-shape (0.01s)
+    --- PASS: TestCorpusCases_MatchRealBinary/ls (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/ls/help (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/mcp (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/mcp/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/mcp/bad-invocation (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/memory (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/memory/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/memory/bad-invocation (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/models (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/models/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/models/bad-invocation (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/pack (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/pack/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/pack/bad-invocation (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/reset (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/reset/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/reset/bad-flag (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/resume (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/resume/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/resume/bad-invocation (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/rm (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/rm/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/rm/bad-invocation (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/run (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/run/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/run/bad-invocation (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/secret (0.02s)
+        --- PASS: TestCorpusCases_MatchRealBinary/secret/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/secret/bad-invocation (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/secret/set-rejects-a-non-env-var-name (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/secret/set-rejects-a-literal-value (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/secret/check-without-a-refs-file (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/secret/sync-without-a-refs-file (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/serve (0.02s)
+        --- PASS: TestCorpusCases_MatchRealBinary/serve/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/serve/bad-invocation (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/serve/install-help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/serve/install-rejects-an-argument (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/serve/uninstall-rejects-an-argument (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/setup (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/setup/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/setup/bad-invocation (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/status (0.02s)
+        --- PASS: TestCorpusCases_MatchRealBinary/status/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/status/bad-invocation (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/status/json-schema-v5 (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/status/help-names-the-schema-version (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/task (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/task/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/task/bad-invocation (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/uat (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/uat/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/uat/status (0.00s)
+    --- PASS: TestCorpusCases_MatchRealBinary/version (0.01s)
+        --- PASS: TestCorpusCases_MatchRealBinary/version/help (0.00s)
+        --- PASS: TestCorpusCases_MatchRealBinary/version/bad-invocation (0.00s)
+=== RUN   TestRunCase_ExitCodeAndStreams
+--- PASS: TestRunCase_ExitCodeAndStreams (0.00s)
+=== RUN   TestRunCase_IsolatesHome
+--- PASS: TestRunCase_IsolatesHome (0.00s)
+=== RUN   TestCheckCase_JSONKeysContract
+--- PASS: TestCheckCase_JSONKeysContract (0.00s)
+=== RUN   TestCheckCase_ExitCodeMismatch
+--- PASS: TestCheckCase_ExitCodeMismatch (0.00s)
+=== RUN   TestCheckCase_ContainsOnWrongStream
+--- PASS: TestCheckCase_ContainsOnWrongStream (0.00s)
+=== RUN   TestDangerousArgvViolation
+=== RUN   TestDangerousArgvViolation/empty
+=== RUN   TestDangerousArgvViolation/safe_verb_untouched
+=== RUN   TestDangerousArgvViolation/reset_help
+=== RUN   TestDangerousArgvViolation/reset_bad-flag
+=== RUN   TestDangerousArgvViolation/reset_bare
+=== RUN   TestDangerousArgvViolation/reset_real_flag_mutates
+=== RUN   TestDangerousArgvViolation/rm_bare_is_a_usage_error,_not_a_mutation
+=== RUN   TestDangerousArgvViolation/setup_help
+=== RUN   TestDangerousArgvViolation/setup_bad-flag
+=== RUN   TestDangerousArgvViolation/setup_with_a_real_dir_launches_provisioning
+=== RUN   TestDangerousArgvViolation/serve_status_is_not_a_mutation
+=== RUN   TestDangerousArgvViolation/serve_install_help
+=== RUN   TestDangerousArgvViolation/serve_install_with_a_real_argument
+=== RUN   TestDangerousArgvViolation/state_group_bare
+=== RUN   TestDangerousArgvViolation/state_group_help
+=== RUN   TestDangerousArgvViolation/state_bad-invocation
+=== RUN   TestDangerousArgvViolation/state_reset_help_is_fine
+=== RUN   TestDangerousArgvViolation/state_reset_with_a_real_flag_mutates
+=== RUN   TestDangerousArgvViolation/state_restore_with_an_archive_path_restores
+=== RUN   TestDangerousArgvViolation/state_backup_with_an_out_path_writes
+--- PASS: TestDangerousArgvViolation (0.00s)
+    --- PASS: TestDangerousArgvViolation/empty (0.00s)
+    --- PASS: TestDangerousArgvViolation/safe_verb_untouched (0.00s)
+    --- PASS: TestDangerousArgvViolation/reset_help (0.00s)
+    --- PASS: TestDangerousArgvViolation/reset_bad-flag (0.00s)
+    --- PASS: TestDangerousArgvViolation/reset_bare (0.00s)
+    --- PASS: TestDangerousArgvViolation/reset_real_flag_mutates (0.00s)
+    --- PASS: TestDangerousArgvViolation/rm_bare_is_a_usage_error,_not_a_mutation (0.00s)
+    --- PASS: TestDangerousArgvViolation/setup_help (0.00s)
+    --- PASS: TestDangerousArgvViolation/setup_bad-flag (0.00s)
+    --- PASS: TestDangerousArgvViolation/setup_with_a_real_dir_launches_provisioning (0.00s)
+    --- PASS: TestDangerousArgvViolation/serve_status_is_not_a_mutation (0.00s)
+    --- PASS: TestDangerousArgvViolation/serve_install_help (0.00s)
+    --- PASS: TestDangerousArgvViolation/serve_install_with_a_real_argument (0.00s)
+    --- PASS: TestDangerousArgvViolation/state_group_bare (0.00s)
+    --- PASS: TestDangerousArgvViolation/state_group_help (0.00s)
+    --- PASS: TestDangerousArgvViolation/state_bad-invocation (0.00s)
+    --- PASS: TestDangerousArgvViolation/state_reset_help_is_fine (0.00s)
+    --- PASS: TestDangerousArgvViolation/state_reset_with_a_real_flag_mutates (0.00s)
+    --- PASS: TestDangerousArgvViolation/state_restore_with_an_archive_path_restores (0.00s)
+    --- PASS: TestDangerousArgvViolation/state_backup_with_an_out_path_writes (0.00s)
+=== RUN   TestShards_ForbidDangerousArgvPrefixes
+--- PASS: TestShards_ForbidDangerousArgvPrefixes (0.00s)
+PASS
+ok  	pix/host/cmd/pix/corpus	0.714s

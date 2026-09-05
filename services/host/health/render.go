@@ -6,11 +6,11 @@ import (
 	"strings"
 )
 
-// render.go holds the two renderings, and the difference between them is the
-// product decision: `status` is a glance (short, no repair commands, always
-// exit 0 — a script asking "what is up" must never fail because a probe could
-// not see something), `doctor` is the diagnosis (every result, its evidence,
-// and the exact command that fixes it).
+// render.go holds doctor's rendering: every result, its evidence, and the
+// exact command that fixes it. It once also held a second, shorter `status`
+// rendering (a glance with no repair commands, always exit 0); `pix status`
+// is not part of the v2 CLI surface and that renderer was unreachable dead
+// code, deleted along with it (AC-16).
 
 // Glyph is the one-character presentation of a status.
 // writeEvidence prints a row's evidence. A probe that reports on a SET (mcp: one
@@ -47,63 +47,12 @@ func Glyph(s Status) string {
 	}
 }
 
-// RenderStatus writes the short form: one line naming what is ready, what is
-// missing, and what could not be checked. No repair commands — that is
-// doctor's job, and the caller always exits 0.
-func RenderStatus(w io.Writer, s Snapshot) {
-	if len(s.Results) == 0 {
-		fmt.Fprintln(w, "pix: nothing to check")
-		return
-	}
-	var ready, gaps, unknown []string
-	for _, r := range s.Results {
-		switch r.Effective() {
-		case StatusReady:
-			ready = append(ready, r.Name)
-		case StatusUnknown:
-			unknown = append(unknown, r.Name)
-		case StatusOff:
-			// Off is neither ready (nothing was exercised) nor missing (there is
-			// nothing to repair): a verified, optional, intentional non-config.
-			// The glance omits it rather than filing it under a bucket that
-			// would misname it; `pix doctor` still shows every off row.
-		default:
-			gaps = append(gaps, r.Name)
-		}
-	}
-	fmt.Fprintf(w, "%s %s\n", headlineGlyph(s), headline(s))
-	if len(ready) > 0 {
-		fmt.Fprintf(w, "  ready    %s\n", strings.Join(ready, " "))
-	}
-	if len(gaps) > 0 {
-		fmt.Fprintf(w, "  missing  %s\n", strings.Join(gaps, " "))
-	}
-	if len(unknown) > 0 {
-		fmt.Fprintf(w, "  unknown  %s\n", strings.Join(unknown, " "))
-	}
-	// The one pointer status is allowed to make: the count, and where the
-	// commands live. Status names no repair itself — printing a fix here is
-	// how two surfaces start disagreeing about the same gap.
-	if n := len(gaps); n > 0 {
-		word := "the exact fix commands"
-		if n == 1 {
-			word = "the exact fix command"
-		}
-		fmt.Fprintf(w, "  %s. Run `%s` for %s.\n", plural(n, "issue"), DoctorCommand, word)
-	}
-}
-
-// DoctorCommand is where status sends a user with something to fix. It is a
-// constant because status must never print a repair itself: one surface owns
-// the commands, the other owns the glance.
+// DoctorCommand is the exact repair pointer other read-only surfaces use
+// when they truncate their own gap list and want to send the reader to the
+// full diagnosis: workflow/launch's readiness warnings (RenderWarnings) name
+// it for whatever did not fit, and doctor's own JSON/text output composes
+// with it too. It is a constant so every caller agrees on the one command.
 const DoctorCommand = "pix doctor"
-
-func plural(n int, word string) string {
-	if n == 1 {
-		return fmt.Sprintf("%d %s", n, word)
-	}
-	return fmt.Sprintf("%d %ss", n, word)
-}
 
 // headlineGlyph is the headline's marker. It needs one distinction the four
 // status glyphs cannot make: something is definitively BROKEN, and you can

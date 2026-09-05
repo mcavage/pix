@@ -1,0 +1,28 @@
+✔ the primary-surface list has no stale entries (0.878833ms)
+✔ primary surfaces carry no em dashes (—) (5.674041ms)
+✔ the pinned PRD decision table itself parses to exactly D1..D24, in order (0.829458ms)
+✔ design doc has a decision-alignment table for D1-D24 (0.270958ms)
+✔ D1-D24 each appear exactly once in the alignment table, in order, with no gap or duplicate (0.231833ms)
+✔ every design-doc decision row's text is drawn from the PRD's actual decision, not an invented substitute (0.347708ms)
+✔ every alignment-table section pointer names a section heading that actually exists (0.893166ms)
+✔ no D-id reference leaks outside the alignment table into other prose in the design doc (0.143375ms)
+✔ upstream env doc: list-concatenation/key-merge composition is an explicit non-claim (A6), not proven by Story 0 (0.662084ms)
+✔ upstream env doc: the existing digest-equality non-claim survives untouched, correctly cross-referenced as AC-2, not A3 (0.203333ms)
+✔ design doc trust section: every authored ${VAR} reference must appear in host trust review with source var + destination field (0.246291ms)
+✔ design doc trust section: creation fingerprint must use keyed digest/HMAC of resolved interpolated values, never a raw hash (0.148083ms)
+✔ design doc trust section: the interpolation review/fingerprint requirement is scoped to Story 1, not claimed as shipped (0.196791ms)
+✔ self-development-uat doc: documents that candidate code runs with the operator shell's inherited authenticated environment (0.111833ms)
+✔ self-development-uat doc: warns operators not to launch --dev from a shell exporting long-lived secrets (0.109167ms)
+✔ self-development-uat doc: never claims env scrubbing exists, and non-goals explicitly disclaim it (0.170125ms)
+✔ upstream env doc: host-global binding/MCP-registration preservation across removal is an explicit non-claim (A3), distinct from the digest-equality correction (AC-2) (0.247583ms)
+✔ self-development-uat doc: production/non-dev sessions never receive the UAT surface (0.166542ms)
+✔ docs/design/environments.md's live env-verb spec carries no stale references (1.89175ms)
+✔ every `pix <verb>` in a user- or agent-facing surface names a real verb (22.668375ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 78.372291

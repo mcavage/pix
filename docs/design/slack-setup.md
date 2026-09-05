@@ -1,5 +1,12 @@
 # Slack: externalized (migration reference, not an implementation)
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: **MERGE-BLOCKED reference data.** The built-in Slack MCP server, its
 guided OAuth setup CLI, and every launcher/config wrapper around it were
 DELETED from this tree in W2/U02a (`services/host/slack.go`,

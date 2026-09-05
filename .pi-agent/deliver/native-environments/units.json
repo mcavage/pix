@@ -1,0 +1,2583 @@
+{
+  "schema_version": 1,
+  "plan": "native sandbox environments, P0",
+  "prd_of_record": ".pi-agent/deliver/native-environments/prd.md",
+  "design_of_record": "docs/design/environments.md",
+  "architecture": ".pi-agent/deliver/native-environments/architecture.md",
+  "unit_count": 47,
+  "final_gate": "make gate",
+  "conventions": {
+    "red_first": "every unit lands its failing test(s) in the same branch, first commit, before implementation",
+    "commit_boundary": "one squashed commit per unit unless the unit explicitly declares two",
+    "agents_md_rule": "only Wave H edits AGENTS.md and tests/agents-md-invariants.test.mjs; every other unit records needed prose changes in an 'AGENTS-DELTA:' commit trailer",
+    "worktree": "isolated = safe to develop and land concurrently; serialize = must hold the named conflict file alone; land-order = parallel development, strict landing order"
+  },
+  "waves": [
+    {
+      "id": "A",
+      "story": 0,
+      "name": "contract proof",
+      "units": [
+        "E0.1",
+        "E0.2",
+        "E0.3",
+        "E0.4",
+        "E0.5",
+        "E0.6",
+        "E0.7"
+      ],
+      "gate": "E0.7 is a stop-condition gate: A1/A2/A3 failing halts the migration (PRD section 8)"
+    },
+    {
+      "id": "B",
+      "story": 1,
+      "name": "foundations",
+      "units": [
+        "E1.0",
+        "E1.1",
+        "E1.2",
+        "E1.3",
+        "E1.4",
+        "E1.5",
+        "E1.6"
+      ],
+      "gate": "E1.1 lands first (P0-12)"
+    },
+    {
+      "id": "C",
+      "story": 1,
+      "name": "verbs",
+      "units": [
+        "E1.7",
+        "E1.8",
+        "E1.9",
+        "E1.10",
+        "E1.11",
+        "E1.12",
+        "E1.13",
+        "E1.14",
+        "E1.15"
+      ],
+      "gate": "E1.13 closes the wave by proving family consistency"
+    },
+    {
+      "id": "D",
+      "story": 2,
+      "name": "launch cutover",
+      "units": [
+        "E2.1",
+        "E2.2",
+        "E2.3",
+        "E2.4",
+        "E2.5",
+        "E2.6",
+        "E2.7",
+        "E2.8"
+      ],
+      "gate": "private work environment converted and run live before E2.8 (A8/R6); E2.8 is an enforced gate requiring a recorded evidence artifact of that live conversion, not a descriptive note (architect correction C11)"
+    },
+    {
+      "id": "E",
+      "story": 3,
+      "name": "literal roster",
+      "units": [
+        "E3.1",
+        "E3.2",
+        "E3.3",
+        "E3.4"
+      ],
+      "gate": null
+    },
+    {
+      "id": "F",
+      "story": 4,
+      "name": "delete the router",
+      "units": [
+        "E4.1",
+        "E4.2",
+        "E4.3",
+        "E4.4"
+      ],
+      "gate": null
+    },
+    {
+      "id": "G",
+      "story": 5,
+      "name": "delete packs",
+      "units": [
+        "E5.1",
+        "E5.2",
+        "E5.3",
+        "E5.4"
+      ],
+      "gate": "E5.1 is a hard gate: no pack trust test is deleted without a named environment replacement"
+    },
+    {
+      "id": "H",
+      "story": 6,
+      "name": "docs and acceptance",
+      "units": [
+        "E6.1",
+        "E6.2",
+        "E6.3",
+        "E6.4"
+      ],
+      "gate": "E6.4 is the acceptance run"
+    }
+  ],
+  "units": [
+    {
+      "id": "E0.1",
+      "title": "uatenvmatrix seam + environment_create_then_exec_invocation",
+      "wave": "A",
+      "story": 0,
+      "risk": "high",
+      "scope": "New L1 capability services/host/uatenvmatrix mirroring uatmatrix: check registry, typed per-check inputs, literal fixture bytes, run-local isolation (own scratch dir, own bounded log artifact, never the real ~/.config/pix or port 11435). First check creates an environment from a rendered fixture and proves name-based `sbx exec` receives the exact invocation. Capability reporting wired so named_checks is derived from the registry, and candidate_smoke executes the matrix after the memory matrix. NO change to the UAT action/need/assertion vocabulary.",
+      "acceptance_ids": [
+        "AC-1 (partial)",
+        "AC-8"
+      ],
+      "files": {
+        "create": [
+          "services/host/uatenvmatrix/matrix.go",
+          "services/host/uatenvmatrix/checks.go",
+          "services/host/uatenvmatrix/fixtures.go",
+          "services/host/uatenvmatrix/check_create_exec.go",
+          "services/host/uatenvmatrix/isolation_test.go",
+          "services/host/uatenvmatrix/matrix_test.go"
+        ],
+        "modify": [
+          "services/host/workflow/uat/runner.go",
+          "services/host/workflow/uat/execute.go",
+          "services/host/workflow/uat/server_test.go",
+          "services/host/uat/schema_test.go",
+          "services/host/arch_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "workflow/uat/server_test.go: capabilities().named_checks equals uatenvmatrix.CheckNames() and is non-empty",
+        "uat/schema_test.go: LegalVocabulary() actions equal exactly the six existing strings (F1, AC-8)",
+        "uatenvmatrix/isolation_test.go: no check touches config.Dir()/StateDir() defaults or port 11435",
+        "arch_test.go: uatenvmatrix is L1 and imports no L1 sibling (F5, forbids an envinfo import)"
+      ],
+      "focused_command": "cd services/host && go test ./uatenvmatrix/... ./workflow/uat/... ./uat/...",
+      "commit_boundary": "one commit: registry + capability wiring + first check",
+      "depends_on": [],
+      "conflicts_with": [
+        "services/host/uatenvmatrix/checks.go",
+        "services/host/workflow/uat/server_test.go",
+        "services/host/arch_test.go"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "Blocks all of Wave A. Establishes fitness functions F1, F2, F5."
+    },
+    {
+      "id": "E0.2",
+      "title": "environment_uses_local_candidate_image",
+      "wave": "A",
+      "story": 0,
+      "risk": "medium",
+      "scope": "Named check asserting the created sandbox's image digest equals the locally loaded candidate digest, with the run log showing no registry pull.",
+      "acceptance_ids": [
+        "AC-2"
+      ],
+      "files": {
+        "create": [
+          "services/host/uatenvmatrix/check_image_digest.go"
+        ],
+        "modify": [
+          "services/host/uatenvmatrix/checks.go",
+          "services/host/workflow/uat/server_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "uatenvmatrix: digest-equality check returns an error when digests differ; capability list contains the new name"
+      ],
+      "focused_command": "cd services/host && go test ./uatenvmatrix/... ./workflow/uat/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E0.1"
+      ],
+      "conflicts_with": [
+        "services/host/uatenvmatrix/checks.go",
+        "services/host/workflow/uat/server_test.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "land-order"
+    },
+    {
+      "id": "E0.3",
+      "title": "environment_recreate_boundary",
+      "wave": "A",
+      "story": 0,
+      "risk": "high",
+      "scope": "Named check proving any effective declaration facet change is refused on attach and that the refusal names the recreate command. This is the check that proves upstream reconcile semantics match the P0 recreate-only stance.",
+      "acceptance_ids": [
+        "AC-3"
+      ],
+      "files": {
+        "create": [
+          "services/host/uatenvmatrix/check_recreate_boundary.go"
+        ],
+        "modify": [
+          "services/host/uatenvmatrix/checks.go",
+          "services/host/uatenvmatrix/fixtures.go",
+          "services/host/workflow/uat/server_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "check fails when a mutated fixture attaches successfully; artifact contains the refusal text and facet list"
+      ],
+      "focused_command": "cd services/host && go test ./uatenvmatrix/... ./workflow/uat/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E0.1"
+      ],
+      "conflicts_with": [
+        "services/host/uatenvmatrix/checks.go",
+        "services/host/uatenvmatrix/fixtures.go",
+        "services/host/workflow/uat/server_test.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "land-order",
+      "notes": "Stop condition A2 evidence."
+    },
+    {
+      "id": "E0.4",
+      "title": "environment_failed_create_cleanup",
+      "wave": "A",
+      "story": 0,
+      "risk": "high",
+      "scope": "Named check proving a create that fails before a receipt reports residue and performs zero `sbx env rm` invocations.",
+      "acceptance_ids": [
+        "AC-4"
+      ],
+      "files": {
+        "create": [
+          "services/host/uatenvmatrix/check_failed_create.go"
+        ],
+        "modify": [
+          "services/host/uatenvmatrix/checks.go",
+          "services/host/workflow/uat/server_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "check fails if any rm invocation is recorded; artifact asserts the residue report"
+      ],
+      "focused_command": "cd services/host && go test ./uatenvmatrix/... ./workflow/uat/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E0.1"
+      ],
+      "conflicts_with": [
+        "services/host/uatenvmatrix/checks.go",
+        "services/host/workflow/uat/server_test.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "land-order",
+      "notes": "Stop condition A3 evidence."
+    },
+    {
+      "id": "E0.5",
+      "title": "environment_rm_scope_refusal",
+      "wave": "A",
+      "story": 0,
+      "risk": "medium",
+      "scope": "Named check proving removal is refused for a non pix-* name and for an instance-name mismatch, exit 2 each.",
+      "acceptance_ids": [
+        "AC-5"
+      ],
+      "files": {
+        "create": [
+          "services/host/uatenvmatrix/check_rm_scope.go"
+        ],
+        "modify": [
+          "services/host/uatenvmatrix/checks.go",
+          "services/host/workflow/uat/server_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "two refusal cases with exit code 2; a success on either case fails the check"
+      ],
+      "focused_command": "cd services/host && go test ./uatenvmatrix/... ./workflow/uat/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E0.1"
+      ],
+      "conflicts_with": [
+        "services/host/uatenvmatrix/checks.go",
+        "services/host/workflow/uat/server_test.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "land-order"
+    },
+    {
+      "id": "E0.6",
+      "title": "environment_custom_agent_ollama (non-failing capability result)",
+      "wave": "A",
+      "story": 0,
+      "risk": "low",
+      "scope": "Named check returning an explicit supported/unsupported capability result rather than a pass/fail verdict; unsupported records that extensions/ollama-bridge.ts stays required (N5, P1-3).",
+      "acceptance_ids": [
+        "AC-6"
+      ],
+      "files": {
+        "create": [
+          "services/host/uatenvmatrix/check_custom_agent_ollama.go"
+        ],
+        "modify": [
+          "services/host/uatenvmatrix/checks.go",
+          "services/host/workflow/uat/server_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "check never returns a failing verdict; result carries an explicit capability field that a test asserts on both branches"
+      ],
+      "focused_command": "cd services/host && go test ./uatenvmatrix/... ./workflow/uat/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E0.1"
+      ],
+      "conflicts_with": [
+        "services/host/uatenvmatrix/checks.go",
+        "services/host/workflow/uat/server_test.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "land-order"
+    },
+    {
+      "id": "E0.7",
+      "title": "Host-backed UAT run + docs/upstream/sbx-0.39-environments.md",
+      "wave": "A",
+      "story": 0,
+      "risk": "high",
+      "scope": "Submit the committed candidate through the existing UAT MCP, run the full named-check matrix, capture bounded artifacts, and write the upstream record: observed argv, sbx version, rendered fixtures, listings, undefined ${VAR} behavior, relative-path resolution, custom-agent selection, candidate-image behavior.",
+      "acceptance_ids": [
+        "AC-1",
+        "AC-7"
+      ],
+      "files": {
+        "create": [
+          "docs/upstream/sbx-0.39-environments.md",
+          ".pi-agent/deliver/native-environments/logs/story0-verdict.json"
+        ],
+        "modify": [
+          "uat/scenarios/smoke.yaml"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "tests/verify-pix-lifecycle-uat.test.mjs extended: the committed scenario's verdict artifact exists and reports pass for the six named checks"
+      ],
+      "focused_command": "make gate && (host) pix uat submit --scenario uat/scenarios/smoke.yaml",
+      "commit_boundary": "one commit (doc + scenario + captured verdict artifact)",
+      "depends_on": [
+        "E0.2",
+        "E0.3",
+        "E0.4",
+        "E0.5",
+        "E0.6"
+      ],
+      "conflicts_with": [],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "GATE. A1/A2/A3 disproved here stops the migration (PRD section 8). Requires a host with Docker + sbx; cannot be run from inside a pix sandbox."
+    },
+    {
+      "id": "E1.0",
+      "title": "Reconcile docs/design/environments.md to the PRD",
+      "wave": "B",
+      "story": 1,
+      "risk": "low",
+      "scope": "Docs only. Apply D1-D24: `pix env forget` replaces `env rm`; `env rm` becomes the pointer error; `edit NAME pix|sbxenv` positional enum replaces `--sbxenv`; the recreate line drops `--name`; the no-environment state is named `none`; add the I4 counter and the doctor --recreates surface. No code.",
+      "acceptance_ids": [],
+      "files": {
+        "create": [],
+        "modify": [
+          "docs/design/environments.md"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "tests/verb-references.test.mjs: no doc references `pix env rm NAME [--force]` or `--sbxenv` as a live surface"
+      ],
+      "focused_command": "node --test tests/verb-references.test.mjs",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E0.7"
+      ],
+      "conflicts_with": [
+        "docs/design/environments.md"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated",
+      "notes": "ADR-ENV-005. Cheap, and it stops six waves of implementers reading a contradicted spec."
+    },
+    {
+      "id": "E1.1",
+      "title": "sbx >= 0.39.0 gate, unparsable fails closed",
+      "wave": "B",
+      "story": 1,
+      "risk": "low",
+      "scope": "Extend the existing sbx version probe (health/probes.go lines 143-209) with a minimum-version requirement. `pix run` and `pix doctor` fail closed on < 0.39.0 or an unparsable version, printing the exact section 5.6 string including the upgrade command.",
+      "acceptance_ids": [
+        "AC-20",
+        "P0-12"
+      ],
+      "files": {
+        "create": [
+          "services/host/health/sbxversion_test.go"
+        ],
+        "modify": [
+          "services/host/health/probes.go",
+          "services/host/workflow/doctor/doctor.go",
+          "services/host/cmd/pix/run_cmd.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "health: version table test (0.38.2, 0.39.0, 0.40.1, '', 'garbage') -> requirement verdict",
+        "cmd/pix: `pix run` on 0.38.2 exits non-zero with the byte-exact section 5.6 message",
+        "cmd/pix: unparsable prints 'found: unknown (sbx --version was not understood)' and still fails closed"
+      ],
+      "focused_command": "cd services/host && go test ./health/... ./workflow/doctor/... ./cmd/pix/ -run 'Sbx|Version|Doctor'",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E0.7"
+      ],
+      "conflicts_with": [
+        "services/host/cmd/pix/run_cmd.go"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "PRD section 6: lands FIRST in Story 1. Must be merged before any other Wave B unit opens run_cmd.go."
+    },
+    {
+      "id": "E1.2",
+      "title": "envinfo: native .sbxenv.yaml grammar, merge semantics, pre-composition tree",
+      "wave": "B",
+      "story": 1,
+      "risk": "high",
+      "scope": "New L1 capability services/host/envinfo. Parse the native schema strictly (unknown fields rejected), resolve local relative paths against the source dir, apply documented sbx merge semantics (nested maps merge by key, lists concatenate, later scalars replace), and expose a PRE-COMPOSITION semantic tree with stable identity key paths (mcp.servers[<name>], bindings by service/domain, host services by port; indexed paths only where the schema has no identity). Refuse literal `value` in secrets/registries; flag `command` entries and `noVerify` as host-exec facets. No sandbox import: the pix-* name is a caller-supplied parameter.",
+      "acceptance_ids": [
+        "AC-19",
+        "AC-38",
+        "AC-72 (tree half)"
+      ],
+      "files": {
+        "create": [
+          "services/host/envinfo/doc.go",
+          "services/host/envinfo/sbxenv.go",
+          "services/host/envinfo/tree.go",
+          "services/host/envinfo/merge.go",
+          "services/host/envinfo/sbxenv_test.go",
+          "services/host/envinfo/tree_test.go",
+          "services/host/envinfo/merge_test.go"
+        ],
+        "modify": [
+          "services/host/arch_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "attribution table test: adding an unrelated mcp server never changes another server's reported key path (F9)",
+        "merge table test against the Story 0 fixture set (semantic equality, not byte equality)",
+        "literal `value:` in secrets and in registries both refused",
+        "import-graph test: only envinfo decodes native env YAML (F3, AC-38)",
+        "arch_test: envinfo is L1 and imports no L1 sibling (F4)"
+      ],
+      "focused_command": "cd services/host && go test ./envinfo/... && go test -run TestArchitecture ./...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E0.7"
+      ],
+      "conflicts_with": [
+        "services/host/arch_test.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated",
+      "notes": "ADR-ENV-001. The single most reused package downstream; over-test it here."
+    },
+    {
+      "id": "E1.3",
+      "title": "envinfo: strict pix.toml sidecar",
+      "wave": "B",
+      "story": 1,
+      "risk": "medium",
+      "scope": "Sidecar parsing in the same L1 capability, separate file. Unknown keys fail naming file, line and key (never a default fallback). Validates [models], [agents], [memory], [pi].skills, [host.mcp], [[host.services]], [inference.*]. Enforces the ownership rule: a sidecar key that duplicates a native sbx field is a validation error, not a silent override.",
+      "acceptance_ids": [
+        "AC-18 (parse/error-shape half)",
+        "AC-29 (reference-facts half; exact launch copy stays E3.1)",
+        "AC-32 (parse half)"
+      ],
+      "files": {
+        "create": [
+          "services/host/envinfo/sidecar.go",
+          "services/host/envinfo/sidecar_test.go",
+          "services/host/envinfo/ownership_test.go"
+        ],
+        "modify": [],
+        "delete": []
+      },
+      "red_first_tests": [
+        "unknown key error string contains 'pix.toml:<line>' and the key ('modles', 'models.maine')",
+        "ownership test: every native-owned field name (kits, workspaces, env, secrets, bindings, mcp url/command, resources, ports) is rejected in pix.toml",
+        "[pi].skills path outside a declared workspace is refused"
+      ],
+      "focused_command": "cd services/host && go test ./envinfo/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E0.7"
+      ],
+      "conflicts_with": [],
+      "parallel_safe": true,
+      "worktree": "isolated",
+      "notes": "Wave B owns strict parsing and structured reference facts only. E3.1 owns resolution and the byte-exact PRD section 5.7 launch error; Field paths must bridge to `[agents].<name>` copy there."
+    },
+    {
+      "id": "E1.4",
+      "title": "Extract trust primitives from workflow/pack into L1 hosttrust",
+      "wave": "B",
+      "story": 1,
+      "risk": "high",
+      "scope": "Pure refactor, no behavior change. Move canonical identity, host-exec fingerprint computation, the acceptance store (flock-serialized fresh load -> mutate -> save), atomic write, symlink refusal and content hashing out of workflow/pack into a new L1 capability services/host/hosttrust, keyed by an opaque subject (kind + canonical root) so pack and environment records coexist in one store. workflow/pack imports it and keeps its own bill-of-materials rendering for now.",
+      "acceptance_ids": [],
+      "files": {
+        "create": [
+          "services/host/hosttrust/doc.go",
+          "services/host/hosttrust/store.go",
+          "services/host/hosttrust/fingerprint.go",
+          "services/host/hosttrust/canon.go",
+          "services/host/hosttrust/store_test.go",
+          "services/host/hosttrust/fingerprint_test.go"
+        ],
+        "modify": [
+          "services/host/workflow/pack/truststore.go",
+          "services/host/workflow/pack/trust.go",
+          "services/host/arch_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "ORACLE: every existing pack trust test passes unmodified (pack_trust_rounds_test.go, pack_review_rounds_test.go, pack_v2_trust_host_state_test.go, truststore_legacy_migration_test.go)",
+        "hosttrust: subject-keyed records for two kinds do not collide; nested lock acquisition is impossible by construction",
+        "sentinel: only hosttrust defines an acceptance-record type (F6)"
+      ],
+      "focused_command": "cd services/host && go test ./hosttrust/... ./workflow/pack/...",
+      "commit_boundary": "one commit; must not mix behavior changes with the move",
+      "depends_on": [
+        "E0.7"
+      ],
+      "conflicts_with": [
+        "services/host/workflow/pack/truststore.go",
+        "services/host/workflow/pack/trust.go",
+        "services/host/arch_test.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated",
+      "notes": "ADR-ENV-002. Do this while packs are alive so the existing suite is the oracle. Use scripts/movesym if it fits."
+    },
+    {
+      "id": "E1.5",
+      "title": "config: environment key, [environments] index, config set refusal",
+      "wave": "B",
+      "story": 1,
+      "risk": "medium",
+      "scope": "Add `environment = \"NAME\"` and `[environments] name -> canonical absolute path` to the config schema. Input may use ~, persistence is canonical absolute only. Sparse Save() still persists only deviations. `pix config set|unset` refuses `environment` and `environments.*` and names the correct pix env command.",
+      "acceptance_ids": [
+        "AC-13 (write side)",
+        "AC-17"
+      ],
+      "files": {
+        "create": [],
+        "modify": [
+          "services/host/config/config.go",
+          "services/host/config/config_test.go",
+          "services/host/config/config_sparse_save_test.go",
+          "services/host/cmd/pix/config_cmd.go",
+          "services/host/cmd/pix/config_cmd_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "`pix config set environment home` exits 2 and names `pix env use`",
+        "`pix config set environments.work /path` exits 2",
+        "byte-diff test: writing the environment key changes exactly one key in config.toml",
+        "a ~-prefixed registered path round-trips as a canonical absolute path"
+      ],
+      "focused_command": "cd services/host && go test ./config/... ./cmd/pix/ -run Config",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E0.7"
+      ],
+      "conflicts_with": [
+        "services/host/config/config.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E1.6",
+      "title": "recreatelog: bounded local I4 counter",
+      "wave": "B",
+      "story": 1,
+      "risk": "low",
+      "scope": "New L1 capability services/host/recreatelog. Append-only plain-text log under the state dir, cap 100 records with oldest dropped, record = timestamp + environment name + canonical key paths only. No facet values, no credential names, no argv, no path outside the environment root. The cap is a constant, not a config key. Deleting the file is not an error.",
+      "acceptance_ids": [
+        "AC-68"
+      ],
+      "files": {
+        "create": [
+          "services/host/recreatelog/log.go",
+          "services/host/recreatelog/log_test.go",
+          "services/host/recreatelog/nonet_test.go"
+        ],
+        "modify": [
+          "services/host/arch_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "101 appends leave exactly 100 records, oldest dropped",
+        "record-shape test: the value side of a drifted facet is never written",
+        "grep test: package imports no net/http and dials nothing (F10)",
+        "missing file reads as zero records with no error"
+      ],
+      "focused_command": "cd services/host && go test ./recreatelog/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E0.7"
+      ],
+      "conflicts_with": [
+        "services/host/arch_test.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E1.7",
+      "title": "workflow/env: registry, exact-name resolution, location refusals",
+      "wave": "C",
+      "story": 1,
+      "risk": "high",
+      "scope": "New L3 workflow services/host/workflow/env. Register/read/unregister names in config; resolve an exact name identically from any cwd; refuse an environment root that resolves inside a writable workspace it mounts (naming both absolute paths); refuse a symlinked root or referenced executable; repointing a name to a different path invalidates acceptance. No verbs yet: the resolution spine only.",
+      "acceptance_ids": [
+        "AC-10",
+        "AC-11",
+        "AC-12",
+        "AC-16"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/env/doc.go",
+          "services/host/workflow/env/registry.go",
+          "services/host/workflow/env/resolve.go",
+          "services/host/workflow/env/registry_test.go",
+          "services/host/workflow/env/resolve_test.go"
+        ],
+        "modify": [
+          "services/host/arch_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "table test over >= 3 cwds: identical resolved root",
+        "containment refusal text contains both absolute paths, exit 2",
+        "symlinked root and symlinked referenced executable: two refusals, exit 2",
+        "repoint test: acceptance reads unaccepted after the path changes"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/env/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.2",
+        "E1.3",
+        "E1.4",
+        "E1.5"
+      ],
+      "conflicts_with": [
+        "services/host/arch_test.go"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "Spine for every Wave C verb."
+    },
+    {
+      "id": "E1.8",
+      "title": "Host bill of materials + `pix env review`",
+      "wave": "C",
+      "story": 1,
+      "risk": "high",
+      "scope": "Compute the environment host-exec BoM from envinfo's tree and render it in two tiers: default shows counts PLUS each host command name, each host service with port, every credential destination, and every mount expansion with its read-only bit; --verbose adds full argv and content digests. Acceptance recorded through hosttrust, outside the payload. Non-TTY without --yes prints the same bill and exits 2. Acceptance line says 'recorded acceptance ... (fingerprint <short-hash>)', never 'configured'/'enabled'. Every authored ${VAR} reference is a default-tier review line item naming the source variable and destination key path; resolved values are never displayed or persisted.",
+      "acceptance_ids": [
+        "AC-66",
+        "AC-14 (store side)"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/env/bom.go",
+          "services/host/workflow/env/review.go",
+          "services/host/workflow/env/bom_test.go",
+          "services/host/workflow/env/review_test.go",
+          "services/host/workflow/env/testdata/hostexec-fixture/"
+        ],
+        "modify": [],
+        "delete": []
+      },
+      "red_first_tests": [
+        "golden review output for a host-executing fixture, both tiers, byte-exact against PRD section 5.8",
+        "non-TTY without --yes: exit 2 and the bill plus the `--yes` line",
+        "a non-host-executing environment produces an empty bill and no prompt",
+        "noVerify appears in the bill and changes the fingerprint",
+        "every authored interpolation reference appears as source variable + destination key path in the default bill; resolved values never appear"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/env/... -run 'BoM|Review'",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.7"
+      ],
+      "conflicts_with": [],
+      "parallel_safe": false,
+      "worktree": "serialize"
+    },
+    {
+      "id": "E1.9",
+      "title": "cmd/pix env dispatch skeleton + `env ls` + `env show`",
+      "wave": "C",
+      "story": 1,
+      "risk": "medium",
+      "scope": "Create cmd/pix/env_cmd.go with the seven-verb struct (bare `env` = ls) and implement the two read-only verbs. `show` default is a one-screen lossy summary carrying review state and live-sandbox drift state, ending with the --effective pointer; --path prints exactly the canonical path plus a newline; --json carries schema_version; no environment selected reports the name `none`, exit 0. Help group line and per-verb first lines per PRD section 5.10. --effective is declared and errors 'not yet available' only until E2.1 (it is not a user-selectable alternative path).",
+      "acceptance_ids": [
+        "AC-46",
+        "AC-53",
+        "AC-55",
+        "AC-64",
+        "AC-62 (help half)"
+      ],
+      "files": {
+        "create": [
+          "services/host/cmd/pix/env_cmd.go",
+          "services/host/cmd/pix/env_cmd_test.go",
+          "services/host/workflow/env/show.go",
+          "services/host/workflow/env/ls.go",
+          "services/host/workflow/env/show_test.go"
+        ],
+        "modify": [
+          "services/host/cmd/pix/root.go",
+          "services/host/cmd/pix/help.go",
+          "services/host/cmd/pix/help_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "`env show` with none selected: exit 0, name `none`, --json '\"environment\":\"none\"'",
+        "--path stdout byte-equals canonical path + '\\n' (no header, no color)",
+        "golden show output with a line-count bound",
+        "help --all lists env under 'Config & context' as its first row"
+      ],
+      "focused_command": "cd services/host && go test ./cmd/pix/ -run 'Env|Help' && go test ./workflow/env/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.7"
+      ],
+      "conflicts_with": [
+        "services/host/cmd/pix/env_cmd.go",
+        "services/host/cmd/pix/root.go",
+        "services/host/cmd/pix/help.go"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "Owns the shared envCmd struct. Every later verb unit adds one field line here."
+    },
+    {
+      "id": "E1.10",
+      "title": "`pix env add` (register + scaffold)",
+      "wave": "C",
+      "story": 1,
+      "risk": "medium",
+      "scope": "add NAME PATH registers a canonical local directory, validates both files, always completes host review, records acceptance outside the directory. add NAME (zero-path) scaffolds ~/.local/share/pix/envs/NAME with a runnable environment equal to today's default; refused when $PWD contains a .sbxenv.yaml, naming both the register and the scaffold form. First output line of the scaffold form is the created root path. Success line prints the literal `pix env use NAME`.",
+      "acceptance_ids": [
+        "AC-9",
+        "AC-47",
+        "AC-48"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/env/add.go",
+          "services/host/workflow/env/scaffold.go",
+          "services/host/workflow/env/add_test.go",
+          "services/host/workflow/env/testdata/scaffold-golden/"
+        ],
+        "modify": [
+          "services/host/cmd/pix/env_cmd.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "scripted sequence: `pix env add home` then `pix run --env home` reaches a prompt with no further edits",
+        "zero-path add from a dir containing .sbxenv.yaml: exit 2, both forms named, no directory created",
+        "first-line assertion on the scaffold form"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/env/... -run Add && go test ./cmd/pix/ -run Env",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.8",
+        "E1.9"
+      ],
+      "conflicts_with": [
+        "services/host/cmd/pix/env_cmd.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "land-order",
+      "notes": "AC-9's launch half cannot be proven until E2.5; land the scaffold-shape half here and mark the launch assertion as E2.5's."
+    },
+    {
+      "id": "E1.11",
+      "title": "`pix env use` + `pix env forget` + `pix env rm` pointer error",
+      "wave": "C",
+      "story": 1,
+      "risk": "medium",
+      "scope": "use NAME mutates only the `environment` key and refuses an unreviewed environment naming `pix env review`. forget NAME unregisters, touches no file, refuses the current default and any live holder, and its success line names the surviving path and contains neither 'removed' nor 'deleted'. `env rm` is NOT a registered subcommand: it dispatches to a pointer error that performs nothing, exits 2, and names all three removal objects (forget / pix rm / rm -rf yourself).",
+      "acceptance_ids": [
+        "AC-13",
+        "AC-14",
+        "AC-15",
+        "AC-42",
+        "AC-44"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/env/use.go",
+          "services/host/workflow/env/forget.go",
+          "services/host/workflow/env/use_test.go",
+          "services/host/workflow/env/forget_test.go"
+        ],
+        "modify": [
+          "services/host/cmd/pix/env_cmd.go",
+          "services/host/cmd/pix/env_cmd_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "byte-diff of config.toml after `use`: exactly one changed key",
+        "pre/post file hashes over the whole environment dir after `forget`: identical",
+        "two forget refusals (current default, live holder), exit 2 each",
+        "dispatch test: `env rm` performs no filesystem or registry mutation; output byte-matches PRD section 5.5"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/env/... -run 'Use|Forget|Rm' && go test ./cmd/pix/ -run Env",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.8",
+        "E1.9"
+      ],
+      "conflicts_with": [
+        "services/host/cmd/pix/env_cmd.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "land-order"
+    },
+    {
+      "id": "E1.12",
+      "title": "`pix env edit NAME pix|sbxenv`",
+      "wave": "C",
+      "story": 1,
+      "risk": "medium",
+      "scope": "Exact positional enum, no --sbxenv flag anywhere. TTY with no token prints a two-line selection; non-TTY with no token exits 2 printing both paths. $EDITOR and $VISUAL unset prints the absolute path and exits 0. After the editor exits, validate and print exactly one of the three verdicts (ok / review / invalid) from PRD section 5.4, each naming a next command. Never prompts to run review; never reads stdin on this path. An invalid post-edit file leaves the registration byte-identical.",
+      "acceptance_ids": [
+        "AC-49",
+        "AC-50",
+        "AC-51",
+        "AC-52",
+        "AC-18 (post-edit half)"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/env/edit.go",
+          "services/host/workflow/env/edit_test.go"
+        ],
+        "modify": [
+          "services/host/cmd/pix/env_cmd.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "token table test: pix | sbxenv accepted; any other token refused naming both",
+        "flag-absence grep: '--sbxenv' appears nowhere in live code or help",
+        "three-verdict golden test; no stdin read asserted by a failing reader",
+        "registry byte-identical after an invalid edit"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/env/... -run Edit && go test ./cmd/pix/ -run Env",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.9",
+        "E1.3"
+      ],
+      "conflicts_with": [
+        "services/host/cmd/pix/env_cmd.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "land-order"
+    },
+    {
+      "id": "E1.13",
+      "title": "env error-form, copy lint, non-TTY sweep",
+      "wave": "C",
+      "story": 1,
+      "risk": "medium",
+      "scope": "Prove the family is consistent: an enumerating test walks every pix env error path and fails on a missing three-part form or a missing next command. Suggestion is data (`closest: home`), never an offer. No output suggests `sbx env rm`. String lint bans unearned success words, em dashes and filler across env output. Every verb terminates with a defined exit code on non-TTY stdin.",
+      "acceptance_ids": [
+        "AC-43",
+        "AC-56",
+        "AC-57",
+        "AC-65",
+        "AC-67"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/env/errors.go",
+          "services/host/workflow/env/errors_test.go",
+          "services/host/cmd/pix/env_copy_lint_test.go",
+          "services/host/cmd/pix/env_nontty_test.go"
+        ],
+        "modify": [
+          "services/host/workflow/env/*.go (message call sites)"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "enumerating test over every env error path: three parts, exactly one runnable command",
+        "grep test: no env string contains 'sbx env rm'",
+        "prompt test: no env output asks a yes/no question that selects, prefixes or corrects a name",
+        "non-TTY run of all seven verbs plus the rm pointer: defined exit code, no hang (F16)"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/env/... ./cmd/pix/ -run 'Env|Copy|NonTTY'",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.10",
+        "E1.11",
+        "E1.12"
+      ],
+      "conflicts_with": [
+        "services/host/workflow/env/"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize"
+    },
+    {
+      "id": "E1.14",
+      "title": "`pix reset`: invalidate every acceptance, delete no environment source",
+      "wave": "C",
+      "story": 1,
+      "risk": "high",
+      "scope": "reset invalidates every environment trust acceptance (scaffolded or externally registered) via the hosttrust store living in renamed state; it deletes no environment source. Scaffolded sources travel with the data-dir rename; external sources at paths pix never owned are untouched. No reset code path calls a delete on an environment source.",
+      "acceptance_ids": [
+        "AC-69",
+        "AC-70"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/reset/env_reset_test.go"
+        ],
+        "modify": [
+          "services/host/workflow/reset/reset.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "pre/post file hashes and paths for one external and one scaffolded environment",
+        "grep proving reset's environment path contains no unlink/RemoveAll",
+        "post-reset sequence: re-register + `env use` hits the unreviewed refusal (AC-14), `env show` reports unaccepted"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/reset/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.7",
+        "E1.4"
+      ],
+      "conflicts_with": [
+        "services/host/workflow/reset/reset.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E1.15",
+      "title": "Quiet surfaces: setup, status, bare run hint",
+      "wave": "C",
+      "story": 1,
+      "risk": "low",
+      "scope": "pix setup gains NO environment step, prompt, or probe; its closing block contains exactly one environment line naming only `pix help env`. pix status renders no environment row when [environments] is empty. Bare `pix run` with no registered environment prints nothing about environments except the workspace-.sbxenv.yaml hint, which leads with the negative and appears at most once per workspace.",
+      "acceptance_ids": [
+        "AC-58",
+        "AC-59",
+        "AC-60"
+      ],
+      "files": {
+        "create": [
+          "services/host/cmd/pix/env_quiet_test.go"
+        ],
+        "modify": [
+          "services/host/workflow/provision/setup.go",
+          "services/host/workflow/provision/setup_test.go",
+          "services/host/cmd/pix/run_cmd.go",
+          "services/host/health/render.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "golden setup output: zero environment steps, exactly one closing environment line",
+        "golden status output with empty [environments]: no environment row",
+        "two-run golden test: the .sbxenv.yaml hint appears once per workspace, negative first"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/provision/... ./cmd/pix/ -run 'Setup|Status|Quiet'",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.7"
+      ],
+      "conflicts_with": [
+        "services/host/cmd/pix/run_cmd.go"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "Must land BEFORE E2.5 opens run_cmd.go, or after E2.8. Do not run concurrently with Wave D."
+    },
+    {
+      "id": "E2.1",
+      "title": "Effective environment render + Pi mixin kit generation",
+      "wave": "D",
+      "story": 2,
+      "risk": "high",
+      "scope": "Render ONE stable effective .sbxenv.yaml per sandbox from authored + sidecar + Pix-owned runtime facts: caller-supplied pix-* name, pinned template + pullPolicy: missing, workspace in object form with clone choice, unconditional personal-context workspace, generated Pi mixin kit, dev checkout kit + live skills under --dev, Pix-required env vars, reviewed local-MCP credential wrappers (op run --env-file per server). Atomic write; record authored + sidecar digests; retained until a positive absent probe. --effective renders with NO sandbox in existence. ARCHITECT CORRECTION (C3/C4/C5/C6): the renderer is a PURE function over one caller-supplied `RuntimeFacts` value (name, host paths, sandbox identity, MCP credential facts) assembled by the L3/L4 caller and passed in as a parameter; `envinfo` MUST NOT import `mcp` or `sandbox` itself (L1 sibling rule, F17). It is the ONE producer of the effective document and its embedded Pi mixin kit — no second mixin-materialization implementation may exist in `cmd/pix/env_cmd.go` or `workflow/launch` (F17).",
+      "acceptance_ids": [
+        "AC-54"
+      ],
+      "files": {
+        "create": [
+          "services/host/envinfo/render.go",
+          "services/host/envinfo/mixin.go",
+          "services/host/envinfo/render_test.go",
+          "services/host/envinfo/testdata/effective-golden/"
+        ],
+        "modify": [
+          "services/host/workflow/env/show.go",
+          "services/host/cmd/pix/env_cmd.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "golden effective files: no environment, scaffolded home, native remote + local MCP, private exclusive custom backend",
+        "semantic equality against the Story 0 fixture (ADR-ENV-003 cross-check)",
+        "--effective stdout is byte-identical to the document handed to sbx env create (name field excepted when uncomputable)",
+        "a server declaring credential A never observes configured ref B",
+        "import-graph test: envinfo imports neither mcp nor sandbox (F17)",
+        "grep sentinel: exactly one function assembles the Pi mixin kit; no second materialization call site outside envinfo/mixin.go (F17)"
+      ],
+      "focused_command": "cd services/host && go test ./envinfo/... -run 'Render|Mixin|Effective'",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.13"
+      ],
+      "conflicts_with": [],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E2.2",
+      "title": "Creation fingerprint + drift attribution map",
+      "wave": "D",
+      "story": 2,
+      "risk": "high",
+      "scope": "Creation fingerprint over every effective create-time facet after composition, plus an attribution map from a changed composed facet back to the PRE-COMPOSITION tree key path. Identity-bearing facets named by identity; indexed paths only where the schema has no identity, and then with a changed-entry count ('mounts[] (2 entries changed)'). Never a hash-only message. Comments and formatting do not change the fingerprint; canonical semantic values do; host interpolation resolves before fingerprint comparison, but low-entropy resolved values are NEVER raw-hashed: fingerprint the authored expression plus a launcher-keyed HMAC/digest of the resolved value so changes are detected without offline-guessing exposure. ARCHITECT CORRECTION (C1/C2): this unit consumes E2.1's effective render, so it depends_on E2.1 directly, not only transitively. The launcher-keyed HMAC key itself is generated once and stored as exactly one record in hosttrust (never per-environment, never duplicated elsewhere); `pix reset` invalidates/rotates that one record together with every acceptance record (extends F6's one-store invariant to the key).",
+      "acceptance_ids": [
+        "AC-72",
+        "AC-25 (data half)"
+      ],
+      "files": {
+        "create": [
+          "services/host/envinfo/attribution.go",
+          "services/host/envinfo/attribution_test.go",
+          "services/host/hosttrust/hmackey.go",
+          "services/host/hosttrust/hmackey_test.go"
+        ],
+        "modify": [
+          "services/host/sandbox/fingerprint.go",
+          "services/host/sandbox/fingerprint_test.go",
+          "services/host/workflow/reset/reset.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "attribution table over one identity-bearing and one identityless facet, plus a list-growth case (F9)",
+        "grep proving no refusal string consists only of a hash",
+        "comment/whitespace-only edit does not change either fingerprint",
+        "interpolation fingerprint input contains the authored expression plus keyed HMAC only; raw resolved value and unkeyed raw-value hash never appear in persisted bytes",
+        "exactly one HMAC key record exists in hosttrust; no second key file appears anywhere in the tree",
+        "pix reset rotates/invalidates the one HMAC key record together with every acceptance record (F6 extension)"
+      ],
+      "focused_command": "cd services/host && go test ./envinfo/... ./sandbox/... ./hosttrust/... ./workflow/reset/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.13",
+        "E1.2",
+        "E1.4",
+        "E2.1"
+      ],
+      "conflicts_with": [
+        "services/host/sandbox/fingerprint.go",
+        "services/host/workflow/reset/reset.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E2.3",
+      "title": "Create intent + failed-create recovery state machine",
+      "wave": "D",
+      "story": 2,
+      "risk": "high",
+      "scope": "Bounded create-intent record (environment identity, sandbox name, desired creation fingerprint) written before spawning sbx, replaced by the instance-bound session record on a verified receipt. `sbx env rm -f` only after a positive create receipt AND a fresh probe still reporting that exact instance id. No receipt => fail closed and report possible residue, never remove. Next run and orphan sweep read the intent to diagnose partial state.",
+      "acceptance_ids": [
+        "P0-7"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/launch/createintent.go",
+          "services/host/workflow/launch/createintent_test.go"
+        ],
+        "modify": [
+          "services/host/lease/record.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "state-machine table: pre-create absent probe alone is NOT removal authority",
+        "receipt + stale instance id => refuse removal",
+        "no receipt => zero rm invocations and a residue report"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/launch/... -run 'CreateIntent|Recovery'",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E2.1"
+      ],
+      "conflicts_with": [
+        "services/host/lease/record.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E2.4",
+      "title": "sandbox.PlanEnvRemove + name-based fallback with cleanup report",
+      "wave": "D",
+      "story": 2,
+      "risk": "medium",
+      "scope": "PlanEnvRemove composes the same stable effective path, recomputes its effective name, refuses anything outside pix-* or unequal to the recorded instance name, appends -f only inside the existing proof-gated seam, and NEVER appends --prune-bindings. When the effective file is absent, fall back to the existing name-based planner with the same pix-*, holder, keep, instance-id and fresh-probe proofs, and report that environment-scoped secret cleanup could not run.",
+      "acceptance_ids": [
+        "AC-28",
+        "AC-23 (remove half)"
+      ],
+      "files": {
+        "create": [
+          "services/host/sandbox/envremove.go",
+          "services/host/sandbox/envremove_test.go"
+        ],
+        "modify": [
+          "services/host/workflow/launch/sandbox.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "composed effective name equals the recorded pix-* instance name before remove (F8)",
+        "non-pix-* and instance-mismatch: two refusals, exit 2",
+        "--prune-bindings never appears in any planned argv",
+        "missing effective file: fallback runs and output contains the cleanup-not-run report"
+      ],
+      "focused_command": "cd services/host && go test ./sandbox/... ./workflow/launch/... -run 'Remove|EnvRemove'",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E2.1"
+      ],
+      "conflicts_with": [
+        "services/host/workflow/launch/sandbox.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E2.5",
+      "title": "pix run cutover to sbx env create + name-based sbx exec",
+      "wave": "D",
+      "story": 2,
+      "risk": "critical",
+      "scope": "THE cutover. Add --env NAME (exact name, no prefix matching, writes nothing to config, model precedence --model > [models].main > pi default). Unknown --env exits non-zero, creates no sandbox, never falls back to the default. Launch = render effective -> sbx env create -> poll for a positively identified instance -> bind lease to instance id -> sbx exec -it <name> -- pi <exact invocation>. Attach only on a schema-verified running row + matching instance id + matching creation fingerprint + still-reviewed environment; any drift refuses, names drifted facets by canonical key path, and prints `pix rm NAME && pix run --env ENV` with no --name. Holder leases, keep markers, orphan sweep, unknown-fails-closed all preserved. ARCHITECT CORRECTION (C7): wires the `env forget`/`env show` seams to these new live-launch facts — `forget` on a currently-attached environment tears down the bound lease/instance before invalidating the acceptance record, and `show` renders real live-holder/drift/attach state from this unit's EffectiveMounts/instance data instead of the Wave C placeholder ('unknown ... lands with a later wave').",
+      "acceptance_ids": [
+        "AC-21",
+        "AC-22",
+        "AC-23",
+        "AC-24",
+        "AC-25",
+        "AC-26",
+        "AC-37",
+        "AC-45",
+        "AC-9 (launch half)",
+        "P0-6"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/launch/envlaunch.go",
+          "services/host/workflow/launch/envlaunch_test.go",
+          "services/host/cmd/pix/run_env_test.go"
+        ],
+        "modify": [
+          "services/host/cmd/pix/run_cmd.go",
+          "services/host/workflow/launch/run.go",
+          "services/host/workflow/launch/session.go",
+          "services/host/workflow/launch/kits.go",
+          "services/host/workflow/launch/sbxargs.go",
+          "services/host/workflow/launch/run_lifecycle_test.go",
+          "services/host/workflow/env/forget.go",
+          "services/host/workflow/env/show.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "two lifecycle runs: selected-environment and no-environment both reach a working session",
+        "`pix run --env work`: config.toml hash identical before and after (AC-22)",
+        "call-graph fitness: no config save on the launch path (F7, AC-37)",
+        "one environment from two repositories: two distinct pix-* names, both running, no collision",
+        "attach drift refusal asserted string-for-string against PRD section 5.3",
+        "`pix run --env hoem`: non-zero exit, sbx ls unchanged, output matches section 5.1",
+        "two live holders keep the sandbox; teardown only after the last exits",
+        "env forget on a live-attached environment tears down the bound lease/instance before the acceptance record is invalidated",
+        "env show reflects real live-holder/drift/attach state; the Wave C placeholder string is gone"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/launch/... ./cmd/pix/ ./workflow/env/... -run 'Run|Launch|Lifecycle|Env|Forget|Show'",
+      "commit_boundary": "one commit. Splitting it creates a second selectable launch path (PRD section 8).",
+      "depends_on": [
+        "E2.1",
+        "E2.2",
+        "E2.3",
+        "E2.4",
+        "E1.9",
+        "E1.15"
+      ],
+      "conflicts_with": [
+        "services/host/cmd/pix/run_cmd.go",
+        "services/host/workflow/launch/",
+        "services/host/workflow/env/forget.go",
+        "services/host/workflow/env/show.go"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "ADR-ENV-004. Nothing else may hold run_cmd.go or workflow/launch/ while this is open."
+    },
+    {
+      "id": "E2.6",
+      "title": "Recreate log wiring + `pix doctor --recreates`",
+      "wave": "D",
+      "story": 2,
+      "risk": "low",
+      "scope": "Append one recreatelog record on a creation-fingerprint attach refusal. pix doctor prints exactly zero environment-recreate lines at count 0 and exactly one line at count > 0, carrying the count and the pointer but no key path. `pix doctor --recreates` prints the records and the file path plus the local-only/deletable note. No new env verb.",
+      "acceptance_ids": [
+        "AC-71",
+        "AC-68 (wiring half)"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/doctor/recreates.go",
+          "services/host/workflow/doctor/recreates_test.go"
+        ],
+        "modify": [
+          "services/host/cmd/pix/doctor_cmd.go",
+          "services/host/workflow/launch/envlaunch.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "101-append bound test through the real doctor read path",
+        "two golden doctor outputs (count 0 and count > 0)",
+        "--recreates golden output matching PRD section 5.9",
+        "verb-count test: `env` still has exactly seven verbs (D20/D24)"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/doctor/... ./cmd/pix/ -run Doctor",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E2.5",
+        "E1.6"
+      ],
+      "conflicts_with": [
+        "services/host/cmd/pix/doctor_cmd.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E2.7",
+      "title": "Host-service desired set = default env UNION live holders",
+      "wave": "D",
+      "story": 2,
+      "risk": "medium",
+      "scope": "Desired host services = the machine default environment's services UNION services from every positively live environment holder. Synchronous unit-name and port collision check on the launch path. Unknown holder state preserves a running service. A unit stops only when no default and no live holder references it. ARCHITECT CORRECTION (C8): this durable union logic MUST NOT be wired through services/host/pack_units.go, which E5.2 deletes outright; it lives solely in workflow/launch/hostservices_env.go + serve.go so it survives pack deletion untouched.",
+      "acceptance_ids": [
+        "P0-11",
+        "AC-40 (mechanism half)"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/launch/hostservices_env.go",
+          "services/host/workflow/launch/hostservices_env_test.go"
+        ],
+        "modify": [
+          "services/host/serve.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "union table: default-only, holder-only, both, neither",
+        "unit-name and port collision refused synchronously, naming both claimants",
+        "unknown holder state keeps the unit running (fails closed)",
+        "import/grep sentinel: hostservices_env.go and serve.go carry the desired-set union; pack_units.go is untouched by this unit"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/launch/... . -run 'HostService|Units|Serve'",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E2.5"
+      ],
+      "conflicts_with": [
+        "services/host/serve.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E2.8",
+      "title": "Delete every selectable pack launch path",
+      "wave": "D",
+      "story": 2,
+      "risk": "high",
+      "scope": "Remove `pix pack` from dispatch and help, remove `pix run --pack`, remove pack config selection from the launch path, remove pack-driven host-service activation. Dead pack internals stay until Wave G; nothing pack-shaped remains user-selectable beside the environment path. No alias, no deprecation shim (N4).",
+      "acceptance_ids": [
+        "AC-27"
+      ],
+      "files": {
+        "create": [],
+        "modify": [
+          "services/host/cmd/pix/run_cmd.go",
+          "services/host/cmd/pix/root.go",
+          "services/host/cmd/pix/help.go",
+          "services/host/workflow/launch/sbxargs.go",
+          "services/host/workflow/launch/launchpack.go"
+        ],
+        "delete": [
+          "services/host/cmd/pix/pack_launch_context_test.go",
+          "services/host/cmd/pix/launchpack_compose_test.go"
+        ]
+      },
+      "red_first_tests": [
+        "grep over generated `pix help --all`: no pack launch, no --pack, no activation path",
+        "`pix pack` returns the ordinary unknown-command answer",
+        "existing launch lifecycle tests still pass with the pack seam removed"
+      ],
+      "focused_command": "cd services/host && go test ./cmd/pix/ ./workflow/launch/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E2.5",
+        "E2.7"
+      ],
+      "conflicts_with": [
+        "services/host/cmd/pix/run_cmd.go",
+        "services/host/workflow/launch/sbxargs.go"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "PRE-REQUISITE (PRD section 6, A8/R6): the private work environment is converted and run live BEFORE this lands. Land within one session of E2.5 \u2014 reverting E2.5 after this leaves no launch path. ARCHITECT CORRECTION (C11), TIGHTENED GATE: this is an enforced precondition, not descriptive prose \u2014 E2.8 refuses to land without a recorded evidence artifact (a commit or log path in this delivery's evidence tree) showing the private work environment was converted to a native environment and run live end-to-end through E2.5's cutover path; verbal confirmation alone does not satisfy this gate."
+    },
+    {
+      "id": "E3.1",
+      "title": "inference.json v1 roster + reference validation",
+      "wave": "E",
+      "story": 3,
+      "risk": "medium",
+      "scope": "Add the additive `roster` field ({main, agents{}}) to the generated inference.json v1 (existing v1 readers ignore it, so a new host binary cannot brick an older image). Every roster reference must resolve to a model in `models`; every model must reference a defined backend where Pix generates the provider. Validation names the source file and key. A shipped agent absent from [agents] resolves to [models].main.",
+      "acceptance_ids": [
+        "AC-29",
+        "AC-30",
+        "AC-31"
+      ],
+      "files": {
+        "create": [
+          "services/host/inference/roster.go",
+          "services/host/inference/roster_test.go"
+        ],
+        "modify": [
+          "services/host/inference/live.go",
+          "services/host/inference/live_test.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "roster naming an undefined model fails launch with the exact PRD section 5.7 text (file + key)",
+        "generated roster assertion: shipped agent absent from [agents] maps to main",
+        "custom project agent with explicit model: wins over the roster",
+        "tests/inference-manifest-filename.test.mjs still green"
+      ],
+      "focused_command": "cd services/host && go test ./inference/... && node --test tests/inference-provider.test.mjs tests/inference-manifest-filename.test.mjs",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.3"
+      ],
+      "conflicts_with": [
+        "services/host/inference/live.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E3.2",
+      "title": "Extensions read the roster (TypeScript only)",
+      "wave": "E",
+      "story": 3,
+      "risk": "medium",
+      "scope": "extensions/inference.ts, extensions/subagents.ts and extensions/ollama-bridge.ts read main/agent models from inference.json's roster. No routing.json read anywhere. The parent-Ollama inheritance exception stays with the bridge. No second generated artifact that can disagree with provider registration.",
+      "acceptance_ids": [
+        "AC-30 (reader half)",
+        "AC-31 (reader half)"
+      ],
+      "files": {
+        "create": [
+          "tests/roster-resolution.test.mjs"
+        ],
+        "modify": [
+          "extensions/inference.ts",
+          "extensions/subagents.ts",
+          "extensions/ollama-bridge.ts",
+          "tests/subagent-usage.test.mjs",
+          "tests/ollama-bridge.test.mjs"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "roster-resolution: explicit model: > [agents].<name> > [models].main > inherit parent",
+        "grep test: no extension reads routing.json",
+        "unknown agent name degrades to inherit-parent, never to a scored pick"
+      ],
+      "focused_command": "node --test tests/roster-resolution.test.mjs tests/subagent-usage.test.mjs tests/ollama-bridge.test.mjs && npx tsc --noEmit",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E3.1"
+      ],
+      "conflicts_with": [],
+      "parallel_safe": true,
+      "worktree": "isolated",
+      "notes": "TypeScript only: zero Go conflicts. Best candidate to run concurrently with the entire Wave D spine."
+    },
+    {
+      "id": "E3.3",
+      "title": "pix models / pix agent ls print facts only; [models].exclusive",
+      "wave": "E",
+      "story": 3,
+      "risk": "low",
+      "scope": "pix agent ls prints AGENT, MODEL, SOURCE. pix models prints models declared by machine config or the selected environment with BACKEND and SOURCE. No WHY column, no score, no price, no status taxonomy (wired/unwired/retired gone). [models].exclusive = true refuses any model not defined environment-locally, exit 2.",
+      "acceptance_ids": [
+        "AC-32",
+        "AC-33"
+      ],
+      "files": {
+        "create": [
+          "services/host/cmd/pix/models_golden_test.go"
+        ],
+        "modify": [
+          "services/host/cmd/pix/models_cmd.go",
+          "services/host/cmd/pix/models.go",
+          "services/host/cmd/pix/agent.go",
+          "services/host/cmd/pix/agent_cmd.go",
+          "services/host/workflow/models/inference.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "golden output for both commands: no status taxonomy, price, score or WHY column",
+        "exclusive = true refuses a machine-only model, exit 2",
+        "agent ls SOURCE column distinguishes explicit model: from roster from main"
+      ],
+      "focused_command": "cd services/host && go test ./cmd/pix/ -run 'Models|Agent' ./workflow/models/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E3.1"
+      ],
+      "conflicts_with": [
+        "services/host/cmd/pix/models_cmd.go",
+        "services/host/cmd/pix/agent.go"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E3.4",
+      "title": "Strip intent:/model: from shipped agents",
+      "wave": "E",
+      "story": 3,
+      "risk": "low",
+      "scope": "Remove `intent:`, `fallback_intent:` and `model:` from all 19 agents/*.md. The environment roster is the one editable table for shipped roles; a custom project agent may still pin its own exact model.",
+      "acceptance_ids": [
+        "AC-30",
+        "AC-33"
+      ],
+      "files": {
+        "create": [
+          "tests/kit-agent-roster.test.mjs"
+        ],
+        "modify": [
+          "agents/*.md"
+        ],
+        "delete": [
+          "tests/kit-subagent-roster-intents.test.mjs"
+        ]
+      },
+      "red_first_tests": [
+        "no shipped agent declares intent:, fallback_intent: or model:",
+        "every shipped agent name either appears in the scaffold's [agents] table or resolves to main"
+      ],
+      "focused_command": "node --test tests/kit-agent-roster.test.mjs",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E3.2"
+      ],
+      "conflicts_with": [
+        "agents/"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E4.1",
+      "title": "Delete --intent and run_intent from the CLI surface",
+      "wave": "F",
+      "story": 4,
+      "risk": "medium",
+      "scope": "Remove `pix run --intent`, config `run_intent`, config.DefaultRunIntent, and every session-model resolve-by-intent call site. `run` resolves the session model from --model then [models].main then pi's default. Unknown verb answer for anything intent-shaped.",
+      "acceptance_ids": [
+        "AC-34 (surface half)"
+      ],
+      "files": {
+        "create": [],
+        "modify": [
+          "services/host/cmd/pix/run_cmd.go",
+          "services/host/config/config.go",
+          "services/host/inference/session.go",
+          "services/host/workflow/launch/run.go",
+          "services/host/health/probes.go"
+        ],
+        "delete": [
+          "services/host/routing/overlord_fallback_test.go"
+        ]
+      },
+      "red_first_tests": [
+        "`pix run --intent code` is an unknown flag; `pix config set run_intent x` is refused",
+        "session model precedence table: --model > [models].main > pi default",
+        "doctor no longer warns about a resolved intent's provider key"
+      ],
+      "focused_command": "cd services/host && go test ./cmd/pix/ ./config/... ./inference/... ./workflow/launch/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E3.3",
+        "E2.5"
+      ],
+      "conflicts_with": [
+        "services/host/cmd/pix/run_cmd.go",
+        "services/host/config/config.go"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize"
+    },
+    {
+      "id": "E4.3",
+      "title": "Move the local-Ollama hardware table under inference",
+      "wave": "F",
+      "story": 4,
+      "risk": "medium",
+      "scope": "Relocate the small setup-only local Ollama hardware table (RAM, download size, context) out of routing/defaults into inference, with a shape test preventing it from ever gaining price, accuracy, or routing fields. Runs BEFORE E4.2 so pix setup's local-model flow is never without its facts.",
+      "acceptance_ids": [
+        "AC-35"
+      ],
+      "files": {
+        "create": [
+          "services/host/inference/hardware_shape_test.go"
+        ],
+        "modify": [
+          "services/host/inference/hardware.go",
+          "services/host/workflow/models/modelsadd.go"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "shape test: the table's struct has no price, accuracy, score or routing field (F12)",
+        "pix models add ollama flow still prints RAM/download/context facts"
+      ],
+      "focused_command": "cd services/host && go test ./inference/... ./workflow/models/...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E4.1"
+      ],
+      "conflicts_with": [
+        "services/host/inference/hardware.go"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "ORDER IS LOAD-BEARING: this lands before E4.2."
+    },
+    {
+      "id": "E4.2",
+      "title": "Delete the routing package, route.go, routing.json, make routing",
+      "wave": "F",
+      "story": 4,
+      "risk": "medium",
+      "scope": "Delete services/host/routing (resolver, scorecard, policy, compile, defaults, tests), services/host/route.go, the checked-in and baked routing.json, the `make routing` target and compile-oriented model targets, and `pix models pick|show --catalog|ls --catalog`. Remove `routing` from arch_test.go's L0 layer table.",
+      "acceptance_ids": [
+        "AC-34"
+      ],
+      "files": {
+        "create": [],
+        "modify": [
+          "Makefile",
+          "services/host/arch_test.go",
+          "services/host/cmd/pix/models_cmd.go",
+          "Dockerfile"
+        ],
+        "delete": [
+          "services/host/routing/",
+          "services/host/route.go",
+          "services/host/route_test.go",
+          "routing.json"
+        ]
+      },
+      "red_first_tests": [
+        "build + vet green with the package gone",
+        "`make routing` is not a target; `pix models pick` is an unknown subcommand",
+        "no baked routing.json in the image layer list"
+      ],
+      "focused_command": "cd services/host && go build ./... && go vet ./... && go test ./... ; make gate",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E4.3"
+      ],
+      "conflicts_with": [
+        "Makefile",
+        "services/host/arch_test.go",
+        "Dockerfile"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize"
+    },
+    {
+      "id": "E4.4",
+      "title": "Router sentinel + skills/model-refresh deletion + reference sweep",
+      "wave": "F",
+      "story": 4,
+      "risk": "low",
+      "scope": "Sentinel test rejecting `scorecard`, `prefer_providers`, `max_cost_usd`, `run_intent`, `CompiledRouting` in live code. Delete skills/model-refresh. Remove every routing/model-refresh reference from healthcheck, help, ollama, subagents, onboarding and docs.",
+      "acceptance_ids": [
+        "AC-34"
+      ],
+      "files": {
+        "create": [
+          "services/host/routing_gone_test.go"
+        ],
+        "modify": [
+          "skills/healthcheck/SKILL.md",
+          "skills/onboarding/SKILL.md",
+          "docs/reference.md"
+        ],
+        "delete": [
+          "skills/model-refresh/",
+          "docs/design/routing.md",
+          "docs/design/models-cli.md"
+        ]
+      },
+      "red_first_tests": [
+        "grep sentinel over live code for the five symbols (F11)",
+        "tests/skill-descriptions.test.mjs green after the deletion",
+        "tests/verb-references.test.mjs: no doc references make routing or --intent"
+      ],
+      "focused_command": "cd services/host && go test -run Routing ./... && node --test tests/skill-descriptions.test.mjs tests/verb-references.test.mjs",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E4.2"
+      ],
+      "conflicts_with": [
+        "docs/reference.md"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "Modeled on the existing hostmode_gone_test.go sentinel."
+    },
+    {
+      "id": "E5.1",
+      "title": "Translate every pack trust test to a named environment invariant",
+      "wave": "G",
+      "story": 5,
+      "risk": "critical",
+      "scope": "GATE UNIT, deletes nothing. As of architecture time, the pack-trust assertion surface lives in pack_trust_rounds_test.go, pack_review_rounds_test.go, pack_v2_trust_host_state_test.go, truststore_legacy_migration_test.go, launchpack_trust_matrix_test.go and rereview_high12_test.go — but ARCHITECT CORRECTION (C9): this list is a snapshot, not an authoritative input. At E5.1 execution time, re-derive the exact enumeration of pack-trust test files and assertions from the live tree (Waves D-F may add, rename, or move trust-adjacent tests, e.g. into hosttrust or workflow/env, before Wave G starts); do not trust this hardcoded list without confirming it against the tree as it exists when this unit runs. Produce a named environment-invariant replacement for every assertion found. Publish the re-derived mapping table in the commit message and in docs/design/environments.md.",
+      "acceptance_ids": [
+        "PRD section 6 R2",
+        "PRD section 8 stop condition"
+      ],
+      "files": {
+        "create": [
+          "services/host/workflow/env/trust_invariants_test.go",
+          ".pi-agent/deliver/native-environments/trust-test-map.md"
+        ],
+        "modify": [
+          "docs/design/environments.md"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "every row of the mapping table has a live, failing-then-passing environment test",
+        "a coverage assertion enumerating the pack trust assertion names and requiring a mapped replacement",
+        "the enumeration step is re-run against the live tree at execution time (not copy-pasted from this unit's scope text) and any newly discovered trust-adjacent test file is included"
+      ],
+      "focused_command": "cd services/host && go test ./workflow/env/... -run Trust",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E1.8",
+        "E2.8"
+      ],
+      "conflicts_with": [
+        "docs/design/environments.md"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "A Wave G diff that deletes a trust test with no named replacement is rejected at review (PRD section 8)."
+    },
+    {
+      "id": "E5.2",
+      "title": "Delete workflow/pack, pack_cmd.go, pack_units.go and their tests",
+      "wave": "G",
+      "story": 5,
+      "risk": "high",
+      "scope": "Remove the pack workflow (10,621 lines), the pack verb, the pack Suture units, and every pack test whose subject no longer exists. Trust primitives already live in hosttrust (E1.4), so nothing security-relevant is deleted here.",
+      "acceptance_ids": [
+        "AC-36 (partial)",
+        "AC-41 (measurement input)"
+      ],
+      "files": {
+        "create": [],
+        "modify": [
+          "services/host/serve.go",
+          "services/host/arch_test.go",
+          "Makefile"
+        ],
+        "delete": [
+          "services/host/workflow/pack/",
+          "services/host/cmd/pix/pack_cmd.go",
+          "services/host/pack_units.go",
+          "services/host/pack_units_test.go",
+          "services/host/cmd/pix/pack_*_test.go",
+          "services/host/cmd/pix/launchpack_*_test.go",
+          "tests/pack-authoring-docs-parity.test.mjs"
+        ]
+      },
+      "red_first_tests": [
+        "build + vet green; every hosttrust and workflow/env trust test still passes; `pix pack` gets the ordinary unknown-command answer"
+      ],
+      "focused_command": "cd services/host && go build ./... && go vet ./... && go test ./...",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E5.1"
+      ],
+      "conflicts_with": [
+        "services/host/serve.go",
+        "services/host/arch_test.go",
+        "Makefile"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize"
+    },
+    {
+      "id": "E5.3",
+      "title": "Delete packinfo pack shape, pack config keys, pack paths in sbxargs",
+      "wave": "G",
+      "story": 5,
+      "risk": "high",
+      "scope": "Remove packinfo/pack.go and packinfo/state.go (retaining any facet logic already lifted into envinfo), the config keys pack/packs/kits.stack and the mcp attachment list, and the pack code paths in workflow/launch/sbxargs.go and launchpack.go. pix mcp add|ls|auth survive as explicit machine operations.",
+      "acceptance_ids": [
+        "AC-36",
+        "AC-38"
+      ],
+      "files": {
+        "create": [],
+        "modify": [
+          "services/host/config/config.go",
+          "services/host/workflow/launch/sbxargs.go",
+          "services/host/packinfo/service.go",
+          "services/host/workflow/doctor/doctor.go",
+          "services/host/workflow/provision/setup.go"
+        ],
+        "delete": [
+          "services/host/packinfo/pack.go",
+          "services/host/packinfo/state.go",
+          "services/host/workflow/launch/launchpack.go"
+        ]
+      },
+      "red_first_tests": [
+        "config round-trip test: pack/packs/kits.stack/mcp keys are unknown keys",
+        "sbxargs golden argv contains no pack kit stacking",
+        "`pix mcp add|ls|auth` unaffected"
+      ],
+      "focused_command": "cd services/host && go test ./config/... ./packinfo/... ./workflow/... ./cmd/pix/",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E5.2"
+      ],
+      "conflicts_with": [
+        "services/host/config/config.go",
+        "services/host/workflow/launch/sbxargs.go"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize"
+    },
+    {
+      "id": "E5.4",
+      "title": "Pack sentinels + measured line deltas",
+      "wave": "G",
+      "story": 5,
+      "risk": "low",
+      "scope": "Grep/AST sentinel rejecting live pack commands, types and config keys. Confirm the launch-performs-no-config-save fitness function and the one-package-owns-native-grammar fitness function still hold after deletion. Measure and report production and test line deltas for the PR body.",
+      "acceptance_ids": [
+        "AC-36",
+        "AC-37",
+        "AC-38",
+        "AC-41"
+      ],
+      "files": {
+        "create": [
+          "services/host/pack_gone_test.go"
+        ],
+        "modify": [
+          "scripts/check-semantic-diff.mjs",
+          "tests/arch-metrics.test.mjs"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "sentinel rejects `pack` command/type/config-key symbols in live code (F13)",
+        "F7 and F3 re-asserted post-deletion",
+        "arch-metrics budget updated to the measured new totals, not an estimate"
+      ],
+      "focused_command": "cd services/host && go test -run Pack ./... && node --test tests/arch-metrics.test.mjs && make gate",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E5.3"
+      ],
+      "conflicts_with": [
+        "tests/arch-metrics.test.mjs"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize"
+    },
+    {
+      "id": "E6.1",
+      "title": "Docs cut: one mental model",
+      "wave": "H",
+      "story": 6,
+      "risk": "medium",
+      "scope": "Replace pack/routing sections in README.md, docs/reference.md, docs/getting-started.md, AGENTS.md, and the onboarding/healthcheck skills. No current doc mentions packs, routing, make routing, or --intent. getting-started's first-run path contains zero pix env invocations. ARCHITECT CORRECTION (C10): SECURITY.md is OUT OF SCOPE for this unit and remains so until the user resolves it. SECURITY.md is one of the user's seven pending, unstaged, unrelated legal/licensing cleanup files (alongside CODE_OF_CONDUCT.md, CONTRIBUTING.md, LICENSE, NOTICE.md, THIRD_PARTY_NOTICES.md, .claude/settings.local.json); this unit MUST NOT edit, stage, or restore it. Land the pack/routing-section removal in README.md, docs/reference.md, docs/getting-started.md, AGENTS.md, and the two skills now; carry SECURITY.md's pack/routing-section removal as a follow-up scoped to whatever SECURITY.md becomes after the user's own disposition of that file lands, tracked as an explicit open item, not silently dropped.",
+      "acceptance_ids": [
+        "AC-61",
+        "P0-13"
+      ],
+      "files": {
+        "create": [],
+        "modify": [
+          "README.md",
+          "docs/reference.md",
+          "docs/getting-started.md",
+          "AGENTS.md",
+          "skills/onboarding/SKILL.md",
+          "skills/healthcheck/SKILL.md",
+          "Makefile"
+        ],
+        "delete": []
+      },
+      "blocked_pending_user_disposition": [
+        "SECURITY.md"
+      ],
+      "red_first_tests": [
+        "doc grep test: zero `pix env` invocations in getting-started's first-run path",
+        "doc grep test: no doc tells a user to edit routing files, run make routing, or use packs",
+        "tests/getting-started-command.test.mjs green",
+        "SECURITY.md is not staged, edited, or restored by this unit's commit"
+      ],
+      "focused_command": "node --test tests/getting-started-command.test.mjs tests/verb-references.test.mjs tests/readme*.test.mjs",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E5.4"
+      ],
+      "conflicts_with": [
+        "AGENTS.md",
+        "docs/reference.md",
+        "Makefile"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E6.2",
+      "title": "docs/how-to/environments.md + supersede historical design docs",
+      "wave": "H",
+      "story": 6,
+      "risk": "low",
+      "scope": "Write the environments how-to (model, MCP, sharing recipes, the recreate tax, the trust read). Mark packs.md, packs-v2.md, packs-v2-impl.md as superseded or delete the ones describing an unshipped surface. Update the upstream MCP/static-attachment gotcha and the minimum sbx version.",
+      "acceptance_ids": [
+        "AC-61"
+      ],
+      "files": {
+        "create": [
+          "docs/how-to/environments.md"
+        ],
+        "modify": [
+          "docs/design/environments.md",
+          "docs/design/HANDOFF.md",
+          "docs/README.md"
+        ],
+        "delete": [
+          "docs/design/packs.md",
+          "docs/design/packs-v2.md",
+          "docs/design/packs-v2-impl.md"
+        ]
+      },
+      "red_first_tests": [
+        "tests/doctor-required-optional-docs.test.mjs green; no live doc links to a deleted file"
+      ],
+      "focused_command": "node --test tests/doctor-required-optional-docs.test.mjs tests/verb-references.test.mjs",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E5.4"
+      ],
+      "conflicts_with": [
+        "docs/design/environments.md"
+      ],
+      "parallel_safe": true,
+      "worktree": "isolated"
+    },
+    {
+      "id": "E6.3",
+      "title": "Invariants: help/doc parity, AGENTS ratchet, semantic-diff rules",
+      "wave": "H",
+      "story": 6,
+      "risk": "medium",
+      "scope": "Generated comparison test proving pix help --all and the docs enumerate the same command and config surface. Update tests/agents-md-invariants.test.mjs, the AGENTS context-budget ratchet, and the semantic-diff config-key/lifecycle rules AS INVARIANTS, not deletions: each pack/routing rule gets an environment successor.",
+      "acceptance_ids": [
+        "AC-39"
+      ],
+      "files": {
+        "create": [
+          "tests/help-docs-parity.test.mjs"
+        ],
+        "modify": [
+          "tests/agents-md-invariants.test.mjs",
+          "tests/context-budget.test.mjs",
+          "scripts/check-semantic-diff.mjs",
+          "tests/check-semantic-diff.test.mjs"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "help/docs parity fails on an intentionally omitted verb (F14)",
+        "every removed pack/routing semantic-diff rule has a named environment successor rule",
+        "context-budget ratchet passes at the new AGENTS.md size"
+      ],
+      "focused_command": "node --test tests/help-docs-parity.test.mjs tests/agents-md-invariants.test.mjs tests/context-budget.test.mjs tests/check-semantic-diff.test.mjs",
+      "commit_boundary": "one commit",
+      "depends_on": [
+        "E6.1",
+        "E6.2"
+      ],
+      "conflicts_with": [
+        "tests/agents-md-invariants.test.mjs"
+      ],
+      "parallel_safe": false,
+      "worktree": "serialize"
+    },
+    {
+      "id": "E6.4",
+      "title": "Concurrent home + work acceptance",
+      "wave": "H",
+      "story": 6,
+      "risk": "high",
+      "scope": "Run home and work environments concurrently through UAT/manual acceptance: no host-service teardown, no credential crossover. Execute and record the documented two-command first-run sequence and the three-command second-context sequence. Confirm existing sandboxes are recreated rather than silently attached under a new environment identity. Report measured production and test line deltas in the PR body.",
+      "acceptance_ids": [
+        "AC-40",
+        "AC-63",
+        "AC-41"
+      ],
+      "files": {
+        "create": [
+          ".pi-agent/deliver/native-environments/logs/acceptance-concurrent.md"
+        ],
+        "modify": [
+          "uat/scenarios/smoke.yaml"
+        ],
+        "delete": []
+      },
+      "red_first_tests": [
+        "concurrent UAT/manual acceptance log with both sandboxes live and both host-service sets running",
+        "credential crossover probe: a work-scoped ref is never visible to the home sandbox",
+        "documented, executed command sequence for U3 (2 commands) and second context (3 + one trust read)"
+      ],
+      "focused_command": "make gate && (host) pix uat submit --scenario uat/scenarios/smoke.yaml",
+      "commit_boundary": "one commit (acceptance log + any scenario change)",
+      "depends_on": [
+        "E6.3"
+      ],
+      "conflicts_with": [],
+      "parallel_safe": false,
+      "worktree": "serialize",
+      "notes": "Host-only; cannot be run from inside a pix sandbox."
+    }
+  ],
+  "conflict_files": [
+    {
+      "path": "services/host/cmd/pix/run_cmd.go",
+      "units": [
+        "E1.1",
+        "E1.15",
+        "E2.5",
+        "E2.8",
+        "E4.1"
+      ],
+      "owner": "E2.5",
+      "policy": "strict serialization; never two open at once"
+    },
+    {
+      "path": "services/host/cmd/pix/env_cmd.go",
+      "units": [
+        "E1.9",
+        "E1.10",
+        "E1.11",
+        "E1.12"
+      ],
+      "owner": "E1.9",
+      "policy": "owner lands the struct; each verb adds one field line + its own file; land in ID order"
+    },
+    {
+      "path": "services/host/uatenvmatrix/checks.go",
+      "units": [
+        "E0.1",
+        "E0.2",
+        "E0.3",
+        "E0.4",
+        "E0.5",
+        "E0.6"
+      ],
+      "owner": "E0.1",
+      "policy": "one registry line per unit; land in ID order"
+    },
+    {
+      "path": "services/host/workflow/uat/server_test.go",
+      "units": [
+        "E0.1",
+        "E0.2",
+        "E0.3",
+        "E0.4",
+        "E0.5",
+        "E0.6"
+      ],
+      "owner": "E0.1",
+      "policy": "capability golden list grows by one string per unit"
+    },
+    {
+      "path": "services/host/arch_test.go",
+      "units": [
+        "E0.1",
+        "E1.2",
+        "E1.4",
+        "E1.6",
+        "E1.7",
+        "E4.2",
+        "E5.2"
+      ],
+      "owner": null,
+      "policy": "one line each; additions in waves A-C, removals in F-G, no temporal overlap"
+    },
+    {
+      "path": "services/host/config/config.go",
+      "units": [
+        "E1.5",
+        "E4.1",
+        "E5.3"
+      ],
+      "owner": "E1.5",
+      "policy": "separated by wave"
+    },
+    {
+      "path": "services/host/workflow/launch/sbxargs.go",
+      "units": [
+        "E2.5",
+        "E2.8",
+        "E5.3"
+      ],
+      "owner": "E2.5",
+      "policy": "sequential"
+    },
+    {
+      "path": "services/host/workflow/pack/trust*.go",
+      "units": [
+        "E1.4",
+        "E5.2"
+      ],
+      "owner": "E1.4",
+      "policy": "extraction in wave B, deletion in wave G"
+    },
+    {
+      "path": "docs/design/environments.md",
+      "units": [
+        "E1.0",
+        "E5.1",
+        "E6.2"
+      ],
+      "owner": "E1.0",
+      "policy": "sequential by wave"
+    },
+    {
+      "path": "Makefile",
+      "units": [
+        "E4.2",
+        "E5.2",
+        "E6.1"
+      ],
+      "owner": null,
+      "policy": "sequential by wave"
+    },
+    {
+      "path": "AGENTS.md",
+      "units": [
+        "E6.1",
+        "E6.3"
+      ],
+      "owner": "E6.1",
+      "policy": "wave H only; every other unit uses an AGENTS-DELTA commit trailer"
+    },
+    {
+      "path": "docs/reference.md",
+      "units": [
+        "E4.4",
+        "E6.1"
+      ],
+      "owner": "E6.1",
+      "policy": "sequential"
+    }
+  ],
+  "parallel_groups": [
+    {
+      "after": "E0.1",
+      "concurrent": [
+        "E0.2",
+        "E0.3",
+        "E0.4",
+        "E0.5",
+        "E0.6"
+      ],
+      "note": "5-way; land in ID order"
+    },
+    {
+      "after": "E1.1",
+      "concurrent": [
+        "E1.0",
+        "E1.2",
+        "E1.3",
+        "E1.4",
+        "E1.5",
+        "E1.6"
+      ],
+      "note": "6-way; fully isolated worktrees"
+    },
+    {
+      "after": "E1.9",
+      "concurrent": [
+        "E1.10",
+        "E1.11",
+        "E1.12"
+      ],
+      "note": "develop in parallel, land in ID order (env_cmd.go struct)"
+    },
+    {
+      "after": "E1.7",
+      "concurrent": [
+        "E1.14"
+      ],
+      "note": "reset work is file-disjoint from the verbs"
+    },
+    {
+      "after": "E1.13",
+      "concurrent": [
+        "E2.1",
+        "E2.2",
+        "E2.3",
+        "E2.4"
+      ],
+      "note": "4-way pure units feeding the cutover"
+    },
+    {
+      "after": "E2.5",
+      "concurrent": [
+        "E2.6",
+        "E2.7"
+      ],
+      "note": "doctor and host-services are file-disjoint"
+    },
+    {
+      "after": "E1.3",
+      "concurrent": [
+        "E3.1"
+      ],
+      "note": "roster generation is independent of launch"
+    },
+    {
+      "after": "E3.1",
+      "concurrent": [
+        "E3.2",
+        "E3.3"
+      ],
+      "note": "E3.2 is TypeScript-only and safe to run alongside all of wave D"
+    },
+    {
+      "after": "E5.4",
+      "concurrent": [
+        "E6.1",
+        "E6.2"
+      ],
+      "note": "docs split by file set"
+    }
+  ],
+  "serialized_chains": [
+    [
+      "E0.1",
+      "E0.7"
+    ],
+    [
+      "E1.1",
+      "E1.7",
+      "E1.8",
+      "E1.9",
+      "E1.13"
+    ],
+    [
+      "E1.15",
+      "E2.5",
+      "E2.8"
+    ],
+    [
+      "E2.1",
+      "E2.5"
+    ],
+    [
+      "E4.1",
+      "E4.3",
+      "E4.2",
+      "E4.4"
+    ],
+    [
+      "E5.1",
+      "E5.2",
+      "E5.3",
+      "E5.4"
+    ],
+    [
+      "E6.1",
+      "E6.3",
+      "E6.4"
+    ]
+  ],
+  "integration_order": [
+    "E0.1",
+    "E0.2",
+    "E0.3",
+    "E0.4",
+    "E0.5",
+    "E0.6",
+    "E0.7",
+    "E1.1",
+    "E1.4",
+    "E1.2",
+    "E1.3",
+    "E1.5",
+    "E1.6",
+    "E1.0",
+    "E1.7",
+    "E1.8",
+    "E1.9",
+    "E1.10",
+    "E1.11",
+    "E1.12",
+    "E1.14",
+    "E1.13",
+    "E1.15",
+    "E2.1",
+    "E2.2",
+    "E2.3",
+    "E2.4",
+    "E2.5",
+    "E2.6",
+    "E2.7",
+    "E2.8",
+    "E3.1",
+    "E3.2",
+    "E3.3",
+    "E3.4",
+    "E4.1",
+    "E4.3",
+    "E4.2",
+    "E4.4",
+    "E5.1",
+    "E5.2",
+    "E5.3",
+    "E5.4",
+    "E6.1",
+    "E6.2",
+    "E6.3",
+    "E6.4"
+  ],
+  "integration_rationale": [
+    "Wave A first: highest uncertainty (unproven upstream contract). A1/A2/A3 failing here costs 7 units; failing in wave D costs 22.",
+    "E1.1 second: cheapest unit in the plan, and it removes a whole class of misdiagnosis from every later host-backed run.",
+    "E1.4 before the parsers: security-critical refactor done while the existing pack trust suite is still alive to act as its oracle.",
+    "Pure parsers and the counter next: zero blast radius, and they turn wave D into wiring over tested primitives.",
+    "Wave C verbs in read-only -> write -> refuse -> consistency-sweep order: nothing in wave C can lose a sandbox or a credential.",
+    "E2.5 last in its wave and alone: the single highest-risk merge, arriving as a small diff over pre-landed parts.",
+    "E2.8 only after E2.5 has run live: deleting the old path before the new one is proven removes the fallback.",
+    "Wave E interleaves with D at no cost (E3.2 is TypeScript-only).",
+    "E4.3 before E4.2 or pix setup's local-model flow loses its RAM/download/context facts.",
+    "Wave G last of the code waves: highest line count, lowest uncertainty, gated by E5.1's trust translation.",
+    "Wave H last: AC-39 and AC-40 assert on the finished surface, and AGENTS.md serialization is only tolerable once."
+  ],
+  "rollback_posture": {
+    "additive_and_independently_revertible": [
+      "all of wave A",
+      "all of wave B",
+      "all of wave C"
+    ],
+    "wave_granularity_from": "E2.5",
+    "rule": "reverting E2.5 after E2.8 has landed leaves no launch path at all; E2.5 and E2.8 must land within one working session and the private work environment must be converted and run live before E2.8"
+  },
+  "file_map": {
+    "delete": [
+      {
+        "path": "services/host/workflow/pack/",
+        "unit": "E5.2",
+        "lines": 10621
+      },
+      {
+        "path": "services/host/cmd/pix/pack_cmd.go",
+        "unit": "E5.2",
+        "lines": 110
+      },
+      {
+        "path": "services/host/pack_units.go + pack_units_test.go",
+        "unit": "E5.2"
+      },
+      {
+        "path": "services/host/cmd/pix/pack_*_test.go, launchpack_*_test.go",
+        "unit": "E5.2"
+      },
+      {
+        "path": "services/host/packinfo/pack.go, state.go",
+        "unit": "E5.3",
+        "lines": 1058
+      },
+      {
+        "path": "services/host/routing/",
+        "unit": "E4.2",
+        "lines": 2031,
+        "note": "minus the Ollama hardware table, moved by E4.3"
+      },
+      {
+        "path": "services/host/route.go, route_test.go",
+        "unit": "E4.2"
+      },
+      {
+        "path": "routing.json (repo root + baked)",
+        "unit": "E4.2"
+      },
+      {
+        "path": "make routing + compile-oriented model targets",
+        "unit": "E4.2"
+      },
+      {
+        "path": "skills/model-refresh/",
+        "unit": "E4.4"
+      },
+      {
+        "path": "docs/design/routing.md, models-cli.md",
+        "unit": "E4.4"
+      },
+      {
+        "path": "docs/design/packs.md, packs-v2.md, packs-v2-impl.md",
+        "unit": "E6.2"
+      },
+      {
+        "path": "services/host/workflow/launch/launchpack.go",
+        "unit": "E5.3"
+      },
+      {
+        "path": "config.toml keys: pack, packs, kits.stack, run_intent, mcp attachment list",
+        "unit": "E4.1 / E5.3"
+      },
+      {
+        "path": "tests/pack-authoring-docs-parity.test.mjs",
+        "unit": "E5.2"
+      },
+      {
+        "path": "tests/kit-subagent-roster-intents.test.mjs",
+        "unit": "E3.4",
+        "note": "replaced by tests/kit-agent-roster.test.mjs"
+      }
+    ],
+    "adapt": [
+      {
+        "path": "services/host/workflow/pack/{truststore,trust,trustsummary}.go",
+        "unit": "E1.4",
+        "change": "extract primitives to L1 hosttrust; pack imports them; no fork"
+      },
+      {
+        "path": "services/host/workflow/uat/{runner,execute}.go",
+        "unit": "E0.1",
+        "change": "named_checks from the registry; env matrix runs after the memory matrix"
+      },
+      {
+        "path": "services/host/uat/schema.go",
+        "unit": "E0.1",
+        "change": "UNCHANGED by design; only a test asserting it did not change (AC-8)"
+      },
+      {
+        "path": "services/host/health/probes.go",
+        "unit": "E1.1",
+        "change": "sbx >= 0.39.0 requirement; unparsable fails closed"
+      },
+      {
+        "path": "services/host/config/config.go",
+        "unit": "E1.5",
+        "change": "environment + [environments], canonical absolute paths only"
+      },
+      {
+        "path": "services/host/cmd/pix/config_cmd.go",
+        "unit": "E1.5",
+        "change": "refuse environment / environments.*"
+      },
+      {
+        "path": "services/host/sandbox/remove.go",
+        "unit": "E2.4",
+        "change": "PlanEnvRemove beside PlanRemove/PlanForceRemove, same scope proofs"
+      },
+      {
+        "path": "services/host/sandbox/fingerprint.go",
+        "unit": "E2.2",
+        "change": "creation fingerprint over the composed effective document"
+      },
+      {
+        "path": "services/host/workflow/launch/{run,session,sandbox,kits,sbxargs}.go",
+        "unit": "E2.5",
+        "change": "effective-file launch path"
+      },
+      {
+        "path": "services/host/workflow/reset/reset.go",
+        "unit": "E1.14",
+        "change": "invalidate every acceptance; delete no environment source"
+      },
+      {
+        "path": "services/host/inference/live.go",
+        "unit": "E3.1",
+        "change": "inference.json v1 gains additive roster"
+      },
+      {
+        "path": "services/host/inference/hardware.go",
+        "unit": "E4.3",
+        "change": "sole home of the local-Ollama table, shape-tested"
+      },
+      {
+        "path": "services/host/cmd/pix/{models_cmd,models,agent,agent_cmd}.go",
+        "unit": "E3.3",
+        "change": "facts + source only; no WHY, no status taxonomy"
+      },
+      {
+        "path": "extensions/{inference,subagents,ollama-bridge}.ts",
+        "unit": "E3.2",
+        "change": "read roster from inference.json; never routing.json"
+      },
+      {
+        "path": "agents/*.md",
+        "unit": "E3.4",
+        "change": "drop intent:/fallback_intent:/model:"
+      },
+      {
+        "path": "docs/design/environments.md",
+        "unit": "E1.0",
+        "change": "reconcile to PRD D1-D24"
+      }
+    ],
+    "retain_untouched": [
+      "services/host/uat/ (closed vocabulary), uatmatrix/, workflow/uat/ structure",
+      "services/host/lease/",
+      "services/host/sandbox/{name,list,argv}.go",
+      "services/host/memory/, supervise/, plugin/, service/",
+      "services/host/workflow/task/",
+      "services/host/mcp/ and pix mcp add|ls|auth",
+      "extensions/ollama-bridge.ts (transport; N5/P1-3)",
+      "scripts/check-open-core.sh",
+      "uat-mcp: ephemeral, dev-only, absent from pix-host mcp --list"
+    ],
+    "create": [
+      {
+        "path": "services/host/uatenvmatrix/",
+        "layer": "L1",
+        "unit": "E0.1+"
+      },
+      {
+        "path": "services/host/envinfo/",
+        "layer": "L1",
+        "unit": "E1.2/E1.3/E2.1/E2.2",
+        "note": "the single owner of native sbx env grammar (AC-38)"
+      },
+      {
+        "path": "services/host/hosttrust/",
+        "layer": "L1",
+        "unit": "E1.4"
+      },
+      {
+        "path": "services/host/recreatelog/",
+        "layer": "L1",
+        "unit": "E1.6"
+      },
+      {
+        "path": "services/host/workflow/env/",
+        "layer": "L3",
+        "unit": "E1.7+"
+      },
+      {
+        "path": "services/host/cmd/pix/env_cmd.go",
+        "layer": "L4",
+        "unit": "E1.9"
+      },
+      {
+        "path": "docs/upstream/sbx-0.39-environments.md",
+        "unit": "E0.7"
+      },
+      {
+        "path": "docs/how-to/environments.md",
+        "unit": "E6.2"
+      }
+    ]
+  },
+  "open_questions": [
+    "sbx env argv is asserted from docs/design/environments.md section 4, never observed in this tree; E0.7 must replace it with evidence.",
+    "How --dev live-skill mounts compose with an environment's own workspaces (Story 0 matrix item 2) determines E2.1's render contract.",
+    "Whether agent: pix is satisfied by a kits: entry or needs host-side kit installation (design section 5.1 restriction 6); surfaces in E0.1 and may add a unit."
+  ]
+}

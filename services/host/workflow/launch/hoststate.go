@@ -12,12 +12,28 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/container"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/packinfo"
-	"pix/host/rpc"
+	"pix/host/pixhome"
 	"pix/host/secret"
 )
+
+// memoryPort is the port THIS PIX_HOME's pix-memory container publishes.
+// It is persisted under .state/memory, not in user configuration. The cfg
+// parameter remains because callers build all host-state facts from one shape;
+// it is deliberately irrelevant to this machine-owned value.
+func memoryPort(_ *config.Config) int {
+	home, err := pixhome.Resolve()
+	if err != nil {
+		return container.DefaultMemoryPort
+	}
+	port, err := container.ReadMemoryPort(home)
+	if err != nil {
+		return container.DefaultMemoryPort
+	}
+	return port
+}
 
 type hostStateKeys struct {
 	Anthropic bool   `json:"anthropic"`
@@ -54,7 +70,6 @@ type HostState struct {
 	Memory      hostStateSvc      `json:"memory"`
 	MCP         hostStateMCP      `json:"mcp"`
 	Models      hostStateModels   `json:"models"`
-	Pack        packinfo.State    `json:"pack"`
 	Identity    hostStateIdentity `json:"identity"`
 }
 
@@ -86,7 +101,7 @@ func SanitizeIdentity(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, keysSource string, pack packinfo.State, githubGlobal bool) HostState {
+func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, keysSource string, githubGlobal bool) HostState {
 	dialer := func(p int) bool { return dial != nil && dial(p) }
 	// A key is OK only when the probe ANSWERED and named it. An unreadable
 	// `sbx secret ls` reports every key as not-set rather than inventing a
@@ -117,18 +132,19 @@ func BuildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		keys.Source = "configured inference"
 	}
 
-	mcpServers := append([]string(nil), cfg.MCP...)
-
 	hs := HostState{
-		Keys:   keys,
-		Memory: hostStateSvc{Enabled: slices.Contains(cfg.Services, "memory"), Up: dialer(rpc.MemoryPortDefault), Port: rpc.MemoryPortDefault},
-		MCP:    hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
+		Keys: keys,
+		// pix-memory is a reserved built-in (always declared), and MCP servers
+		// are declared by the ENVIRONMENT's .sbxenv.yaml plus the reserved
+		// built-ins — config.toml carries no second server list any more, so
+		// this host-state summary reports none of its own.
+		Memory: hostStateSvc{Enabled: true, Up: dialer(memoryPort(cfg)), Port: memoryPort(cfg)},
+		MCP:    hostStateMCP{Enabled: false},
 		Models: hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
-		Pack:   pack,
 	}
 	// Provisioned: an inherited, fully set-up environment that must NOT be
-	// re-onboarded — keys resolved AND a pack actually active.
-	hs.Provisioned = keys.Resolved && hs.Pack.Active
+	// re-onboarded — keys resolved.
+	hs.Provisioned = keys.Resolved
 	return hs
 }
 
@@ -148,7 +164,7 @@ func hasConfiguredKeylessModel(cfg *config.Config) bool {
 	return false
 }
 
-func BuildTrustedHostState(cfg *config.Config, env hostenv.Env, packOverride string) HostState {
+func BuildTrustedHostState(cfg *config.Config, env hostenv.Env) HostState {
 	sbxOut, sbxOK := "", false
 	if _, err := env.LookPath("sbx"); err == nil {
 		// BOUNDED: a hung `sbx secret ls` leaves sbxOK=false — keys stay
@@ -161,14 +177,14 @@ func BuildTrustedHostState(cfg *config.Config, env hostenv.Env, packOverride str
 	if secret.ProviderKeyRefsPresent(env) {
 		source = "1password"
 	}
-	// GLOBAL only. `sbx secret ls` lists sandbox-scoped secrets too, and a
-	// substring match on it reported github as available on a host where it was
-	// pinned to a single sandbox: the agent believed that, committed, and could
-	// not push. A credential one box can use is not one this payload may promise
-	// to every box.
-	ghState, _ := secret.ProbeGitHubSecret(env)
-	hs := BuildHostState(cfg, sbxOut, sbxOK, env.DialLocal, source, packinfo.Resolve(cfg, packOverride),
-		ghState == secret.GitHubSecretGlobal)
+	// The github answer comes from THIS PIX_HOME's configured GITHUB_TOKEN
+	// ref, because that is what actually reaches the box: every launch writes
+	// it as a service secret scoped to the sandbox it is entering. A
+	// host-global github secret is not this payload's evidence — the agent
+	// reads this to decide whether it can push, and a credential Pix does not
+	// give it is not one this payload may promise.
+	ghState, _ := secret.ProbeGitHubCredential(env)
+	hs := BuildHostState(cfg, sbxOut, sbxOK, env.DialLocal, source, ghState == secret.GitHubSecretGlobal)
 	hs.Identity = ReadGitIdentity(env)
 	return hs
 }
@@ -191,13 +207,13 @@ const (
 // GeneratedInputMarker), and ONLY that arg, returning a COPY of args. This is
 // the ENTIRE mechanism by which trusted host facts reach the fenced in-VM
 // agent; an ordinary user-typed prompt never carries the marker.
-func InjectTrustedHostState(args []string, cfg *config.Config, env hostenv.Env, packOverride string) ([]string, error) {
+func InjectTrustedHostState(args []string, cfg *config.Config, env hostenv.Env) ([]string, error) {
 	out := append([]string(nil), args...)
 	idx := slices.IndexFunc(out, func(a string) bool { return strings.HasPrefix(a, GeneratedInputMarker) })
 	if idx < 0 {
 		return out, nil
 	}
-	b, err := EncodeTrustedHostState(BuildTrustedHostState(cfg, env, packOverride))
+	b, err := EncodeTrustedHostState(BuildTrustedHostState(cfg, env))
 	if err != nil {
 		return nil, err
 	}

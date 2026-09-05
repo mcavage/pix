@@ -1,0 +1,44 @@
+=== 50. register a second env 'other' (tier0) for forget/repoint tests ===
+pix: environment "other" registered at /tmp/wave-c-run/xdg-data/pix/envs/other.
+
+pix env use other
+exit=0
+
+=== 51. env ls (home is default, other registered) ===
+NAME   DEFAULT  REVIEW    ROOT
+home   *        accepted  /tmp/wave-c-run/xdg-data/pix/envs/home
+other           n/a       /tmp/wave-c-run/xdg-data/pix/envs/other
+
+=== 52. forget current default 'home' -> refused (holder seam: default) ===
+pix: environment "home" is the current default; forget refuses to leave it dangling.
+     default: home
+     pick a different default first: pix env use <name>
+exit=2
+
+=== 53. forget non-default 'other' -> succeeds, source untouched ===
+pix: environment "other" unregistered. Source untouched: /tmp/wave-c-run/xdg-data/pix/envs/other
+exit=0
+-rw-r--r-- 1 node node 30 Aug 29 08:10 /tmp/wave-c-run/xdg-data/pix/envs/other/.sbxenv.yaml
+source file still present on disk
+
+=== 54. env ls after forget (only home) ===
+NAME  DEFAULT  REVIEW    ROOT
+home  *        accepted  /tmp/wave-c-run/xdg-data/pix/envs/home
+
+=== 55. env rm (no such verb, hidden pointer) ===
+pix: `pix env rm` does not exist. Registering a name is not owning the files.
+     pix env forget home   unregister the name (deletes no files)
+     pix rm pix-repo-home   remove the sandbox
+     rm -rf <path>   delete the source yourself; pix will not
+exit=2
+
+=== 56. re-register other, use it (repoint default) ===
+pix: environment "other2" registered at /tmp/wave-c-run/xdg-data/pix/envs/other.
+
+pix env use other2
+exit=0
+pix: environment "other2" is now the default.
+exit=0
+NAME    DEFAULT  REVIEW    ROOT
+home             accepted  /tmp/wave-c-run/xdg-data/pix/envs/home
+other2  *        n/a       /tmp/wave-c-run/xdg-data/pix/envs/other

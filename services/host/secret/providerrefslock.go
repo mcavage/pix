@@ -1,5 +1,5 @@
 // providerrefslock.go — the ONE advisory cross-process transaction lock over
-// op-refs.env, the single provider-ref credential file.
+// secrets.env, the single provider-ref credential file.
 //
 // Why a lock at all: every provider-key operation is a read-modify-write
 // (`secret set` upserts, `secret rm` removes, sync reads a snapshot then
@@ -8,7 +8,7 @@
 // leaving sbx and the file sourcing a provider from different refs, so every
 // such operation holds this single exclusive lock for its whole transaction.
 //
-// The lock file lives ADJACENT to op-refs.env (same config dir), host-owned,
+// The lock file lives ADJACENT to secrets.env (same config dir), host-owned,
 // created mode 0600 by withFlock. Deriving the path from DefaultOpRefsPath
 // keeps it test-injectable: a test that fakes the config path (PIX_CONFIG /
 // XDG_CONFIG_HOME) isolates the lock with it.
@@ -26,15 +26,18 @@ import (
 	"pix/host/hostenv"
 )
 
-// providerRefsLockName is the advisory transaction lock file, a sibling of
-// op-refs.env in the config dir.
-const providerRefsLockName = "provider-refs.lock"
+// providerRefsLockName is the ONE advisory transaction lock file, a sibling
+// of secrets.env in the config dir. Named .secrets.lock (not provider-refs.
+// lock): round 5 unified every secrets.env transaction — CRUD, sync, setup
+// seeding — onto this single lock file so there is exactly one lock
+// protecting the one accepted secrets file, never a second legacy path.
+const providerRefsLockName = ".secrets.lock"
 
-// ProviderRefsLockPath is <config-dir>/provider-refs.lock, adjacent to the
+// ProviderRefsLockPath is <config-dir>/.secrets.lock, adjacent to the
 // refs file it serializes (derived from the same injected env as
 // DefaultOpRefsPath so it stays hermetic under test).
 func ProviderRefsLockPath(env hostenv.Env) string {
-	return filepath.Join(filepath.Dir(DefaultOpRefsPath(env)), providerRefsLockName)
+	return filepath.Join(filepath.Dir(DefaultOpRefsPath()), providerRefsLockName)
 }
 
 // WithProviderRefsLock runs fn holding the exclusive provider-refs

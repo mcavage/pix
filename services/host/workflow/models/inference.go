@@ -5,17 +5,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"pix/host/config"
+	"pix/host/envinfo"
 	"pix/host/hostenv"
 	"pix/host/inference"
-	"pix/host/routing"
 )
 
 // inference.go — what this host BINDS: the backends, the candidate bindings
@@ -36,30 +36,6 @@ var (
 // hang setup. A var, not a const, so a hermetic test can shrink it (an
 // unreachable-daemon test must fail fast, not wait out a production budget).
 var ollamaTagsTimeout = 5 * time.Second
-
-// ErrInferenceExclusive is a REFUSAL, not a failure: under a mandatory pack the
-// topology filter drops every binding written here, so "added" would be a
-// success word with nothing behind it.
-var ErrInferenceExclusive = fmt.Errorf("a mandatory pack owns inference on this host")
-
-// readSetupLine consumes exactly one line without a buffered reader that could
-// steal subsequent answers from the provider-ref scanner.
-func readSetupLine(in io.Reader) (string, bool) {
-	var b strings.Builder
-	one := []byte{0}
-	for {
-		n, err := in.Read(one)
-		if n == 1 && one[0] == '\n' {
-			return strings.TrimSpace(b.String()), true
-		}
-		if n == 1 {
-			b.WriteByte(one[0])
-		}
-		if err != nil {
-			return strings.TrimSpace(b.String()), b.Len() > 0
-		}
-	}
-}
 
 // backends lazily creates the backend map, so no caller has to.
 func backends(cfg *config.Config) map[string]config.InferenceBackend {
@@ -177,11 +153,11 @@ func classifyOllamaTag(tag string, info ollamaTagInfo) (cloud, classified bool) 
 
 // ollamaTagFitsMemory estimates whether an unknown-catalog local tag's
 // on-disk weight size fits a USABLE-memory budget. It is deliberately WEAKER
-// than routing.Model.FitsMemory, not stronger: there is no catalog MinRAMGB
+// than inference.Model.FitsMemory, not stronger: there is no catalog MinRAMGB
 // for a tag outside the registry — no declared context window means no
 // KV-cache term to price — so this prices ONLY the weights: the same 1.15
 // runtime-overhead factor and flat 1GB floor MinRAMGB itself is computed with
-// (see routing.Model's doc comment), applied to the on-disk size the listing
+// (see inference.Model's doc comment), applied to the on-disk size the listing
 // already reports. That undercounts a large-context load, so it is a real gate
 // against the case a "no gate at all" claim would always miss — raw weights
 // alone already exceeding usable RAM — without pretending to price a context
@@ -213,7 +189,7 @@ type ollamaPlan struct {
 	// bound anyway (that absence is the bug this plan exists to fix), classified
 	// local or cloud from the listing itself — never guessed. UnknownUnclassified
 	// is a tag the listing could not classify either way: reported, never bound.
-	// None of the three ever earns a routing intent (see routing.Resolve: an
+	// None of the three is ever picked for the user (see the roster: an
 	// unscored model is never a candidate) or a bestLocal/rung role — those stay
 	// scoped to the catalog, exactly as before this pass existed.
 	UnknownLocal        []string
@@ -294,20 +270,6 @@ func ollamaListing(env hostenv.Env) (map[string]ollamaTagInfo, error) {
 	return seen, nil
 }
 
-// RequireOllamaReady refuses with the ONE thing that would change the answer.
-// The two checks fail differently: no binary means not installed, a binary
-// whose `list` hangs means the daemon is down — and telling a user to install
-// software they already have is its own kind of wrong.
-func RequireOllamaReady(env hostenv.Env) error {
-	if _, err := env.LookPath("ollama"); err != nil {
-		return fmt.Errorf("ollama is not installed or not on PATH — see https://ollama.com, then re-run")
-	}
-	if _, err := ollamaListing(env); err != nil {
-		return fmt.Errorf("the ollama binary is installed but /api/tags did not succeed: %v — start Ollama, then re-run", err)
-	}
-	return nil
-}
-
 // ConfigureOllamaInference binds CANDIDATES, never verified models. It splits
 // the catalog on Model.Local, gates local rungs on measured memory, and never
 // hard-fails a user who has simply pulled nothing yet: the RAM-appropriate rung
@@ -319,7 +281,7 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 	if err != nil {
 		return ollamaPlan{}, err
 	}
-	reg, err := routing.LoadRegistry()
+	cat, err := inference.LoadCatalog()
 	if err != nil {
 		return ollamaPlan{}, err
 	}
@@ -332,24 +294,35 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 	for _, b := range cfg.Inference.Models {
 		bound[b.Model] = true
 	}
-	bindOnce := func(m routing.Model) {
+	bindOnce := func(m inference.Model) {
 		if !bound[m.ID] {
 			bound[m.ID] = true
 			bind(cfg, m.ID, "ollama", inference.OllamaTagFor(m.ID))
 		}
 	}
 
-	var rung, bestLocal routing.Model
+	var rung, bestLocal inference.Model
+	bestLocalRAMGB := 0.0
 	rungOK := false
 	if sel.Local {
 		plan.Memory = inference.ProbeHostMemory(env)
-		if rung, rungOK = inference.ChooseLocalRung(reg, plan.Memory); rungOK {
-			plan.BestFit = inference.OllamaTagFor(rung.ID)
+		// The RAM/download/context offer decision is a setup-only inference fact
+		// (E4.3, hardware.go), independent of the scored catalog; the offered
+		// rung is then looked up in the catalog so the rest of this flow (which
+		// still binds through inference.Model) sees the same shape it always has.
+		var offerRung inference.LocalOllamaRung
+		var offered bool
+		if offerRung, offered = inference.ChooseLocalRung(plan.Memory); offered {
+			if m, known := cat.Get(offerRung.ID); known {
+				rung = m
+				rungOK = true
+				plan.BestFit = inference.OllamaTagFor(rung.ID)
+			}
 		}
-		fmt.Fprintln(out, inference.LocalRungOfferLine(plan.Memory, rung, rungOK))
+		fmt.Fprintln(out, inference.LocalRungOfferLine(plan.Memory, offerRung, rungOK))
 	}
 	knownTags := map[string]bool{}
-	for _, m := range reg.Models {
+	for _, m := range cat.Models {
 		if m.Provider == "ollama" {
 			// Unconditional on m.Available: a retired row (e.g. kimi-k3:cloud, gated
 			// to extra-usage-only) is a considered decision, and its catalog id is
@@ -366,13 +339,17 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 			// The RAM gate decides what to OFFER TO PULL. A rung already on disk
 			// costs nothing to bind and the probe judges it better, so the gate only
 			// skips a listed model on a machine we measured and it does not fit.
-			if plan.Memory.OK && !m.FitsMemory(plan.Memory.UsableGB) {
+			// The RAM facts are the rung table's (E4.3), never the catalog
+			// row's: a local model with no declared rung has no sized
+			// requirement, and an undeclared requirement is not a small one.
+			rung, sized := inference.LocalOllamaRungFor(m.ID)
+			if plan.Memory.OK && !rung.FitsMemory(plan.Memory.UsableGB) {
 				plan.SkippedRAM = append(plan.SkippedRAM, m.ID)
 			} else if _, ok := listed[inference.OllamaTagFor(m.ID)]; ok {
 				bindOnce(m)
 				plan.LocalBound = append(plan.LocalBound, m.ID)
-				if m.MinRAMGB >= bestLocal.MinRAMGB {
-					bestLocal = m
+				if sized && rung.MinRAMGB >= bestLocalRAMGB {
+					bestLocal, bestLocalRAMGB = m, rung.MinRAMGB
 				}
 			}
 		case !m.Local && sel.Cloud:
@@ -386,11 +363,9 @@ func ConfigureOllamaInference(cfg *config.Config, env hostenv.Env, sel OllamaSel
 	// Second pass: every tag the daemon listed that the shipped catalog does not
 	// know at all. THIS is the fix — without it, a user's `ollama pull` of
 	// anything not already in models.json was installed, listed, and completely
-	// invisible to Pix. Binding is NOT routing: bindOnce writes a candidate with
-	// no scorecard entry, and routing.Resolve already skips a model with none
-	// (see routing/overlord_fallback_test.go for the cost-0-wins-everything
-	// precedent this must never repeat), so an unknown tag can be called by
-	// name (`pix run --model ollama/<tag>`) but never wins an intent.
+	// invisible to Pix. Binding is not selection: bindOnce writes a candidate
+	// the user can call by name (`pix run --model ollama/<tag>`), and nothing
+	// picks a model on the user's behalf.
 	tags := make([]string, 0, len(listed))
 	for tag := range listed {
 		if !knownTags[tag] {
@@ -492,246 +467,175 @@ func emptyOllamaSelectionMessage(sel OllamaSelection, plan ollamaPlan) string {
 	return "Ollama was selected but nothing is callable through it (" + strings.Join(reasons, "; ") + "). Nothing was saved; re-run `pix setup` and choose Ollama Cloud or an API key."
 }
 
-// ConfigureDirectInference derives native backend bindings from the provider
-// refs that resolved. The catalog stays the one source of model metadata.
-func ConfigureDirectInference(cfg *config.Config, providers []string) error {
-	reg, err := routing.LoadRegistry()
-	if err != nil {
-		return err
-	}
-	keyEnvs := map[string]string{"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "google": "GEMINI_API_KEY"}
-	wanted := map[string]bool{}
-	for _, p := range providers {
-		wanted[p] = true
-		if keyEnv := keyEnvs[p]; keyEnv != "" {
-			backends(cfg)[p] = config.InferenceBackend{Driver: "native", Auth: "1password", KeyEnv: keyEnv}
-		}
-	}
-	// Rebuild direct bindings deterministically, retaining bindings from
-	// non-native pack/gateway backends.
-	kept := cfg.Inference.Models[:0]
-	for _, b := range cfg.Inference.Models {
-		if cfg.Inference.Backends[b.Backend].Driver != "native" {
-			kept = append(kept, b)
-		}
-	}
-	cfg.Inference.Models = kept
-	for _, m := range reg.Models {
-		if m.Available && wanted[m.Provider] {
-			bind(cfg, m.ID, m.Provider, m.ID)
-		}
-	}
-	return nil
+// EnvironmentRosterFacts is what `pix models` and `pix agent ls` (E3.3) read
+// to print FACTS ONLY: no WHY, no score, no price, no wired/unwired/retired
+// status taxonomy. A zero value (Name == "") means no environment is
+// selected — cfg.Environment is empty, or (defensively) names an entry not
+// present in cfg.Environments.
+type EnvironmentRosterFacts struct {
+	// Name is the selected environment's registered name, "" when none.
+	Name string
+	// Root is that environment's canonical directory.
+	Root string
+	// Exclusive mirrors the sidecar's [models].exclusive (§6.3): true narrows
+	// every roster reference to this environment's OWN [inference.models]
+	// definitions — never a machine-config binding — and ValidateRoster
+	// refuses any reference that escapes that boundary.
+	Exclusive bool
+	// Roster is the RosterInput this environment authored: Main is
+	// [models].main, Agents is the [agents] table VERBATIM (no shipped-agent
+	// default filled in — a caller that needs the shipped-agent-maps-to-main
+	// default composed in supplies ShippedAgents and reads the result of
+	// ValidateRoster's own inference.CompileInferenceRuntime call instead of
+	// this raw map, exactly the distinction `pix agent ls` needs to tell an
+	// authored [agents] override from a bare Main fallback).
+	Roster inference.RosterInput
+	// LocalModels is this environment's own [[inference.models]] declarations,
+	// id -> backend name — the set [models].exclusive narrows resolution to.
+	LocalModels map[string]string
 }
 
-// ConfigureModelRoster turns the broad set of bindings into the small, explicit
-// catalog-model surface agents may use; the router picks by intent but can
-// never escape it. Candidates are CALLABLE models, not merely bound ones —
-// offering one that never answered means the user picks something that 401s at
-// call time — so a bound-but-unprobed model gets its own error.
-func ConfigureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, interactive bool, requested string) error {
-	if cfg == nil || cfg.Inference.ExclusiveSource != "" {
-		return nil
+// ResolveEnvironmentRoster reads the machine's selected environment
+// (cfg.Environment) and its optional pix.toml sidecar directly: config and
+// envinfo are both L1 packages, and this composition — deciding WHICH
+// environment is selected, then handing its resolved facts across the
+// boundary as a RosterInput — is exactly the caller's job roster.go's own
+// doc comment describes. inference (L1) never resolves a sidecar itself,
+// and this function never asks workflow/env to Load one either: `pix
+// models`/`pix agent ls` are read-only fact reports, not a launch, and Load's
+// containment/trust/symlink machinery exists for the launch path, not this
+// one.
+//
+// shippedAgents is the caller's own agent-name set (nil is fine for `pix
+// models`, which has no use for it) — this package never reads agents/*.md
+// itself.
+//
+// A caller with no selected environment, or a selected environment with no
+// pix.toml sidecar, gets a zero-Name EnvironmentRosterFacts back: "no
+// environment roster is in effect", never an error.
+func ResolveEnvironmentRoster(cfg *config.Config, shippedAgents []string) (EnvironmentRosterFacts, error) {
+	if cfg == nil || strings.TrimSpace(cfg.Environment) == "" {
+		return EnvironmentRosterFacts{}, nil
 	}
-	reg, err := routing.LoadRegistry()
-	if err != nil {
+	name := cfg.Environment
+	root, ok := cfg.Environments[name]
+	if !ok {
+		// config.Load already fails closed on a dangling default
+		// (dropNoncanonicalEnvironments); a hand-assembled *config.Config that
+		// skipped that pass gets the same honest "no roster" here, not a panic.
+		return EnvironmentRosterFacts{}, nil
+	}
+	facts := EnvironmentRosterFacts{Name: name, Root: root}
+	sidecarPath := filepath.Join(root, "pix.toml")
+	switch _, statErr := os.Stat(sidecarPath); {
+	case statErr == nil:
+		sc, err := envinfo.ParseSidecar(sidecarPath)
+		if err != nil {
+			return EnvironmentRosterFacts{}, err
+		}
+		facts.Exclusive = sc.Models.Exclusive
+		facts.Roster = inference.RosterInput{Main: sc.Models.Main, Agents: sc.Agents, ShippedAgents: shippedAgents}
+		facts.LocalModels = make(map[string]string, len(sc.Inference.Models))
+		for _, m := range sc.Inference.Models {
+			facts.LocalModels[m.ID] = m.Backend
+		}
+	case os.IsNotExist(statErr):
+		// pix.toml is optional (docs/design/environments.md §5.2): no sidecar
+		// means no roster and no environment-local models, not an error.
+	default:
+		return EnvironmentRosterFacts{}, statErr
+	}
+	return facts, nil
+}
+
+// rosterKnownModels is the membership set ValidateRoster checks a roster
+// reference against: this environment's own [[inference.models]]
+// declarations, PLUS — unless [models].exclusive narrows it away — every
+// model id machine config has bound (cfg.Inference.Models), regardless of
+// probe/verification state. Facts-only display never gates on "has this
+// been probed yet": that is what `pix setup`/`pix doctor` are for.
+func rosterKnownModels(cfg *config.Config, facts EnvironmentRosterFacts) map[string]bool {
+	known := make(map[string]bool, len(facts.LocalModels)+len(cfg.Inference.Models))
+	if !facts.Exclusive {
+		// The SHIPPED CATALOG counts as machine-declared, and leaving it
+		// out was a straight contradiction: resolveRunModel picks this
+		// home's default STRAIGHT from the catalog (no binding needed,
+		// stamped "configured provider default"), so a fresh home ran
+		// `openai/sol` happily until someone wrote that exact same id into
+		// [models].main — which then refused to launch, because a fresh
+		// config.toml binds nothing. A model this build can name is a model
+		// a roster may reference; whether it is CALLABLE is a credential
+		// and probe question `pix doctor` answers, not a spelling question
+		// this check can answer.
+		if catalog, err := inference.LoadCatalog(); err == nil {
+			for _, m := range catalog.Models {
+				if m.Available {
+					known[m.ID] = true
+				}
+			}
+		}
+		for _, b := range cfg.Inference.Models {
+			known[b.Model] = true
+		}
+	}
+	for id := range facts.LocalModels {
+		known[id] = true
+	}
+	return known
+}
+
+// checkRosterReferences walks every roster reference (Main, then each
+// authored [agents] entry in sorted order for a deterministic first
+// offender) against known, refusing the first one known does not contain.
+// The error names the exact source file and bracket-table key (PRD §5.7's
+// shape), reusing inference.RosterError — E3.1's own composition-boundary
+// error type — so this reads identically to buildRoster's "not a generated
+// model" refusal, whichever boundary actually fired.
+func checkRosterReferences(facts EnvironmentRosterFacts, known map[string]bool) error {
+	reason := "is not declared by machine config or this environment's own [inference.models]"
+	if facts.Exclusive {
+		reason = "is not defined in this environment's own [inference.models] (exclusive = true)"
+	}
+	check := func(key, model string) error {
+		if strings.TrimSpace(model) == "" || known[model] {
+			return nil
+		}
+		return &inference.RosterError{File: "pix.toml", Key: key, Reason: fmt.Sprintf("%q %s", model, reason)}
+	}
+	if err := check("[models].main", facts.Roster.Main); err != nil {
 		return err
 	}
-	callable, unproven := map[string]bool{}, map[string]bool{}
-	for _, b := range cfg.Inference.Models {
-		switch {
-		case !b.Available || !inference.TopologyAllowed(cfg, b):
-		case inference.Callable(cfg, b):
-			callable[b.Model] = true
-		default:
-			unproven[b.Model] = true
-		}
+	names := make([]string, 0, len(facts.Roster.Agents))
+	for n := range facts.Roster.Agents {
+		names = append(names, n)
 	}
-	var candidates []routing.Model
-	for _, m := range reg.Models {
-		if m.Available && callable[m.ID] {
-			candidates = append(candidates, m)
-		}
-	}
-	if len(candidates) == 0 {
-		return fmt.Errorf("the selected inference runtime exposes no models from the Pix catalog")
-	}
-
-	canonicalize := func(raw string) ([]string, error) {
-		var selected []string
-		add := func(id string) {
-			if !slices.Contains(selected, id) {
-				selected = append(selected, id)
-			}
-		}
-		for _, token := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
-			if token == "all" {
-				for _, m := range candidates {
-					add(m.ID)
-				}
-				continue
-			}
-			if n, convErr := strconv.Atoi(token); convErr == nil {
-				if n < 1 || n > len(candidates) {
-					return nil, fmt.Errorf("model choice %d is out of range", n)
-				}
-				token = candidates[n-1].ID
-			}
-			m, known := reg.Get(token)
-			switch {
-			case known && unproven[m.ID] && !callable[m.ID]:
-				return nil, fmt.Errorf("model %q is bound but has not passed a probe: pix setup --pull-models", token)
-			case !known || !callable[m.ID]:
-				return nil, fmt.Errorf("model %q is not available through the selected runtime", token)
-			}
-			add(m.ID)
-		}
-		if len(selected) == 0 {
-			return nil, fmt.Errorf("choose at least one model")
-		}
-		return selected, nil
-	}
-
-	if strings.TrimSpace(requested) != "" {
-		selected, err := canonicalize(requested)
-		if err != nil {
+	sort.Strings(names)
+	for _, n := range names {
+		if err := check("[agents]."+n, facts.Roster.Agents[n]); err != nil {
 			return err
 		}
-		cfg.Inference.AllowedModels = selected
-		return nil
 	}
-	defer func() { recordRosterProviders(cfg, candidates) }()
-
-	// Preserve an existing choice, dropping models with no callable binding.
-	// Widening happens BEFORE the probe (see widenRoster): a roster widened
-	// afterwards names models that were never probed, so they are not callable,
-	// so they get pruned right back out on this very line.
-	var kept []string
-	for _, id := range cfg.Inference.AllowedModels {
-		if callable[id] {
-			kept = append(kept, id)
-		}
-	}
-	if len(kept) > 0 {
-		cfg.Inference.AllowedModels = kept
-		return nil
-	}
-	if len(candidates) == 1 || !interactive {
-		cfg.Inference.AllowedModels = nil
-		for _, m := range candidates {
-			cfg.Inference.AllowedModels = append(cfg.Inference.AllowedModels, m.ID)
-		}
-		return nil
-	}
-
-	fmt.Fprintln(out, "Which models may Pix agents use?")
-	fmt.Fprintln(out, "The router stays inside this roster; choose one model to use it everywhere.")
-	for i, m := range candidates {
-		fmt.Fprintf(out, "  %d. %s (%s)\n", i+1, m.Label, m.ID)
-	}
-	fmt.Fprint(out, "Choose models [all]: ")
-	choice, ok := readSetupLine(in)
-	if !ok || strings.TrimSpace(choice) == "" {
-		choice = "all"
-	}
-	selected, err := canonicalize(choice)
-	if err != nil {
-		return err
-	}
-	cfg.Inference.AllowedModels = selected
 	return nil
 }
 
-// WidenRosterForProvider adds every bound catalog model of ONE provider,
-// offered before or not — this is what makes `pix models add <provider>` mean
-// what it says. New-provider widening honors the RosterProviders stamp so a
-// considered narrowing survives an unrelated reconcile; a user TYPING the
-// provider's name is asking to be offered it again. Matching is on the CATALOG
-// model's provider: a gateway backend can serve anthropic models.
-func WidenRosterForProvider(cfg *config.Config, provider string) {
-	if provider != "" {
-		widenRoster(cfg, func(_ config.InferenceModelBinding, m routing.Model) bool { return m.Provider == provider })
+// ValidateRoster refuses a roster this host cannot actually honor, exit 2
+// (the caller wraps this in cli.UsageError): [models].exclusive = true
+// narrows resolution to this environment's OWN [inference.models]
+// declarations ONLY — a private-gateway environment's roster must never
+// silently fall through to a machine-config binding it was defined to
+// exclude. Otherwise a roster reference may resolve to EITHER a
+// machine-config-bound model or one this environment declares itself (E3.3's
+// own scope: "models declared by machine config or the selected
+// environment"). facts.Name == "" (no environment selected) always passes:
+// there is no roster to validate. This never invokes E3.1's
+// CompileInferenceRuntime/buildRoster pipeline — that pipeline answers "is
+// this a CALLABLE (probed) model", the launch question; this answers "is
+// this a DECLARED model", the read/display question — but it reuses that
+// same pipeline's public RosterInput/RosterError types (roster.go) so the
+// two boundaries never grow divergent shapes.
+func ValidateRoster(cfg *config.Config, facts EnvironmentRosterFacts) error {
+	if facts.Name == "" {
+		return nil
 	}
-}
-
-// widenRosterForNewProviders adds every catalog model of a provider the roster
-// has never been offered. It runs after binding and BEFORE verification, so the
-// new models are probed; ConfigureModelRoster prunes whichever failed.
-func widenRosterForNewProviders(cfg *config.Config, prior map[string]bool) {
-	if cfg == nil {
-		return
-	}
-	seen := rosterSeenProviders(cfg, prior)
-	widenRoster(cfg, func(b config.InferenceModelBinding, _ routing.Model) bool { return !seen[b.Backend] })
-}
-
-// widenRoster is the one widening mechanism. An EMPTY roster already means "no
-// restriction" and is never widened: turning an absence of policy into an
-// explicit list is how the roster froze in the first place.
-func widenRoster(cfg *config.Config, admit func(config.InferenceModelBinding, routing.Model) bool) {
-	if cfg == nil || cfg.Inference.ExclusiveSource != "" || len(cfg.Inference.AllowedModels) == 0 {
-		return
-	}
-	reg, err := routing.LoadRegistry()
-	if err != nil {
-		return
-	}
-	for _, b := range cfg.Inference.Models {
-		if !b.Available || slices.Contains(cfg.Inference.AllowedModels, b.Model) {
-			continue
-		}
-		if m, ok := reg.Get(b.Model); ok && m.Available && admit(b, m) {
-			cfg.Inference.AllowedModels = append(cfg.Inference.AllowedModels, b.Model)
-		}
-	}
-}
-
-// rosterSeenProviders answers "which providers has the roster already been
-// offered", deciding what widening may touch. A pre-roster_providers config has
-// an empty list, and the honest reading of that is the PRE-mutation bound set
-// (prior): reading the CURRENT set counts the provider being added as seen, so
-// widening does nothing on exactly the upgrade path that motivated it. prior ==
-// nil means no reconcile is in flight, where nothing is new and nothing widens.
-func rosterSeenProviders(cfg *config.Config, prior map[string]bool) map[string]bool {
-	seen := map[string]bool{}
-	for _, p := range cfg.Inference.RosterProviders {
-		seen[p] = true
-	}
-	if len(seen) > 0 {
-		return seen
-	}
-	for p := range prior {
-		seen[p] = true
-	}
-	if prior == nil {
-		for _, b := range cfg.Inference.Models {
-			seen[b.Backend] = true
-		}
-	}
-	// A legacy config may name providers the pre-mutation scan missed (a binding
-	// dropped from the catalog since); the user was plainly offered those.
-	for _, id := range cfg.Inference.AllowedModels {
-		if provider, _, ok := strings.Cut(id, "/"); ok {
-			seen[provider] = true
-		}
-	}
-	return seen
-}
-
-// recordRosterProviders stamps the providers this decision covered, so the next
-// reconcile can tell a new provider from one the user declined models from.
-func recordRosterProviders(cfg *config.Config, candidates []routing.Model) {
-	seen := append([]string{}, cfg.Inference.RosterProviders...)
-	for _, m := range candidates {
-		if !slices.Contains(seen, m.Provider) {
-			seen = append(seen, m.Provider)
-		}
-	}
-	sort.Strings(seen)
-	cfg.Inference.RosterProviders = seen
-}
-
-// ContainsString is the roster's membership test.
-func ContainsString(haystack []string, needle string) bool {
-	return slices.Contains(haystack, needle)
+	return checkRosterReferences(facts, rosterKnownModels(cfg, facts))
 }

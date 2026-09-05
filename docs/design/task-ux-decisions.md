@@ -1,5 +1,12 @@
 # pix `task`: three UX decisions
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: **accepted** (user decisions folded in 2025). Scope: `services/host/cmd/pix/task.go`
 (+ `status.go`, `config/config.go`). Audience: the engineer who implements this. All three
 recommendations are approved; open cross-cutting calls are now resolved (see the decisions log at

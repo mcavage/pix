@@ -6,7 +6,6 @@
       "WebFetch(domain:ollama.com)",
       "Bash(./out/pix models *)",
       "Bash(echo \"--- exit $?\")",
-      "Bash(./out/pix-host route *)",
       "Bash(./out/pix --help)",
       "WebFetch(domain:github.com)"
     ]

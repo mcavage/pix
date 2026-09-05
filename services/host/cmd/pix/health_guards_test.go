@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -11,10 +10,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
-	"pix/host/config"
 	"pix/host/health"
+	"pix/host/hostenv"
+	"pix/host/sys/systest"
 	"pix/host/workflow/launch"
 )
 
@@ -181,63 +180,57 @@ func TestReadinessModelIsRetired(t *testing.T) {
 	}
 }
 
-// keyStore writes a REAL executable that behaves like `sbx secret ls`: it is
-// the process the probe actually runs, so the classification under test is the
-// production one. No probe seam is faked.
-func keyStore(t *testing.T, name, body string) string {
+// refsEnv builds a hostenv.Env whose ONLY interesting fact is what
+// <PIX_HOME>/secrets.env contains — the sole evidence the launch gate reads.
+// readErr simulates a file that exists and cannot be read (the unknown arm).
+func refsEnv(t *testing.T, content string, readErr error, sbxLs string, sbxCalled *bool) hostenv.Env {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	t.Setenv("PIX_HOME", t.TempDir())
+	return hostenv.Env{System: &systest.Fake{
+		LookPathFn: func(n string) (string, error) { return "/usr/bin/" + n, nil },
+		IsFileFn:   func(string) bool { return readErr != nil },
+		ReadFileFn: func(string) (string, error) {
+			if readErr != nil {
+				return "", readErr
+			}
+			return content, nil
+		},
+		RunFn: func(name string, args ...string) (string, error) {
+			if name == "sbx" && sbxCalled != nil {
+				*sbxCalled = true
+			}
+			return sbxLs, nil
+		},
+		RunTimedFn: func(name string, args ...string) (string, bool, error) {
+			if name == "sbx" && sbxCalled != nil {
+				*sbxCalled = true
+			}
+			return sbxLs, false, nil
+		},
+	}}
 }
 
-// TestLaunchGateRefusesOnlyAPositiveNoKey is safety invariant 6: `run` refuses
-// to launch ONLY on a POSITIVE "no model key" answer. A key store that is
-// missing, broken, hung or refusing is UNKNOWN, and unknown proceeds — a false
-// refusal is worse than a failed launch.
-//
-// This table drives launch.ProbeModelKeysBudget directly, with a generous
-// TEST-only budget (testKeyProbeBudget), rather than launch.ProbeModelKeys
-// (which always pays the production health.StatusBudget, 2s). Every fixture
-// here exits in milliseconds, so the budget value itself proves nothing about
-// these cases — but pinning them to the production constant made this
-// correctness table hostage to that constant's real-world margin on a loaded
-// or slower runner (macOS CI in particular): a subprocess spawn that is merely
-// slow, not hung, could read as a timeout and turn an expected ready/absent
-// verdict into a flaky unknown. A generous, test-owned budget removes that
-// coupling; TestLaunchGateProbeModelKeysUsesTheProductionBudget below is the
-// separate, dedicated test that still pins ProbeModelKeys to health.StatusBudget.
+// TestLaunchGateRefusesOnlyAPositiveNoKey is safety invariant 6, re-based on
+// Wave C's evidence: `run` refuses ONLY on a POSITIVE "this PIX_HOME
+// configures no model provider ref" answer. A refs file that exists and cannot
+// be read is UNKNOWN, and unknown proceeds — a false refusal is worse than a
+// failed launch.
 func TestLaunchGateRefusesOnlyAPositiveNoKey(t *testing.T) {
-	// testKeyProbeBudget is generous on purpose: these fixtures all exit
-	// almost instantly, so this only needs to be far larger than any real
-	// exec + pipe-read overhead, never a value this table is trying to prove.
-	const testKeyProbeBudget = 10 * time.Second
-	// testKeyProbeParentDeadline is the test's OWN parent context deadline,
-	// deliberately generous and independent of testKeyProbeBudget above: a
-	// tight 3s parent used to sit UNDER a 10s budget and silently cap every
-	// case's effective timeout to 3s regardless of the constant this table is
-	// meant to exercise, so a slow (not hung) subprocess spawn on a loaded
-	// runner could still read as a timeout. Sized well above the budget so
-	// the budget itself, not this deadline, governs the fixtures below —
-	// which all exit in milliseconds anyway.
-	const testKeyProbeParentDeadline = 30 * time.Second
 	for _, tc := range []struct {
 		name       string
-		body       string
+		refs       string
+		readErr    error
 		wantRefuse bool
 		wantStatus health.Status
 	}{
-		{"listing names a key", "#!/bin/sh\necho anthropic\n", false, health.StatusReady},
-		{"listing answers with no model key", "#!/bin/sh\necho github\n", true, health.StatusAbsent},
-		{"store fails", "#!/bin/sh\nexit 3\n", false, health.StatusUnknown},
-		{"store refuses", "#!/bin/sh\necho 'permission denied' >&2\nexit 1\n", false, health.StatusUnknown},
+		{"a configured model ref", "ANTHROPIC_API_KEY=op://v/a/k\n", nil, false, health.StatusReady},
+		{"only a github ref", "GITHUB_TOKEN=op://v/gh/t\n", nil, true, health.StatusAbsent},
+		{"no refs file at all", "", nil, true, health.StatusAbsent},
+		{"an unfilled placeholder", "ANTHROPIC_API_KEY=op://<vault>/<item>/<field>\n", nil, true, health.StatusAbsent},
+		{"refs file unreadable", "", os.ErrPermission, false, health.StatusUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), testKeyProbeParentDeadline)
-			defer cancel()
-			r := launch.ProbeModelKeysBudget(ctx, testKeyProbeBudget, keyStore(t, "keystore", tc.body), "secret", "ls")
+			r := launch.ProbeModelKeys(refsEnv(t, tc.refs, tc.readErr, "", nil))
 			if got := r.Effective(); got != tc.wantStatus {
 				t.Errorf("status = %s, want %s (%+v)", got, tc.wantStatus, r)
 			}
@@ -248,93 +241,19 @@ func TestLaunchGateRefusesOnlyAPositiveNoKey(t *testing.T) {
 	}
 }
 
-// TestLaunchGateTimeoutIsUnknownAndNeverRefuses is the hung-store arm of the
-// tri-state, split out of the table above on purpose: it is the one case that
-// needs a probe to actually time out, and the table's other four cases must
-// never be slowed down (or made flaky under load/-race) by sharing a run with
-// a real subprocess racing a production-sized deadline. It proves the
-// contract with a budget the TEST controls (workflow/launch.ProbeModelKeysBudget),
-// not the production 2s (health.StatusBudget) — so this test is fast and
-// deterministic on a loaded CI box, while a SEPARATE self-test below still
-// proves ProbeModelKeys itself is wired to the real production budget.
-func TestLaunchGateTimeoutIsUnknownAndNeverRefuses(t *testing.T) {
-	// `exec` so the killed process IS the sleep: a shell that forks keeps the
-	// output pipe open past the deadline, which is a fixture bug, not a probe
-	// one. The sleep only needs to outlast the tiny test budget below, not any
-	// production timing.
-	bin := keyStore(t, "keystore", "#!/bin/sh\nexec sleep 5\n")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	r := launch.ProbeModelKeysBudget(ctx, 50*time.Millisecond, bin, "secret", "ls")
-	if got := r.Effective(); got != health.StatusUnknown {
-		t.Errorf("status = %s, want %s (%+v)", got, health.StatusUnknown, r)
+// TestLaunchGateIgnoresGlobalSbxSecrets is Wave C's central refusal: a host
+// whose `sbx secret ls` is full of GLOBAL provider keys, and whose PIX_HOME
+// configures none, still refuses. Those globals belong to whoever pushed them
+// — another stack, an older pix, a hand-run `sbx secret set -g` — and Pix
+// neither writes nor depends on them. The gate must not even ASK sbx.
+func TestLaunchGateIgnoresGlobalSbxSecrets(t *testing.T) {
+	var sbxCalled bool
+	r := launch.ProbeModelKeys(refsEnv(t, "", nil, "anthropic\nopenai\ngoogle\n", &sbxCalled))
+	if !launch.RefusesLaunch(r) {
+		t.Errorf("a global-only key satisfied the launch gate: %+v", r)
 	}
-	if got := launch.RefusesLaunch(r); got {
-		t.Errorf("RefusesLaunch = %v, want false: a timed-out store must never refuse a launch (%+v)", got, r)
-	}
-}
-
-// TestLaunchGateProbeModelKeysUsesTheProductionBudget pins the ONE thing the
-// budget seam above must never drift from: ProbeModelKeys (what `run` actually
-// calls) hands health.StatusBudget to the shared implementation, not some
-// other constant a future edit could quietly relax. It never has to wait for a
-// timeout to prove this — a fast store settles long before either budget
-// expires, so the two calls' results are compared directly instead.
-func TestLaunchGateProbeModelKeysUsesTheProductionBudget(t *testing.T) {
-	bin := keyStore(t, "keystore", "#!/bin/sh\necho anthropic\n")
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	// Warm the fixture first, and throw the result away. The FIRST exec of a
-	// just-written executable pays a one-time cost the second does not (on
-	// macOS, Gatekeeper/XProtect inspection plus a cold page-in); under load
-	// that cost has exceeded the 2s production budget. Without this, `want`
-	// pays it and `got` does not, so the two disagree on a cold-vs-warm
-	// artifact rather than on the wiring this test exists to pin -- observed
-	// as want=unknown/"probe timed out" (2.001s) vs got=ready (86ms).
-	_ = launch.ProbeModelKeysBudget(ctx, health.StatusBudget, bin, "secret", "ls")
-	want := launch.ProbeModelKeysBudget(ctx, health.StatusBudget, bin, "secret", "ls")
-	got := launch.ProbeModelKeys(ctx, bin, "secret", "ls")
-	if got.Effective() != want.Effective() || got.Detail != want.Detail {
-		t.Errorf("ProbeModelKeys = %+v, want the same as an explicit health.StatusBudget call = %+v", got, want)
-	}
-}
-
-// TestLaunchGateEvidenceCarriesARunnableFix: every warning row a launch prints
-// states an observation, and every VERIFIED gap carries an exact command.
-// Anything unknown carries none — run never guesses a repair for something it
-// could not check.
-func TestLaunchGateEvidenceCarriesARunnableFix(t *testing.T) {
-	fixFirstTokens := map[string]bool{"pix": true, "pix-host": true, "brew": true, "op": true, "sbx": true,
-		"gh": true, "ollama": true, "docker": true, "git": true, "launchctl": true, "systemctl": true}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	keys := launch.ProbeModelKeys(ctx, keyStore(t, "keystore", "#!/bin/sh\necho github\n"), "secret", "ls")
-	// A memory-enabled config with nothing listening: the second row is a real
-	// probe of a real (closed) port, not a fabricated result.
-	snap := launch.FastSnapshot(ctx, &config.Config{Services: []string{"memory"}}, keys)
-	if len(snap.Results) < 2 {
-		t.Fatalf("the fast snapshot must carry the key evidence and the memory probe: %+v", snap.Results)
-	}
-	for _, r := range snap.Results {
-		if r.OK() {
-			continue
-		}
-		if strings.TrimSpace(r.Evidence) == "" {
-			t.Errorf("%s is %s with no evidence", r.Name, r.Effective())
-		}
-		if !r.Missing() {
-			if r.Fix != "" {
-				t.Errorf("%s could not be checked yet offers the fix %q", r.Name, r.Fix)
-			}
-			continue
-		}
-		if strings.TrimSpace(r.Fix) == "" {
-			t.Errorf("verified gap %q carries no fix command", r.Name)
-			continue
-		}
-		if first := strings.Fields(r.Fix)[0]; !fixFirstTokens[first] {
-			t.Errorf("fix for %q starts with %q, which is not a command: %q", r.Name, first, r.Fix)
-		}
+	if sbxCalled {
+		t.Error("the launch gate consulted sbx; global secrets are not this PIX_HOME's evidence")
 	}
 }
 

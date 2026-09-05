@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"pix/host/config"
-	"pix/host/routing"
 )
 
 func cfgWith(roster []string, backends map[string]config.InferenceBackend, models ...config.InferenceModelBinding) *config.Config {
@@ -74,22 +73,21 @@ func unavailable(b config.InferenceModelBinding) config.InferenceModelBinding {
 	return b
 }
 
-// TestBoundRegistry_UnconfiguredHostIsNotNarrowed is the guard on the other
+// TestCatalogForBindings_NarrowsOnlyWhatWasBound is the guard on the other
 // direction of the availability bug. Bindings are the authority ONLY once they
-// exist: filtering an empty set would mark every catalog model unavailable, so
-// a fresh box would resolve every intent to a fallback and describe nothing
-// useful. The bound flag is what lets a caller say which world it is showing.
-func TestBoundRegistry_UnconfiguredHostIsNotNarrowed(t *testing.T) {
-	catalog := &routing.Registry{Models: []routing.Model{
+// exist: filtering an empty set marks every catalog model unavailable and
+// describes nothing useful, which is why Configured() gates the narrowing.
+func TestCatalogForBindings_NarrowsOnlyWhatWasBound(t *testing.T) {
+	catalog := &Catalog{Models: []Model{
 		{ID: "anthropic/claude-opus-5", Provider: "anthropic", Available: true},
 		{ID: "openai/gpt-5.6-sol", Provider: "openai", Available: true},
 	}}
 
-	reg, bound := BoundRegistry(&config.Config{}, catalog)
-	if bound {
+	empty := &config.Config{}
+	if Configured(empty) {
 		t.Error("a config with no bindings must not claim to be the availability authority")
 	}
-	for _, m := range reg.Models {
+	for _, m := range catalog.Models {
 		if !m.Available {
 			t.Errorf("%s was narrowed away on an unconfigured host", m.ID)
 		}
@@ -99,24 +97,25 @@ func TestBoundRegistry_UnconfiguredHostIsNotNarrowed(t *testing.T) {
 		Model: "anthropic/claude-opus-5", Backend: "anthropic",
 		Upstream: "anthropic/claude-opus-5", Available: true, Verified: true, VerifiedBy: "probe",
 	}
-	reg, bound = BoundRegistry(cfgWith(nil, nativeBackends, probed), catalog)
-	if !bound {
+	cfg := cfgWith(nil, nativeBackends, probed)
+	if !Configured(cfg) {
 		t.Fatal("a config with bindings IS the availability authority")
 	}
+	narrowed := CatalogForBindings(catalog, Bindings(cfg), "")
 	got := map[string]bool{}
-	for _, m := range reg.Models {
+	for _, m := range narrowed.Models {
 		got[m.ID] = m.Available
 	}
 	if !got["anthropic/claude-opus-5"] {
 		t.Error("the probed model must stay available")
 	}
 	if got["openai/gpt-5.6-sol"] {
-		t.Error("openai has no backend here; leaving it available is the bug that routed a keyless host to it")
+		t.Error("openai has no backend here; leaving it available is the bug that told a keyless host it could call it")
 	}
-	// The catalog the caller passed in must not be mutated — `route show` reloads
-	// it to tell "retired" apart from "not wired here".
+	// The catalog the caller passed in must not be mutated: a second reader
+	// still has to see the shipped truth, not one host's narrowing.
 	if !catalog.Models[1].Available {
-		t.Error("BoundRegistry mutated the caller's catalog in place")
+		t.Error("CatalogForBindings mutated the caller's catalog in place")
 	}
 }
 
@@ -130,7 +129,7 @@ func TestRuntimeID(t *testing.T) {
 		// must still be addressed through the gateway.
 		{"gateway", "anthropic/claude-opus-5", "gateway/anthropic/claude-opus-5"},
 	} {
-		if got := RuntimeID(routing.Binding{Backend: tc.backend, UpstreamID: tc.upstream}); got != tc.want {
+		if got := RuntimeID(Binding{Backend: tc.backend, UpstreamID: tc.upstream}); got != tc.want {
 			t.Errorf("RuntimeID(%s, %s) = %q, want %q", tc.backend, tc.upstream, got, tc.want)
 		}
 	}

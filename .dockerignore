@@ -51,10 +51,10 @@ skills/*
 !skills/guard
 !skills/gworkspace
 !skills/healthcheck
+!skills/repo-healthcheck
 !skills/ingest
 !skills/debug
 !skills/microcopy
-!skills/model-refresh
 !skills/promote
 !skills/qa
 !skills/peer-review
