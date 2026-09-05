@@ -42,6 +42,27 @@ absent; the host wires Ollama independently of the environment's chat models.
 diagnostic, not a repair command; `pix setup` reconciles memory's host wiring.
 `capture_mode: explicit` is the normal default, not a failure.
 
+Report **effective automatic capture** separately from watcher readiness. Read
+this sandbox's launch marker without contacting a host endpoint:
+
+```bash
+launch_capture_mode="explicit"
+if [ -f .pix/memory-capture ]; then
+  marker_mode="$(python3 -c 'from pathlib import Path; print(Path(".pix/memory-capture").read_text().strip(), end="")' 2>/dev/null || true)"
+  case "$marker_mode" in
+    explicit|experimental-auto) launch_capture_mode="$marker_mode" ;;
+  esac
+fi
+printf 'sandboxLaunchCaptureMode=%s\n' "$launch_capture_mode"
+```
+
+Compare that mode with `memory_status.capture_mode`. Automatic capture is ON
+only when both are `experimental-auto`; otherwise it is OFF. A sandbox launched
+in explicit mode needs recreation to adopt automatic capture. Report
+`watcher_healthy` separately: `null` means not yet exercised, `false` means a
+failed watcher request (include `watcher_reason`), and `true` reports the last
+observed readiness. Never trigger watcher inference to diagnose explicit mode.
+
 ### 3. MCP servers
 ```
 mcp({})                    # server count + names
@@ -56,7 +77,7 @@ one-line evidence. Prefer an identity/account/organization lookup when offered.
 A successful representative call proves the backend is authenticated; a later
 `permission denied` from a specialized or permission-gated tool means only that
 capability is unavailable, not that the backend or OAuth is unhealthy. Report
-it separately as optional/permission-gated unless the pack explicitly requires
+it separately as optional/permission-gated unless the environment explicitly requires
 that capability. A registered backend can still be unauthed or down.
 
 ### 4. CLIs

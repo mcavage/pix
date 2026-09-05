@@ -153,3 +153,13 @@ An environment (`~/.pix/envs/<name>`) is versioned, shared capability
 context you would `git diff`; it can scope memory to itself via
 `pix.toml`'s `[memory].scope`, but the store itself is never checked in or
 shared by copying files.
+
+### Diagnosing automatic capture
+
+The sandbox's `.pix/memory-capture` marker records its launch mode. The MCP
+`memory_status` response reports the service's current `capture_mode`. Automatic
+capture is effective only when both are `experimental-auto`. Readiness is separate:
+`watcher_healthy: null` means unexercised, `false` means a failed request, and
+`true` reflects the last observed readiness. Explicit mode is not degraded.
+The `/skill:healthcheck` workflow compares both modes without triggering capture
+in explicit mode.

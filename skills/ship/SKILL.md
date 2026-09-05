@@ -1,11 +1,12 @@
 ---
 name: ship
-description: Take the working tree from "done" to "PR open" (quality gate, rebase, tests + lint, code-review, bump version + changelog, commit, push, open a PR). Use for "ship" or "make a PR".
+description: Take the working tree from "done" to an open PR with green CI by rebasing, testing, reviewing, committing, pushing, and watching required checks. Use for "ship" or "make a PR".
 ---
 # ship
 
-Goal: working tree → open PR, with a gate. **Never merge** (stop at PR creation),
-never force-push, never push to `main`/`master`.
+Goal: working tree → open PR with green required CI checks. **Never merge**,
+never force-push, never push to `main`/`master`, and never call a PR shipped
+while its checks are queued or running.
 
 ## Steps
 1. **Branch.** If on the default branch, create a feature branch first. Identify
@@ -37,13 +38,20 @@ never force-push, never push to `main`/`master`.
 9. **Commit.** Imperative subject, the *why* in the body. Follow the repo's
    existing commit convention.
 10. **PR.** Push the branch (`-u` if it has no upstream) and `gh pr create` with a
-   concise title and this body:
-   ```
-   ## Summary
-   ## Testing
-   ## Risks
-   ```
+    concise title and this body:
+    ```
+    ## Summary
+    ## Testing
+    ## Risks
+    ```
+11. **CI gate.** Watch the PR's required checks to completion with
+    `gh pr checks --watch --fail-fast`. Queued or running checks are not success.
+    If a check fails, inspect its job log, reproduce the failure where possible,
+    fix the root cause, rerun the local quality and review gates affected by the
+    fix, commit, push, and watch CI again. Repeat until required checks pass or a
+    failure needs user action. Never dismiss a failure as flaky without evidence.
 
-Report the PR URL, the test/lint results, and the review verdict. If a step
-fails (tests red, rebase conflict, `gh` error), stop and report precisely what
-failed so no work is lost. Do not merge or deploy.
+Report the PR URL, test/lint results, review verdict, and final CI result. If a
+step fails (tests red, rebase conflict, `gh` error, or CI failure that cannot be
+fixed), stop and report precisely what failed so no work is lost. Do not merge
+or deploy.
