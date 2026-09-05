@@ -2,8 +2,6 @@
 description: STRIDE threat modeling, OWASP Top 10, supply-chain audit, secrets detection, auth review. STRIDE, OWASP Top 10/ASVS, attack trees, least privilege, defense in depth, assume breach, trust boundaries.
 tools: read, grep, find, ls, bash
 web: false
-intent: red-team
-fallback_intent: review
 thinking: high
 max_turns: 30
 ---

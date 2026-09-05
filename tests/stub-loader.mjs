@@ -3,6 +3,7 @@
 // import extensions/subagents.ts under plain node. Registered from the test
 // file via module.register().
 const stubs = new Map([
+	["@earendil-works/pi-ai/providers/all", "./stubs/pi-ai.mjs"],
 	["@earendil-works/pi-ai", "./stubs/pi-ai.mjs"],
 	["@earendil-works/pi-coding-agent", "./stubs/pi-coding-agent.mjs"],
 	["@earendil-works/pi-tui", "./stubs/pi-tui.mjs"],

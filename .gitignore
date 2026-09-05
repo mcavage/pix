@@ -77,9 +77,9 @@ skills/*
 !skills/guard/
 !skills/gworkspace/
 !skills/healthcheck/
+!skills/repo-healthcheck/
 !skills/ingest/
 !skills/microcopy/
-!skills/model-refresh/
 !skills/onboarding/
 !skills/one-pager/
 !skills/peer-review/

@@ -30,8 +30,8 @@ test("installer cleanup trap does not interpolate attacker-controlled TMPDIR as 
 	assert.doesNotMatch(src, /trap "rm -rf/);
 });
 
-test("installer checks both public binaries for PATH collisions and shadowing", () => {
-	assert.match(src, /for binary in pix pix-host/);
+test("installer checks pix for PATH collisions and shadowing", () => {
+	assert.match(src, /for binary in \$BINARIES/);
 	assert.match(src, /assert_installed_resolution/);
 	assert.match(src, /PIX_FORCE_INSTALL/);
 	assert.match(src, /guard_homebrew_prefix/);
@@ -39,11 +39,10 @@ test("installer checks both public binaries for PATH collisions and shadowing", 
 	assert.match(src, /Nothing was written\./);
 });
 
-// AC-REL-02: the loose pix-<os>-<arch> / pix-host-<os>-<arch> assets shipped
-// the binaries — pix under MIT s2, plus the MPL-2.0 go-plugin/yamux code linked
-// into pix-host under MPL-2.0 s3.1 — with none of the required notices
-// attached, and install.sh consumed exactly those. Both halves are gated: the
-// release must not publish them, and the installer must not want them.
+// AC-REL-02: the loose pix-<os>-<arch> asset shipped the pix binary — MIT
+// s2 — with none of the required notices attached, and install.sh consumed
+// exactly that. Both halves are gated: the release must not publish it, and
+// the installer must not want it.
 
 test("installer fetches the notice-bearing tarball, not the loose binaries", () => {
 	assert.match(src, /tarball="pix_\$\{ver\}_\$\{os\}_\$\{arch\}\.tar\.gz"/);
@@ -77,7 +76,7 @@ test("publish.yml publishes only notice-bearing tarballs + SHA256SUMS, and prove
 // other line — verify(), the notice assertions, the staging discipline — is the
 // shipped code.
 
-function harness({ withNotices = true, corrupt = false } = {}) {
+function harness({ withNotices = true, corrupt = false, withBundle = true } = {}) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pix-install-e2e-"));
 	const assets = path.join(dir, "releases/download", `v${VERSION}`);
 	fs.mkdirSync(assets, { recursive: true });
@@ -86,8 +85,13 @@ function harness({ withNotices = true, corrupt = false } = {}) {
 	const stage = path.join(dir, "stage");
 	fs.mkdirSync(path.join(stage, "licenses"), { recursive: true });
 	fs.writeFileSync(path.join(stage, "pix"), "#!/bin/sh\necho pix stub\n", { mode: 0o755 });
-	fs.writeFileSync(path.join(stage, "pix-host"), "#!/bin/sh\necho pix-host stub\n", { mode: 0o755 });
-	const members = ["pix", "pix-host"];
+	const members = ["pix"];
+	if (withBundle) {
+		for (const name of ["release-manifest.json", `pix-runtime-${VERSION}.tar.gz`]) {
+			fs.writeFileSync(path.join(stage, name), `${name} contents\n`);
+			members.push(name);
+		}
+	}
 	if (withNotices) {
 		for (const n of NOTICES) fs.writeFileSync(path.join(stage, n), `${n} contents\n`);
 		members.push("THIRD_PARTY_NOTICES.md", "NOTICE.md", "LICENSE", "licenses");
@@ -107,17 +111,17 @@ function harness({ withNotices = true, corrupt = false } = {}) {
 	const script = path.join(dir, "install-under-test.sh");
 	fs.writeFileSync(script, patched);
 
-	// `op` and `sbx` are hard prerequisites; stub them so the prereq check is
+	// Only sbx is required at install time; stub it so the prereq check is
 	// not what this test measures.
 	const stubBin = path.join(dir, "stubbin");
 	fs.mkdirSync(stubBin);
-	for (const cmd of ["op", "sbx"]) {
+	for (const cmd of ["sbx"]) {
 		fs.writeFileSync(path.join(stubBin, cmd), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 	}
 
 	const prefix = path.join(dir, "bin");
 	const dataHome = path.join(dir, "share");
-	const res = spawnSync("sh", [script], {
+	const run = (...args) => spawnSync("sh", [script, ...args], {
 		encoding: "utf8",
 		env: {
 			PATH: `${stubBin}:/usr/bin:/bin`,
@@ -129,17 +133,21 @@ function harness({ withNotices = true, corrupt = false } = {}) {
 			XDG_CONFIG_HOME: path.join(dir, "config"),
 		},
 	});
-	return { dir, res, prefix, docDir: path.join(dataHome, "pix") };
+	const res = run();
+	return { dir, res, run, prefix, docDir: path.join(prefix, "pix-notices") };
 }
 
-test("e2e: a good tarball installs both binaries AND the notices beside them", () => {
+test("e2e: a good tarball installs the pix binary AND the notices beside it", () => {
 	const { dir, res, prefix, docDir } = harness();
 	try {
 		assert.equal(res.status, 0, res.stdout + res.stderr);
-		for (const b of ["pix", "pix-host"]) {
+		for (const b of ["pix"]) {
 			const p = path.join(prefix, b);
 			assert.ok(fs.existsSync(p), `${b} was not installed`);
 			assert.ok(fs.statSync(p).mode & 0o111, `${b} is not executable`);
+		}
+		for (const name of ["release-manifest.json", `pix-runtime-${VERSION}.tar.gz`]) {
+			assert.ok(fs.existsSync(path.join(prefix, name)), `${name} missing beside binary`);
 		}
 		// MIT s2 / MPL-2.0 s3.1 are about the copy the USER ends up with.
 		for (const n of NOTICES) {
@@ -156,7 +164,6 @@ test("e2e: a checksum mismatch installs NOTHING", () => {
 		assert.notEqual(res.status, 0);
 		assert.match(res.stdout + res.stderr, /checksum MISMATCH/);
 		assert.equal(fs.existsSync(path.join(prefix, "pix")), false);
-		assert.equal(fs.existsSync(path.join(prefix, "pix-host")), false);
 		assert.equal(fs.existsSync(docDir), false);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
@@ -172,4 +179,71 @@ test("e2e: a tarball with a valid checksum but NO notices is refused, and instal
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+for (const name of ["release-manifest.json", `pix-runtime-${VERSION}.tar.gz`]) {
+	test(`e2e: reinstall repairs missing ${name} even when the binary is unchanged`, () => {
+		const { dir, res, run, prefix } = harness();
+		try {
+			assert.equal(res.status, 0, res.stderr);
+			fs.unlinkSync(path.join(prefix, name));
+			const repair = run();
+			assert.equal(repair.status, 0, repair.stderr);
+			assert.ok(fs.existsSync(path.join(prefix, name)));
+			const current = run();
+			assert.equal(current.status, 0, current.stderr);
+			assert.match(current.stdout, /already current/);
+		} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+	});
+}
+
+test("e2e: uninstall removes the installed bundle and preserves user state", () => {
+	const { dir, res, run, prefix } = harness();
+	try {
+		assert.equal(res.status, 0, res.stderr);
+		const config = path.join(dir, ".pix", "config.toml");
+		fs.mkdirSync(path.dirname(config));
+		fs.writeFileSync(config, 'default_env = "team"\n');
+		const uninstall = run("--uninstall");
+		assert.equal(uninstall.status, 0, uninstall.stderr);
+		assert.equal(fs.readFileSync(config, "utf8"), 'default_env = "team"\n');
+		for (const name of ["pix", "release-manifest.json", `pix-runtime-${VERSION}.tar.gz`, "pix-notices"]) {
+			assert.equal(fs.existsSync(path.join(prefix, name)), false, `${name} remains installed`);
+		}
+	} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("e2e: a release without the runtime bundle installs nothing", () => {
+	const { dir, res, prefix } = harness({ withBundle: false });
+	try {
+		assert.notEqual(res.status, 0);
+		assert.match(res.stderr, /incomplete release bundle/);
+		assert.equal(fs.existsSync(path.join(prefix, "pix")), false);
+	} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("release job packages the exact uploaded runtime bundle for both Darwin architectures", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pix-release-packaging-"));
+	try {
+		for (const sub of ["dist", "release-bundle", "licenses"]) fs.mkdirSync(path.join(dir, sub));
+		for (const arch of ["amd64", "arm64"]) fs.writeFileSync(path.join(dir, "dist", `pix-darwin-${arch}`), arch);
+		for (const name of NOTICES) fs.writeFileSync(path.join(dir, name), name);
+		const bundle = ["release-manifest.json", `pix-runtime-${VERSION}.tar.gz`];
+		for (const name of bundle) fs.writeFileSync(path.join(dir, "release-bundle", name), name);
+		const step = publishWorkflow.match(/- name: Build combined Darwin tarballs for Homebrew[\s\S]*?run: \|\n([\s\S]*?)(?=\n      # Gate)/);
+		assert.ok(step, "release packaging entry point missing");
+		const script = step[1].replace(/^          /gm, "");
+		execFileSync("bash", ["-c", script], {cwd: path.join(dir, "dist"), env: {...process.env, GITHUB_WORKSPACE: dir, V: VERSION}});
+		for (const arch of ["amd64", "arm64"]) {
+			const archive = path.join(dir, "dist", `pix_${VERSION}_darwin_${arch}.tar.gz`);
+			for (const name of bundle) {
+				assert.equal(execFileSync("tar", ["-xOzf", archive, name], {encoding: "utf8"}), name);
+			}
+		}
+		const upload = publishWorkflow.slice(publishWorkflow.indexOf("  release-manifest:"), publishWorkflow.indexOf("\n  bump:"));
+		for (const name of ["out/release-manifest.json", "out/pix-runtime-${{ needs.version.outputs.version }}.tar.gz"]) assert.ok(upload.includes(name));
+		const release = publishWorkflow.slice(publishWorkflow.indexOf("\n  release-binaries:"), publishWorkflow.indexOf("\n  bump-tap:"));
+		assert.match(release, /needs: \[version, bump, release-manifest\]/);
+		assert.match(release, /name: release-manifest-\$\{\{ needs.version.outputs.version \}\}\n          path: release-bundle/);
+	} finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });

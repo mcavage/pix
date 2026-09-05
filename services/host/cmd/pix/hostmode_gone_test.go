@@ -304,7 +304,7 @@ func TestRunHostRefusesAndExecutesNothing(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.toml")
 
 	cmd := exec.Command(bin, "host")
-	cmd.Env = append(os.Environ(), "PIX_CONFIG="+cfgPath, "HOME="+dir, "XDG_CONFIG_HOME="+dir, "XDG_STATE_HOME="+dir)
+	cmd.Env = append(os.Environ(), "PIX_HOME="+dir, "HOME="+dir)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("`pix host` must exit non-zero; output:\n%s", out)

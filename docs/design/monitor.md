@@ -1,5 +1,12 @@
 # monitor — REMOVED. What is left is a jsonl file.
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Status: **removed.** The subsystem this document used to specify — an
 in-sandbox tap POSTing NDJSON to a host ingest listener on `:11437`, a
 file-backed store, an eviction pass, and a `pix monitor` reader verb — is gone.

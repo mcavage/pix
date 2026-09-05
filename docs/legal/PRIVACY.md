@@ -18,66 +18,67 @@ enumerated below rather than left to the phrase "only what you configured".
 | Data | Goes where | Why | Retention |
 | --- | --- | --- | --- |
 | Prompts, file contents, tool output the agent reads | The model provider you selected (Anthropic / OpenAI / Google), or nowhere for a local Ollama model | Inference | Governed by that provider's terms, not by pix |
-| Prompts routed to an MCP server | That server (local stdio subprocess, or a remote catalog server you registered) | Tool calls you invoked | Governed by that server |
+| Prompts routed to an MCP server | That server (local stdio subprocess, or a remote server declared by your environment) | Tool calls you invoked | Governed by that server |
 | Image pulls/pushes | The registry in your config (`docker.io`, `dhi.io`) | Build/run the sandbox | Registry's terms |
 | **Your `web_search` query text** (and the fetched pages' contents come back through it) | The baked `~/.pi/web-search.json` **pins `api.parallel.ai`** (Parallel search/extract) as the provider for every search when `PARALLEL_API_KEY` is set — not a fallback, the preferred backend outright. Without that key, resolution falls through to `api.openai.com` (OpenAI search) if wired, then the keyless `api.exa.ai` / `mcp.exa.ai` default, then any other allowed/configured backend in order: `api.perplexity.ai`, `generativelanguage.googleapis.com` (Gemini) | The `web_search`/`fetch_content` tools in `pi-web-access` | Governed by that search provider |
 | **A version check**: pi asks the npm registry whether a newer `@earendil-works/pi-coding-agent` exists (this is what the in-sandbox "Update available" banner is) | `registry.npmjs.org` | Update notification | npm's terms; pix stores no result |
 | **Package + toolchain downloads**: pi extensions and npm packages, the pinned `fd`/`ruff`/Go binaries at image build, git fetches, release assets fetched by `install.sh`/`brew` | `registry.npmjs.org`, `nodejs.org`, `pi.dev`, `github.com`, `codeload.github.com`, `objects.githubusercontent.com`, `raw.githubusercontent.com`, `go.dev` | Install what the sandbox runs | Those hosts' terms |
 | GitHub API calls you make (`gh`, PRs, issues) | `api.github.com`, `uploads.github.com` | Commands you ran | GitHub's terms |
-| Loopback traffic to host services you started (`memory` :11435, `ollama` :11434) | Your own machine, over `host.docker.internal`/`localhost` | Recall, local inference | Local only — see below |
+| Whatever an environment's `[[setup]]` hook itself contacts (a package registry, an identity provider's device-login endpoint) | Wherever that hook's own command goes — pix neither chooses nor proxies it | Host install/authentication you explicitly requested with `pix setup --env NAME`, after approving the environment (verbose trust details include argv and executable hashes) | Governed by whatever the hook talks to; hooks may retain account credentials and caches on your host |
+| Loopback traffic to services on your own machine: the stack-scoped `pix-memory-<stack-id>` container (a loopback port `pix setup` allocates per PIX_HOME, 18080 by default) and `ollama` (:11434) | Your own machine, over `host.docker.internal`/`localhost` | Recall, local inference | Local only; see below |
 
-Every sandbox-egress destination is disclosed above: sandbox egress is
-allowlisted in `pi-kit/spec.yaml` (`permissions.network.allow`), and a
-destination not on that list cannot be reached from inside the sandbox. The
-table is not limited to sandbox egress, though — it also names a few
-host-side and build-time destinations that never go through that allowlist
-at all: `go.dev` (the Go toolchain, fetched while the image is built, not at
-sandbox runtime) and the loopback host services (`memory`, `ollama`), which
-the sandbox reaches over `host.docker.internal`, a route the egress
-allowlist governs but that never leaves your machine. If you need the
-default search backend or the update check off, remove its host from the
-sandbox egress allowlist and recreate the sandbox; nothing else in pix
-depends on it.
+The shipped sandbox allowlist is in `pi-kit/spec.yaml`; environments can
+add destinations in their effective native sbx document. Host setup hooks,
+image builds and host MCP processes have their own network access and do not
+run behind the sandbox allowlist. Memory reaches the sandbox only through
+the sbx MCP Gateway; the Gateway connects to the stack's loopback service.
+Ollama may be local, remote or cloud-backed depending on your configuration.
+Removing a search destination from the effective allowlist and recreating
+the sandbox prevents direct requests to it from inside that sandbox.
 
 ## What stays local
 
-- **Memory** (`pix-host memory`, `:11435`): the self-learning store. Binds
-  loopback, file-backed on your machine, never synced anywhere. "Local"
-  describes the store and its extraction/embedding path, not everything
-  memory touches: once a row is **recalled** (auto-injected each turn, or via
+- **Memory** (`pix-memory-<stack-id>`, one container per `PIX_HOME`, reached through the sbx MCP Gateway over loopback on that stack's allocated port): the self-learning store. It binds
+  loopback, is file-backed on your machine, and is never synced anywhere. "Local"
+  describes the store. Extraction and embedding use the configured Ollama
+  endpoint, which may be local or remote; cloud-backed extraction can send
+  content off-host. Separately, once a row is **recalled** (auto-injected each turn, or via
   `/recall`/`memory_recall`), its content goes into the prompt sent to
   whichever model provider is active — the same row that never left this
-  machine to get stored now leaves it to get answered. And the daemon itself
-  is **unauthenticated by design** (loopback bind is the only boundary), so
-  any sandbox you launch, not just the agent's intended read-only tools, can
-  read and write it directly over `host.docker.internal`. See
+  machine to get stored now leaves it to get answered. The daemon requires
+  the bearer token mounted from this stack's state; the host-global Gateway
+  registration carries that token in its stack-scoped endpoint URL because
+  sbx cannot express a custom authorization header. The stack-scoped name
+  prevents two `PIX_HOME` installations from colliding; it does not keep the
+  token private from another process running as the same host user, which can
+  read the stored URL out of sbx's own registry. See
   [../memory.md](../memory.md) for the full trust model and how capture and
   recall actually work.
-- **No transcript of its own.** pix used to ship a monitor: an in-sandbox tap
-  POSTed every model request, reply and raw tool result to a loopback ingest
-  listener, which appended them under `~/.local/state/pix/monitor/`. That whole
-  subsystem was REMOVED, tap included, so pix no longer writes any transcript
-  anywhere. What remains on disk is what `pi` itself writes: its session
-  transcripts under `.pi-sessions/*.jsonl` in your workspace.
-  **If you ran an earlier version, that data is still there and nothing will
-  ever touch it again** — no reader, no eviction pass, no bounds. Delete it:
-  `rm -rf ~/.local/state/pix/monitor` (or `$XDG_STATE_HOME/pix/monitor`).
+- **No transcript of its own.** The old monitor was REMOVED. If you used it,
+  its orphaned store is not automatically deleted; remove it with
+  `rm -rf ~/.local/state/pix/monitor` when you no longer need it.
+  Pi still writes session transcripts under
+  `.pi-sessions/*.jsonl` in your workspace. Pix does not run a separate
+  transcript ingestion service.
 - **Session transcripts / todos / provenance records**: files under your home
   and `out/`, never uploaded by pix.
-- **Config**: `~/.config/pix/config.toml`, `~/.local/state/pix/`.
+- **Config and state**: everything Pix owns lives under `PIX_HOME` (default `~/.pix`, overridable with `$PIX_HOME`): `~/.pix/config.toml`, `~/.pix/secrets.env`, `~/.pix/.state/`. There is no XDG split and no second config or secrets location.
 
 ## Credentials
 
-Direct provider keys are `op://` references resolved from 1Password at
-spawn. `pix secret` never writes a secret value to disk — it seeds, opens,
-and validates the reference file only. Values are not copied into the
-sandbox image, the config, MCP registrations, or provenance records.
+Direct provider keys are `op://` references resolved from 1Password on each
+run. `pix secret` never writes a secret value to disk: it manages and
+validates references only. Pix refreshes configured provider, tool,
+and GitHub values into sbx's sandbox-scoped secret store after the sandbox has
+a verified receipt and before attaching. Values are not copied into the
+sandbox image, Pix config, MCP registrations, or provenance records. Pix
+ignores host-global sbx secrets and never removes them automatically.
 
 ## Minimization posture, and its limits
 
-- pix collects no personal data of its own, so there is no pix-side
-  controller/processor relationship, no retention schedule to publish, and
-  no deletion endpoint to offer.
+- There is no project-operated data collection service. Your local memory,
+  transcripts and connected services can still contain personal data; their
+  retention and deletion are part of operating your own setup.
 - **The real exposure is what you feed it.** If you point pix at a mailbox,
   a CRM, or an HR system through an MCP server, personal data flows from
   that system into a model provider's inference path. pix does not filter

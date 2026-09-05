@@ -34,10 +34,15 @@ func TestProviderKeyProbeReportsKeysItCannotRoute(t *testing.T) {
 	if r.Status != StatusReady {
 		t.Fatalf("status = %v, want ready: one callable provider is enough to launch", r.Status)
 	}
-	for _, want := range []string{"openai", "google", "no model wired", "pix models add"} {
+	for _, want := range []string{"openai", "google", "no model wired", "pix setup"} {
 		if !strings.Contains(r.Detail, want) {
 			t.Errorf("detail %q must mention %q", r.Detail, want)
 		}
+	}
+	// Final findings: `pix models add` is a removed v1 verb (exit 2 in v2) and
+	// must never be the repair guidance this probe hands out.
+	if strings.Contains(r.Detail, "models add") {
+		t.Errorf("detail %q names the removed `pix models add` verb", r.Detail)
 	}
 	if !strings.Contains(r.Evidence, "no callable binding") {
 		t.Errorf("evidence %q must name the gap it found", r.Evidence)

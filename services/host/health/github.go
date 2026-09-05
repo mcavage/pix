@@ -75,3 +75,41 @@ func (p GitHubSecretProbe) Check(context.Context) Result {
 			Evidence: "sbx did not answer `secret ls`"}
 	}
 }
+
+// IgnoredGlobalSecretsProbe reports GLOBAL sbx secrets this host holds that
+// Pix does not use. It exists because the state is invisible and confusing:
+// `sbx secret ls` shows an anthropic key, the agent still cannot reach a
+// model, and nothing explains that Pix reads only its own refs and writes only
+// sandbox-scoped secrets. This row says so, names the optional removal
+// command, and removes nothing itself.
+type IgnoredGlobalSecretsProbe struct {
+	// Scan enumerates the global provider/github secret NAMES. known is
+	// false when sbx could not be asked: an enumeration that did not happen
+	// is reported as unknown, never as "there are none".
+	Scan func() (names []string, known bool)
+	// Fix is the exact, OPTIONAL manual removal command.
+	Fix string
+}
+
+func (IgnoredGlobalSecretsProbe) Name() string   { return "sbx-globals" }
+func (IgnoredGlobalSecretsProbe) Required() bool { return false }
+
+func (p IgnoredGlobalSecretsProbe) Check(context.Context) Result {
+	if p.Scan == nil {
+		return Result{Name: p.Name(), Status: StatusUnknown, Detail: "not wired",
+			Evidence: "no global-secret scanner was supplied"}
+	}
+	names, known := p.Scan()
+	if !known {
+		return Result{Name: p.Name(), Status: StatusUnknown, Detail: "could not check",
+			Evidence: "sbx did not answer `secret ls --global`"}
+	}
+	if len(names) == 0 {
+		return Result{Name: p.Name(), Status: StatusReady, Detail: "no ignored global secrets",
+			Evidence: "sbx holds no global provider or github service secret"}
+	}
+	return Result{Name: p.Name(), Status: StatusAbsent, Fix: p.Fix,
+		Detail: fmt.Sprintf("%d global sbx secret(s) Pix ignores: %s", len(names), strings.Join(names, ", ")),
+		Evidence: "Pix resolves its own op:// refs into each sandbox and never reads a host-global secret; " +
+			"these belong to whatever put them there and are left alone"}
+}

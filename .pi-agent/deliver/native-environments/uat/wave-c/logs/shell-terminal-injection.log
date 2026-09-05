@@ -1,0 +1,48 @@
+=== RUN   TestRenderBill_HostileDocumentContent_DefaultTier
+--- PASS: TestRenderBill_HostileDocumentContent_DefaultTier (0.00s)
+=== RUN   TestRenderBill_HostileDocumentContent_VerboseTier
+--- PASS: TestRenderBill_HostileDocumentContent_VerboseTier (0.00s)
+=== RUN   TestTerminalControlViolations_SelfTest
+=== RUN   TestTerminalControlViolations_SelfTest/ESC
+=== RUN   TestTerminalControlViolations_SelfTest/CR
+=== RUN   TestTerminalControlViolations_SelfTest/tab
+=== RUN   TestTerminalControlViolations_SelfTest/DEL
+=== RUN   TestTerminalControlViolations_SelfTest/C1_CSI
+=== RUN   TestTerminalControlViolations_SelfTest/bidi_RLO
+=== RUN   TestTerminalControlViolations_SelfTest/bidi_isolate
+--- PASS: TestTerminalControlViolations_SelfTest (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/ESC (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/CR (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/tab (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/DEL (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/C1_CSI (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/bidi_RLO (0.00s)
+    --- PASS: TestTerminalControlViolations_SelfTest/bidi_isolate (0.00s)
+=== RUN   TestShellInjection_CwdHasSbxenv
+--- PASS: TestShellInjection_CwdHasSbxenv (0.00s)
+=== RUN   TestShellInjection_ScaffoldCollision
+--- PASS: TestShellInjection_ScaffoldCollision (0.00s)
+=== RUN   TestShellInjection_ConcurrentRegistration
+--- PASS: TestShellInjection_ConcurrentRegistration (0.00s)
+=== RUN   TestShellInjection_UseNotReviewed
+--- PASS: TestShellInjection_UseNotReviewed (0.00s)
+=== RUN   TestShellInjection_ForgetLiveHolder
+--- PASS: TestShellInjection_ForgetLiveHolder (0.00s)
+=== RUN   TestShellInjection_NoncanonicalRoot
+--- PASS: TestShellInjection_NoncanonicalRoot (0.00s)
+=== RUN   TestShellInjection_MissingRequiredFile
+--- PASS: TestShellInjection_MissingRequiredFile (0.00s)
+=== RUN   TestShellInjection_AddPath
+--- PASS: TestShellInjection_AddPath (0.00s)
+=== RUN   TestShellInjection_AddMissingRequiredFileRetry
+--- PASS: TestShellInjection_AddMissingRequiredFileRetry (0.00s)
+=== RUN   TestShellInjection_ReviewChangedDuringPrompt
+--- PASS: TestShellInjection_ReviewChangedDuringPrompt (0.00s)
+=== RUN   TestShellInjection_ReviewGateRetryLines
+--- PASS: TestShellInjection_ReviewGateRetryLines (0.00s)
+=== RUN   TestShellInjection_RenderBillVerboseTip
+--- PASS: TestShellInjection_RenderBillVerboseTip (0.00s)
+=== RUN   TestShellInjection_EditTargetHeadlines
+--- PASS: TestShellInjection_EditTargetHeadlines (0.00s)
+PASS
+ok  	pix/host/workflow/env	0.003s

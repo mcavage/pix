@@ -1,7 +1,6 @@
 ---
 description: Cheap, fast breadth worker for parallel fan-out. Give it one slice of a larger search/analysis job. Spawn many at once.
 tools: read, grep, find, ls, bash
-intent: breadth
 thinking: low
 max_turns: 20
 ---

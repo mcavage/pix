@@ -41,7 +41,7 @@ const GROUPS: Array<{ title: string; members: string[] }> = [
 		],
 	},
 	{ title: "DATA", members: ["gworkspace", "ingest", "enrich"] },
-	{ title: "SYSTEM", members: ["onboarding", "promote", "model-refresh"] },
+	{ title: "SYSTEM", members: ["onboarding", "promote"] },
 ];
 
 // Skills that are reference rules (auto-load as conventions) — hidden from the

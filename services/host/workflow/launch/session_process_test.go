@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -64,7 +65,8 @@ const awaitRelease = `
 		i=$((i + 1))
 		if [ "$i" -gt 6000 ]; then exit 0; fi
 		sleep 0.02
-	done`
+	done
+	touch "$d/exited"`
 
 // sessionFixture is the fixture sbx: a real script that records argv, becomes
 // visible to `ls` only after `run` has started, and keeps a "session" alive
@@ -83,12 +85,20 @@ ls)
 	fi
 	exit 0
 	;;
+env)
+	# the cutover create: sbx env create <effective> returns as soon as the
+	# sandbox exists; the SESSION is a separate exec below.
+	touch "$d/created"
+	exit 0
+	;;
 run)
-	touch "$d/created"` + awaitRelease + `
+	touch "$d/created"
+	printf '%s\n' $$ > "$d/session.pid.tmp" && mv "$d/session.pid.tmp" "$d/session.pid"` + awaitRelease + `
 	exit 0
 	;;
 exec)
-	touch "$d/attached"` + awaitRelease + `
+	if [ "$2" = "-it" ]; then touch "$d/attached-it"; else touch "$d/attached"; fi
+	printf '%s\n' $$ > "$d/session.pid.tmp" && mv "$d/session.pid.tmp" "$d/session.pid"` + awaitRelease + `
 	exit 0
 	;;
 esac
@@ -140,6 +150,43 @@ func release(t *testing.T, dir string) {
 	}
 }
 
+// waitForFixtureProcessExit handles both legitimate Linux outcomes after the
+// creator is SIGKILLed: the detached fixture may observe release and write the
+// exited marker, or it may already have died with its parent and never write
+// that marker. Waiting only for the marker made CI fail on the second outcome;
+// not waiting at all raced testing.TempDir cleanup on the first.
+func waitForFixtureProcessExit(t *testing.T, dir string, within time.Duration) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "session.pid"))
+	if err != nil {
+		t.Fatalf("read fixture pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		t.Fatalf("invalid fixture pid %q: %v", data, err)
+	}
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(dir, "exited")); err == nil {
+			return
+		}
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// A wedged test fixture must not survive the test or keep touching the
+	// TempDir. This PID came from the fixture itself, never from production.
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	for i := 0; i < 100; i++ {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("fixture process %d did not exit after release or SIGKILL", pid)
+}
+
 // waitForRecordedCreateState blocks until every create-time artifact this
 // test asserts on after the kill is on disk: the record, the invocation, and
 // (when the spec asked for it) the keep binding. RecordSessionCreation and
@@ -185,8 +232,13 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 	go func() {
 		created <- RunSession(SessionSpec{
 			Key: key, Name: "pix-demo", Creating: true,
-			CreateArgs:  []string{"run", "--name", "pix-demo"},
-			Fingerprint: fp, Invocation: []string{"--model", "m"},
+			EnvCreateArgs: []string{"env", "create", "/tmp/effective.sbxenv.yaml"},
+			// Invocation is what gets RECORDED (audit only, QA re-review F1):
+			// deliberately a DIFFERENT value from the attach's own
+			// DefaultInvocation below, so a regression to "attach replays
+			// whatever got stored" fails loudly instead of passing by
+			// coincidence.
+			Fingerprint: fp, Invocation: []string{"--model", "stale-create-time-model"},
 		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 	}()
 
@@ -198,8 +250,11 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 	go func() {
 		attached <- RunSession(SessionSpec{
 			Key: key, Name: "pix-demo", AttachExec: true, AttachTTY: true,
-			CreateArgs: []string{"run", "--name", "pix-demo"}, Fingerprint: fp,
-			DefaultInvocation: []string{"--unused-default"},
+			AttachArgs: []string{"run", "--name", "pix-demo"}, Fingerprint: fp,
+			// DefaultInvocation is THIS attach's own current, freshly resolved
+			// invocation (e.g. a new --model/--resume this run asked for) —
+			// it must reach the exec argv, never the stale stored one above.
+			DefaultInvocation: []string{"--model", "m"},
 		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 	}()
 
@@ -220,7 +275,7 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 	if diverged, found := CheckSessionFingerprint(key, fp); !found || len(diverged) > 0 {
 		t.Errorf("fingerprint not recorded before the session ended: found=%v diverged=%v", found, diverged)
 	}
-	if inv, found := readSessionInvocation(key); !found || strings.Join(inv, " ") != "--model m" {
+	if inv, found := readSessionInvocation(key); !found || strings.Join(inv, " ") != "--model stale-create-time-model" {
 		t.Errorf("invocation not recorded before the session ended: %v (found %v)", inv, found)
 	}
 	select {
@@ -230,20 +285,31 @@ func TestRunSession_RecordsBeforeWaiting_AndUnblocksAttachOnRecord(t *testing.T)
 	}
 
 	// (2) The blocked attach proceeds off the RECORD, not the session's end.
-	attachSeen := waitForFile(t, filepath.Join(fixture, "attached"), 10*time.Second)
+	// The INTERACTIVE attach's own exec (`exec -it`), not the create's own
+	// session exec (`exec -i`, which this cutover also runs).
+	attachSeen := waitForFile(t, filepath.Join(fixture, "attached-it"), 10*time.Second)
 	if d := attachSeen.Sub(recordSeen); d > 250*time.Millisecond {
 		t.Errorf("second attach started %s after the first record; want <250ms (the lifecycle lock must cover the transition, not the session)", d)
 	}
 
-	// (3) The attach replayed the STORED invocation verbatim, as `exec -it`.
-	var execLine string
+	// (3) The attach used its OWN current invocation (DefaultInvocation),
+	// NEVER the stale one the create recorded (QA re-review F1). After the
+	// cutover the CREATE also execs (`sbx env create` then `sbx exec` —
+	// this spec asked for no TTY, so its own line is `exec -i`), so the
+	// assertion is that the interactive attach line is present, not that
+	// it is the only exec on the wire.
+	var execLines []string
+	sawAttachExec := false
 	for _, l := range argvLines(t, fixture) {
 		if strings.HasPrefix(l, "exec ") {
-			execLine = l
+			execLines = append(execLines, l)
+			if l == "exec -it pix-demo -- pi --model m" {
+				sawAttachExec = true
+			}
 		}
 	}
-	if execLine != "exec -it pix-demo pi --model m" {
-		t.Errorf("attach argv = %q, want %q", execLine, "exec -it pix-demo pi --model m")
+	if !sawAttachExec {
+		t.Errorf("attach argv = %q, want one of them to be %q", execLines, "exec -it pix-demo -- pi --model m")
 	}
 
 	release(t, fixture)
@@ -279,7 +345,7 @@ func TestRunSession_AttachUnowned_UsesSafeDefaultArgv(t *testing.T) {
 	go func() {
 		done <- RunSession(SessionSpec{
 			Key: key, Name: "pix-demo", AttachExec: true, AttachTTY: false, Keep: true,
-			CreateArgs: []string{"run", "--name", "pix-demo"},
+			AttachArgs: []string{"run", "--name", "pix-demo"},
 			// A fingerprint that would DIVERGE if anything were recorded:
 			// nothing is, so there is nothing to compare against.
 			Fingerprint:       sandbox.Fingerprint{"static_mcp": "notion"},
@@ -299,8 +365,8 @@ func TestRunSession_AttachUnowned_UsesSafeDefaultArgv(t *testing.T) {
 			execLine = l
 		}
 	}
-	if execLine != "exec -i pix-demo pi --skill /opt/skills" {
-		t.Errorf("unowned attach argv = %q, want %q", execLine, "exec -i pix-demo pi --skill /opt/skills")
+	if execLine != "exec -i pix-demo -- pi --skill /opt/skills" {
+		t.Errorf("unowned attach argv = %q, want %q", execLine, "exec -i pix-demo -- pi --skill /opt/skills")
 	}
 	if SessionRecorded(key) {
 		t.Error("an unowned attach must not create a creation record")
@@ -327,7 +393,7 @@ func TestRunSession_CreateArgvIsVerbatim(t *testing.T) {
 	go func() {
 		done <- RunSession(SessionSpec{
 			Key: SessionName(ws), Name: "pix-demo", Creating: true,
-			CreateArgs: want, Invocation: []string{"--model", "m"},
+			EnvCreateArgs: want, Invocation: []string{"--model", "m"},
 		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: io.Discard, Spawn: fixtureSpawn(t)})
 	}()
 	waitForFile(t, filepath.Join(fixture, "created"), 10*time.Second)
@@ -363,10 +429,10 @@ func TestSessionCreateHelperProcess(t *testing.T) {
 	}
 	err := RunSession(SessionSpec{
 		Key: os.Getenv("HELPER_KEY"), Name: "pix-demo", Creating: true,
-		CreateArgs:  []string{"run", "--name", "pix-demo"},
-		Fingerprint: sandbox.Fingerprint{"static_mcp": "slack"},
-		Invocation:  []string{"--model", "m"},
-		Keep:        true,
+		EnvCreateArgs: []string{"env", "create", "/tmp/effective.sbxenv.yaml"},
+		Fingerprint:   sandbox.Fingerprint{"static_mcp": "slack"},
+		Invocation:    []string{"--model", "m"},
+		Keep:          true,
 	}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: os.Stderr, Spawn: func(argv []string) *exec.Cmd {
 		cmd := exec.Command("sbx", argv...)
 		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
@@ -407,6 +473,11 @@ func TestRunSession_KilledCreator_LeavesTheRecord(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		release(t, fixture)
+		// The creator is deliberately killed below, so its sbx child is
+		// orphaned. Wait for that child to observe the release barrier before
+		// testing.TempDir removes the fixture directory; otherwise cleanup can
+		// race the child's final path lookup and flake with "directory not empty".
+		waitForFixtureProcessExit(t, fixture, 5*time.Second)
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	})
@@ -415,6 +486,11 @@ func TestRunSession_KilledCreator_LeavesTheRecord(t *testing.T) {
 	// keep binding the helper's spec asks for — not just record.json, so the
 	// kill lands strictly AFTER every write this test checks, never mid-write.
 	waitForRecordedCreateState(t, leaseDir, key, true, 20*time.Second)
+	// The record is written by the creator immediately after spawn; the child
+	// may not yet have run its first shell instruction. Wait for its atomic PID
+	// receipt too, so cleanup can distinguish "child already died" from "child
+	// is still consuming the release barrier" without racing an empty file.
+	waitForFile(t, filepath.Join(fixture, "session.pid"), 5*time.Second)
 	if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
 		t.Fatalf("SIGKILL: %v", err)
 	}
@@ -506,9 +582,9 @@ func TestRunSession_RefLeaseFailsAfterChildStarts_KillsRatherThanLeavesUnreferen
 	go func() {
 		done <- RunSession(SessionSpec{
 			Key: key, Name: "pix-demo", Creating: true,
-			CreateArgs:  []string{"run", "--name", "pix-demo"},
-			Fingerprint: sandbox.Fingerprint{"static_mcp": "slack"},
-			Invocation:  []string{"--model", "m"},
+			EnvCreateArgs: []string{"env", "create", "/tmp/effective.sbxenv.yaml"},
+			Fingerprint:   sandbox.Fingerprint{"static_mcp": "slack"},
+			Invocation:    []string{"--model", "m"},
 		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: io.Discard, Spawn: captureSpawn})
 	}()
 
@@ -597,9 +673,9 @@ func TestRunSession_RefLeaseFailsAfterChildStarts_AlsoTearsDown(t *testing.T) {
 	go func() {
 		done <- RunSession(SessionSpec{
 			Key: key, Name: "pix-demo", Creating: true,
-			CreateArgs:  []string{"run", "--name", "pix-demo"},
-			Fingerprint: sandbox.Fingerprint{"static_mcp": "slack"},
-			Invocation:  []string{"--model", "m"},
+			EnvCreateArgs: []string{"env", "create", "/tmp/effective.sbxenv.yaml"},
+			Fingerprint:   sandbox.Fingerprint{"static_mcp": "slack"},
+			Invocation:    []string{"--model", "m"},
 		}, SessionDeps{Env: realEnv(), Poll: fastPoll(), Warn: &warn, Spawn: fixtureSpawn(t)})
 	}()
 
@@ -653,6 +729,16 @@ ls)
 			echo "pix-demo  img  running"
 		fi
 	fi
+	exit 0
+	;;
+env)
+	# the cutover create: sbx env create <effective> returns as soon as the
+	# sandbox exists; the SESSION is a separate exec below.
+	touch "$d/created"
+	exit 0
+	;;
+exec)
+	touch "$d/attached"` + awaitRelease + `
 	exit 0
 	;;
 run)

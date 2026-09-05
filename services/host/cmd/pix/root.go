@@ -1,45 +1,45 @@
-// root.go — the ONE kong root: the launcher's verb table as a typed tree, and the
-// only thing that parses argv, dispatches a verb, or answers a help request. The
-// tree is the single source of truth for all three (what dispatches, what the
-// suggester knows, what help says), because EVERY verb is TYPED: the struct tags
-// that parse a verb also generate its help and place it in a help tier
-// (`group:`). `help` is the one `passthrough:""` command, for the opposite
-// reason: `pix help <anything>` is a question, not a grammar, so it must answer
-// rather than reject.
-//
-// Three decisions stay in FRONT of the parser because they are argv SHAPE, not
-// grammar: the retired table (retired.go), which must answer before any config
-// read or side effect; a bare positional naming a directory, which is `run DIR`
-// (classifyBareArg); and the `task NAME path` rewrite.
+// root.go — the ONE kong root: the launcher's verb table as a typed tree, and
+// the only thing that parses argv, dispatches a verb, or answers a help
+// request. Every verb here is the v2 accepted surface
+// (docs/design/pix-v2-surface.md §3): run (implicit and explicit), ls, rm,
+// task new/ls/path/rm, env list/add/show/default/trust, secret
+// list/set/rm/check, setup, doctor, reset, help, version. Nothing else is
+// dispatchable: a removed verb (status, resume, config, mcp, models, agent,
+// pack, serve, uat, and every compatibility alias) gets kong's ordinary
+// unknown-command answer, not a retirement message.
 package main
 
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"pix/host/cli"
 	"pix/host/mcp"
-	"pix/host/rpc"
-	"pix/host/service"
 	"pix/host/sys"
 	"pix/host/workflow/launch"
 )
 
+// exitServiceDown is the distinct exit code a verb returns when a resource it
+// shells out to (sbx) is unreachable, so scripts can tell "service down" (3)
+// apart from a usage error (2) or a generic failure (1). It was rpc.ExitServiceDown
+// before the Pix v2 cutover deleted the custom memory JSON-RPC package that
+// constant lived in for no reason but proximity (AC-16).
+const exitServiceDown = 3
+
 // sbxAwareFail is the shared exit mapping for every launcher verb that shells
-// to sbx directly (ls, rm; mcp_cmd.go's mcpFailed is the same contract for the
-// mcp group): mcp.ErrSbxUnavailable prints in the verb's own words on stderr
-// and exits rpc.ExitServiceDown (3), the SAME code `pix mcp`/`memory`/`secret`
-// already use for "dependency unavailable" — never the generic 1 a plain
-// error would fall through to.
+// to sbx directly (ls, rm): mcp.ErrSbxUnavailable prints in the verb's own
+// words on stderr and exits rpc.ExitServiceDown (3), never the generic 1 a
+// plain error would fall through to.
 func sbxAwareFail(d *cli.Deps, err error) error {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, mcp.ErrSbxUnavailable) {
 		fmt.Fprintf(d.Err, "pix: %v\n", err)
-		return cli.SilentError{Code: rpc.ExitServiceDown}
+		return cli.SilentError{Code: exitServiceDown}
 	}
 	return err
 }
@@ -48,63 +48,33 @@ func sbxAwareFail(d *cli.Deps, err error) error {
 // help: helpAll renders the listing straight off this declaration, so a verb
 // cannot be dispatchable and undocumented at once.
 type rootCmd struct {
-	Run    runCmd    `cmd:"" group:"Workflow" help:"Launch the sandbox in DIR (default: .). This is the main one."`
-	Resume resumeCmd `cmd:"" group:"Workflow" help:"Resume the exact session printed when pix exited."`
-	Ls     lsCmd     `cmd:"" group:"Workflow" help:"List your pix sandboxes (name, state, dir)."`
-	Rm     rmCmd     `cmd:"" group:"Workflow" help:"Remove pix sandboxes (scoped to pix-* names)."`
-	Serve  serveCmd  `cmd:"" group:"Workflow" help:"Run the host services; serve stop|status|start."`
-	Status statusCmd `cmd:"" group:"Workflow" aliases:"st" help:"What is up, what is down, what is next."`
+	Run runCmd `cmd:"" group:"Workflow" help:"Launch the sandbox in DIR (default: .). This is the main one."`
+	Ls  lsCmd  `cmd:"" group:"Workflow" help:"List your pix sandboxes (name, state, dir)."`
+	Rm  rmCmd  `cmd:"" group:"Workflow" help:"Remove pix sandboxes (scoped to pix-* names)."`
 
-	Setup  setupCmd  `cmd:"" group:"Setup & health" help:"Guided setup: keys, memory, pack."`
+	Setup  setupCmd  `cmd:"" group:"Setup & health" help:"Guided setup: PIX_HOME, images, memory container."`
 	Doctor doctorCmd `cmd:"" group:"Setup & health" help:"Diagnose problems and print the fix commands."`
-	Reset  resetCmd  `cmd:"" group:"Setup & health" help:"Clean slate: move config+data aside, clear runtime state, remove sandboxes."`
+	Reset  resetCmd  `cmd:"" group:"Setup & health" help:"Clean slate: remove sandboxes + memory container, back up PIX_HOME."`
 
-	Memory memoryCmd `cmd:"" group:"Data" aliases:"mem" help:"recall | remember | forget | stats."`
-	Pack   packCmd   `cmd:"" group:"Data" help:"ls | show | use | rm."`
+	Task taskCmd `cmd:"" group:"Parallel work" help:"Parallel task checkouts of one repo: new | ls | path | rm."`
 
-	Models ModelsCmd `cmd:"" group:"Models & agents" help:"Which models pix can use, and which are wired."`
-	Agent  AgentCmd  `cmd:"" group:"Models & agents" help:"List the roster: resolved model + WHY (new/edit/rm/reassess retired; edit agents/*.md)."`
-
-	Config configCmd `cmd:"" group:"Config & context" help:"show | path | get | set | unset."`
-
-	Task taskCmd `cmd:"" group:"Parallel work" help:"Parallel task checkouts of one repo."`
-
-	Mcp    mcpCmd    `cmd:"" group:"Integrations & credentials" help:"add | ls | auth."`
-	Secret SecretCmd `cmd:"" group:"Integrations & credentials" help:"ls | set | rm | check | sync the op-refs."`
-
-	Uat uatCmd `cmd:"" group:"Meta" help:"Self-UAT and browser bootstrap."`
+	Env    envCmd    `cmd:"" group:"Environments & credentials" help:"Named environments under ~/.pix/envs: list | add | show | default | trust."`
+	Secret SecretCmd `cmd:"" group:"Environments & credentials" help:"1Password references: list | set | rm | check."`
 
 	Version versionCmd `cmd:"" group:"Meta" help:"Print the stamped launcher version."`
 	Help    helpCmd    `cmd:"" group:"Meta" passthrough:"" help:"Print this help (or a verb's usage)."`
 }
 
-// legacyArgs is the passthrough tail the last two unmigrated seams carry — `serve
-// install`/`serve uninstall`, whose flags belong to a hand-rolled loop in the
-// service package: kong stops parsing at the subcommand name, so the seam sees the
-// whole argv, its own `--help` included.
-type legacyArgs struct {
-	Args []string `arg:"" optional:"" passthrough:"" help:"Passed to the verb unchanged."`
-}
-
-// testSeams is the one indirection the root's tests need: legacy proves a
-// passthrough command gets its argv verbatim without running the seam behind
-// it. Never set in production.
+// testSeams is the one indirection help_cmd.go's passthrough seam still
+// checks. No verb routes through it anymore (serve install/uninstall, the
+// last passthrough seams, were removed with v2's surface cut), but the
+// field stays so help_cmd.go need not special-case "nothing is wired".
 var testSeams struct {
 	legacy func(verb string, args []string)
 }
 
-// legacyForward hands a passthrough seam its argv verbatim, or to the test seam
-// when one is installed.
-func legacyForward(verb string, args []string, fn func([]string) error) error {
-	if testSeams.legacy != nil {
-		testSeams.legacy(verb, args)
-		return nil
-	}
-	return fn(args)
-}
-
-// versionCmd prints the stamped launcher version. Typed rather than passthrough:
-// it has no flags, so its usage is entirely generated.
+// versionCmd prints the stamped launcher version. Typed rather than
+// passthrough: it has no flags, so its usage is entirely generated.
 type versionCmd struct{}
 
 func (c *versionCmd) Run(d *cli.Deps) error {
@@ -126,6 +96,15 @@ func newRootDeps() *cli.Deps {
 // It is the SINGLE exit mapper: 0 success, 1 failure, 2 a wrong invocation, and
 // a SilentError's own code (3, readiness' unverifiable arm).
 func dispatch(argv []string, d *cli.Deps) int {
+	// The two hidden session-control invocation modes (sessionctl.go) are
+	// intercepted BEFORE anything else touches argv: never normalized, never
+	// handed to classifyBareArg, never parsed by kong, so no help/usage/
+	// suggestion code path can ever render or dispatch them as an ordinary
+	// verb. This is what "not listed in help" means structurally rather than
+	// as a kong `hidden:""` tag someone could remove without noticing.
+	if code, handled := runHiddenSessionVerb(argv, &cliDeps{Out: d.Out, Err: d.Err, In: d.In}); handled {
+		return code
+	}
 	// `pix --dev` is the direct shorthand for an implicit dev launch. Preserve
 	// the same TTY boundary as bare `pix`/`pix DIR`; scripts have the explicit
 	// and auditable `pix run --dev` spelling.
@@ -137,39 +116,57 @@ func dispatch(argv []string, d *cli.Deps) int {
 	// A bare positional is `run DIR` when it names a directory, and a verb typo
 	// otherwise. kong would call both "unexpected argument".
 	if a := argv[0]; !strings.HasPrefix(a, "-") && !knownVerbs()[a] {
-		msg, launch := classifyBareArg(a)
-		if !launch {
+		msg, doLaunch := classifyBareArg(a)
+		if !doLaunch {
 			fmt.Fprint(d.Err, msg)
 			return 2
 		}
-		// A BARE positional (never the explicit `run` verb) is an IMPLICIT launch
-		// decision: on a non-interactive terminal nobody is there to have meant it, so
-		// it REFUSES rather than creating or attaching a sandbox from a script/pipe.
-		// stderr only (never stdout, which a script may capture), exit 2, and the root
-		// parser never runs: no create, no attach, no side effect. An explicit `pix run
-		// DIR` from the same shell is unaffected.
+		// A BARE positional (never the explicit `run` verb) is an IMPLICIT
+		// launch decision: on a non-interactive terminal nobody is there to
+		// have meant it, so it REFUSES rather than creating or attaching a
+		// sandbox from a script/pipe. stderr only, exit 2, and the root parser
+		// never runs: no create, no attach, no side effect. An explicit
+		// `pix run DIR` from the same shell is unaffected.
 		if !d.Interactive {
 			fmt.Fprintf(d.Err, bareNonTTYRefusalFmt, resolvedBareArgPath(a))
 			return 2
 		}
-		// `pix DIR` IS `pix run DIR`: re-normalize so the pi passthrough tail is
-		// rewritten for the run grammar exactly as the explicit spelling is.
+		// `pix DIR` IS `pix run DIR`.
 		argv = normalizeArgv(append([]string{"run"}, argv...))
 	}
 	err := cli.RunRoot[rootCmd]("pix", "A personal, multi-model pi coding agent in a Docker sandbox.", helpText, argv, d)
 	if err != nil {
 		var silent cli.SilentError
 		if !errors.As(err, &silent) {
-			fmt.Fprintf(d.Err, "pix: %v\n", err)
+			printRootError(d.Err, err)
 		}
 	}
 	return cli.ExitCode(err)
 }
 
+// printRootError is dispatch's one renderer for a command that returns a
+// plain error (a cli.SilentError already printed itself and reaches here
+// never). It adds pix's own "pix: " program-name prefix — UNLESS the
+// command's own message already opens with one, which several verbs
+// construct deliberately so the SAME error reads standalone outside
+// dispatch too (e.g. setupSelectedEnvironment's "pix setup --env work: ...",
+// secret.SetRef's "pix secret set: ..."). Prefixing those again produced
+// exactly the regression a user hit live: "pix: pix setup --env work: ...",
+// the program name named twice in one line. A message that does NOT
+// already name "pix" gets the ordinary single prefix, unchanged.
+func printRootError(w io.Writer, err error) {
+	msg := err.Error()
+	if strings.HasPrefix(msg, "pix:") || strings.HasPrefix(msg, "pix ") {
+		fmt.Fprintln(w, msg)
+		return
+	}
+	fmt.Fprintf(w, "pix: %s\n", msg)
+}
+
 // normalizeArgv rewrites the shapes the grammar cannot express: `pix task NAME
-// path` -> `pix task path NAME`, so `cd "$(pix task foo path)"` reads as written,
-// and run's `--` pi tail. A REWRITE, not a parse: the root still owns every
-// decision downstream, and it never fires for a real subcommand.
+// path` -> `pix task path NAME`, so `cd "$(pix task foo path)"` reads as
+// written, and run's `--` pi tail. A REWRITE, not a parse: the root still owns
+// every decision downstream, and it never fires for a real subcommand.
 func normalizeArgv(argv []string) []string {
 	// Plain `pix` is implicit `pix run`; let its dev-mode spelling take the
 	// same direct form instead of making `pix --dev` an unknown root flag.
@@ -179,17 +176,39 @@ func normalizeArgv(argv []string) []string {
 	if len(argv) == 3 && argv[0] == "task" && argv[2] == "path" && !isTaskKnownVerb(argv[1]) {
 		return []string{"task", "path", argv[1]}
 	}
+	// `pix env NAME [--path|--effective|--json]` (docs/design/
+	// pix-v2-surface.md §3.4, QA re-review F3): NAME is not itself a
+	// subcommand, so kong's ordinary dispatch would try to parse it as an
+	// arg to `list` (the default subcommand) and refuse with "unexpected
+	// argument". Rewriting to the real subcommand BEFORE kong ever parses
+	// is the same technique the task name-then-verb and bare-DIR rewrites
+	// above already use. A token that IS one of the four real verbs, or
+	// that looks like a flag (so `pix env --json` keeps meaning `env list
+	// --json`), is left alone.
+	if len(argv) >= 2 && argv[0] == "env" && !isEnvKnownVerb(argv[1]) && !strings.HasPrefix(argv[1], "-") {
+		return append([]string{"env", "show", argv[1]}, argv[2:]...)
+	}
 	if argv[0] == "run" {
 		return rewriteRunPassthrough(argv)
 	}
 	return argv
 }
 
+// isEnvKnownVerb guards the env NAME-shorthand rewrite: it must never fire
+// for a real `pix env` subcommand.
+func isEnvKnownVerb(v string) bool {
+	switch v {
+	case "list", "add", "show", "default", "trust":
+		return true
+	}
+	return false
+}
+
 // isTaskKnownVerb guards the name-then-verb rewrite: it must never fire for a
 // real subcommand or its aliases.
 func isTaskKnownVerb(v string) bool {
 	switch v {
-	case "new", "run", "ls", "list", "path", "rm", "remove":
+	case "new", "ls", "list", "path", "rm", "remove":
 		return true
 	}
 	return false
@@ -214,81 +233,13 @@ type rmCmd struct {
 	All     bool     `help:"Remove every pix-* sandbox (never forced)."`
 	Orphans bool     `help:"Remove only pix-owned sandboxes with zero live references and no keep (never forced)."`
 	Force   bool     `short:"f" help:"Force-remove an explicitly named sandbox, skipping the zero-reference proof. Refused with --all/--orphans."`
-	Keep    []string `short:"k" help:"With --all: keep this one (repeatable)." placeholder:"NAME"`
-	Except  []string `help:"Deprecated spelling of --keep." placeholder:"NAME"`
+	Keep    []string `short:"k" help:"With --all/--orphans: keep this one (repeatable)." placeholder:"NAME"`
 }
 
 func (c *rmCmd) Run(d *cli.Deps) error {
-	// The bare/flag-shape refusals live with the behaviour they protect
-	// (launch.validateRmShape): this layer only reports whether the terminal is
-	// interactive, which is a fact only it knows.
 	return sbxAwareFail(d, launch.Rm(defaultShellEnv(), d.Out, d.Err, launch.RmOptions{
 		Names: c.Names, All: c.All, Orphans: c.Orphans, Force: c.Force,
-		Except:      append(append([]string(nil), c.Keep...), c.Except...),
+		Except:      c.Keep,
 		Interactive: d.Interactive,
 	}))
-}
-
-// ── lifecycle: serve ────────────────────────────────────────────────────────
-
-// serveCmd is the host-services group. Its DEFAULT command execs the sibling
-// pix-host's `serve`, so `pix serve --port N` starts the daemon; the control verbs
-// beside it are launcher-side and never reach the host binary.
-func (c *serveCmd) Help() string { return service.Description }
-
-type serveCmd struct {
-	Exec      serveExecCmd      `cmd:"" default:"withargs" hidden:""`
-	Stop      serveStopCmd      `cmd:"" help:"Stop a running serve (mode-aware: managed services go through their supervisor)."`
-	Status    serveStatusCmd    `cmd:"" help:"Is serve running, and are its units healthy (memory, pack daemons)."`
-	Start     serveInstallCmd   `cmd:"" passthrough:"" help:"Alias for install: (re)start the managed service."`
-	Install   serveInstallCmd   `cmd:"" passthrough:"" help:"Install serve as a managed login service."`
-	Uninstall serveUninstallCmd `cmd:"" passthrough:"" help:"Remove the managed login service."`
-}
-
-// serveExecCmd forwards to `pix-host serve`. --bind/--port are declared because
-// they are the flags serve documents; a raw tail goes through `pix serve -- ARGS`.
-type serveExecCmd struct {
-	Bind string   `help:"Monitor ingest listen address (default 127.0.0.1, loopback-only)." placeholder:"ADDR"`
-	Port int      `help:"Monitor ingest port (default 11437)." placeholder:"N"`
-	Args []string `arg:"" optional:"" passthrough:"all" help:"Services to run (default: config's 'services'), then raw pix-host args."`
-}
-
-func (c *serveExecCmd) Run(d *cli.Deps) error {
-	argv := append([]string{}, c.Args...)
-	if c.Bind != "" {
-		argv = append(argv, "--bind", c.Bind)
-	}
-	if c.Port != 0 {
-		argv = append(argv, "--port", fmt.Sprint(c.Port))
-	}
-	return execHostServe(d, argv)
-}
-
-// execHostServe runs the sibling pix-host's `serve` through the one host-binary
-// exec seam (execHostBinary), so serve and the router map a child failure the
-// same way: the host already reported the problem in its own words.
-func execHostServe(d *cli.Deps, argv []string) error {
-	return execHostBinary(d, append([]string{"serve"}, argv...))
-}
-
-type serveStopCmd struct{}
-
-func (c *serveStopCmd) Run(d *cli.Deps) error { return service.StopService(d.Out) }
-
-type serveStatusCmd struct {
-	JSON bool `help:"Emit machine-readable JSON."`
-}
-
-func (c *serveStatusCmd) Run(d *cli.Deps) error { return service.ReportStatus(d.Out, c.JSON) }
-
-type serveInstallCmd struct{ legacyArgs }
-
-func (c *serveInstallCmd) Run(d *cli.Deps) error {
-	return legacyForward("serve install", c.Args, func(a []string) error { return service.RunInstall(d.Out, d.Err, a) })
-}
-
-type serveUninstallCmd struct{ legacyArgs }
-
-func (c *serveUninstallCmd) Run(d *cli.Deps) error {
-	return legacyForward("serve uninstall", c.Args, func(a []string) error { return service.RunUninstall(d.Out, d.Err, a) })
 }

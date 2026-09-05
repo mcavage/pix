@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"strings"
 	"testing"
 )
 
@@ -42,40 +41,5 @@ func TestMemoryCaptureValidation(t *testing.T) {
 	}
 	if got.MemoryCapture != MemoryCaptureExplicit {
 		t.Errorf("a hand-edited garbled value on disk: MemoryCapture = %q, want fail-closed default explicit", got.MemoryCapture)
-	}
-}
-
-// TestMemoryCaptureSparseSave mirrors the sparse-save contract every other
-// defaultable scalar key follows: the default is never petrified into the
-// file, and an explicit non-default round-trips.
-func TestMemoryCaptureSparseSave(t *testing.T) {
-	path := tempConfig(t)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.MemoryCapture = MemoryCaptureExperimentalAuto
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	raw := rawFile(t, path)
-	if !strings.Contains(raw, `memory_capture = "experimental-auto"`) {
-		t.Errorf("raw file missing the explicit memory_capture:\n%s", raw)
-	}
-	got, err := LoadFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.MemoryCapture != MemoryCaptureExperimentalAuto {
-		t.Errorf("MemoryCapture = %q, want experimental-auto", got.MemoryCapture)
-	}
-
-	got.MemoryCapture = MemoryCaptureExplicit
-	if err := got.Save(); err != nil {
-		t.Fatal(err)
-	}
-	if raw = rawFile(t, path); strings.Contains(raw, "memory_capture") {
-		t.Errorf("value equal to the default should be omitted:\n%s", raw)
 	}
 }

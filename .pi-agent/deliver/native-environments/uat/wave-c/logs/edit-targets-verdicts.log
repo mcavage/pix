@@ -1,0 +1,59 @@
+=== 41. edit home pix (opens pix.toml, EDITOR=true no-op, valid) ===
+pix: environment "home" is valid; no host-execution footprint to review.
+     next: pix env use home
+exit=0
+
+=== 42. edit home sbxenv (opens .sbxenv.yaml, EDITOR=true no-op, valid) ===
+pix: environment "home" is valid; no host-execution footprint to review.
+     next: pix env use home
+exit=0
+
+=== 43. edit home bogus (bad target enum) ===
+pix: `pix env edit home bogus`: unknown target "bogus".
+     pix env edit home pix       edit pix.toml
+     pix env edit home sbxenv    edit .sbxenv.yaml
+exit=2
+
+=== 44. edit home (no target arg) ===
+pix: `pix env edit home` needs a target file; no TTY to ask interactively.
+     pix env edit home pix       edit pix.toml
+     pix env edit home sbxenv    edit .sbxenv.yaml
+exit=2
+
+=== 45. edit home sbxenv, EDITOR injects host command into secrets (tier1), footprint changed ===
+pix: environment "home" is valid, but its host-execution footprint changed (or was never reviewed).
+     next: pix env review home
+exit=0
+
+=== 46. use home after edit-induced changed footprint (never prompts inline) ===
+pix: environment "home" has not been reviewed.
+     review it: pix env review home
+exit=2
+
+=== 47. show --json confirms review_state changed after edit ===
+{
+  "schema_version": 1,
+  "environment": "home",
+  "root": "/tmp/wave-c-run/xdg-data/pix/envs/home",
+  "sbxenv_present": true,
+  "accepted": false,
+  "review_state": "unaccepted"
+}
+exit=0
+
+=== 48. re-review + accept to restore ===
+Environment "home" runs code on your host and hands it credentials.
+
+  1 host command       secret:db
+  1 credential target  command: echo edited-secret     -> (unbound)
+
+  full argv and content digests: pix env review home --verbose
+
+Accept this host-execution footprint? [y/N]:
+consent supplied via --yes
+pix: recorded acceptance for environment "home" (fingerprint fddff034eead).
+exit=0
+
+=== 49. use home now succeeds (accepted) ===
+pix: environment "home" is now the default.
+exit=0

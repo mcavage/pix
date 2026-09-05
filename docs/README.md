@@ -1,57 +1,41 @@
-# pix docs
+# Pix documentation
 
-Start with the [top-level README](../README.md) and, if you are extending the
-harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
+## Using Pix
 
-## For adopters
+- [Install and start](../README.md): prerequisites, setup, environments, and daily use.
+- [First session](getting-started.md): choose an environment, work, and keep context.
+- [Command reference](reference.md): complete CLI behavior and configuration.
+- [Memory](memory.md): recall, capture, scopes, backups, and privacy.
+- [Security](../SECURITY.md): mounted files, account access, and host trust.
 
-- [design/packs.md](design/packs.md) — the pack design: private company context
-  ships as a **pack** (plus container/host MCP integrations), never a
-  forked/recompiled tree.
-- [gworkspace.md](gworkspace.md) — why Google Workspace is **not** a pix
-  feature, what a pack has to declare to provide it, and how to check it is
-  actually working rather than merely registered.
-- [memory.md](memory.md) — the memory service: what it stores, how recall and
-  capture work, the commands, and the trust model.
-- [../SECURITY.md](../SECURITY.md) — the trust boundary, what the sandbox does
-  and does not protect, and how to report a vulnerability.
-- [../CONTRIBUTING.md](../CONTRIBUTING.md) — build constraints, the open-core
-  boundary, and how to contribute a skill or agent.
+For connections supplied by an environment, start with that environment's README.
 
-## Design notes (how it works, and why)
+## Developing Pix or an environment
 
-These document the reasoning behind subsystems. They are reference, not
-tutorials.
+- [AGENTS.md](../AGENTS.md): code ownership, invariants, validation, and host UAT.
+- [Contributing](../CONTRIBUTING.md): development setup and PR expectations.
+- [Product contract](design/pix-v2-surface.md) and
+  [architecture](design/pix-v2-architecture.md): the accepted v2 design.
+- [Google Workspace example](gworkspace.md): native MCP declarations, credentials,
+  and meaningful probes for environment authors.
+- [Host service runbook](runbooks/host-services.md): operating Pix's memory container.
+- [Host module](../services/host/README.md) and
+  [memory module](../services/memory/README.md): implementation entry points.
+- [Subagents](design/subagents-extension.md),
+  [subagent tracker](design/subagent-pin-tracker.md), and
+  [output styles](design/output-styles.md): extension design notes.
+- [Task design](design/worktree-tasks.md): background for isolated task checkouts;
+  the current commands are in the command reference.
 
-- [onboarding-v3.md](design/onboarding-v3.md) — the proposed one-path setup,
-  dependency, OAuth, pack, doctor, and provider-routing design.
-- [slack-setup.md](design/slack-setup.md) — MERGE-BLOCKED migration reference:
-  Slack's built-in implementation was deleted (W2/U02a); this names the
-  required pinned/on-demand posture for an external pack replacement and the
-  per-user credential rules it must keep. Not evidence anything external works.
-- [routing.md](design/routing.md) — the model router: registry, scorecard,
-  policy, and how `pix-host route compile` (`make routing`) bakes `routing.json`.
-- [models-cli.md](design/models-cli.md) — the `pix models` noun rename and the
-  first-run "add a second provider key" fix.
-- [subagents-extension.md](design/subagents-extension.md) — the `subagent` tool
-  (single / parallel / chain / trees) and the watchdog.
-- [subagent-pin-tracker.md](design/subagent-pin-tracker.md) — the pinned
-  live tracker for running subagents.
-- [self-learning-loop.md](design/self-learning-loop.md) — the memory capture and
-  recall loop.
-- [serve-lifecycle.md](design/serve-lifecycle.md) — the `pix serve` daemon
-  lifecycle: lazy auto-start, the managed login service, and the hardening addendum.
-- [worktree-tasks.md](design/worktree-tasks.md) and
-  [task-ux-decisions.md](design/task-ux-decisions.md) — the `pix task`
-  parallel-work workflow.
-- [cli-redesign.md](design/cli-redesign.md) — the launcher verb tree.
+## Historical and upstream material
 
-## Upstream (issues and patches we owe pi/sbx)
+Design documents explicitly marked **HISTORICAL** describe previous implementations
+or abandoned plans. They are retained as engineering evidence, not user guides or
+instructions to revive removed APIs. In particular, the packs, serve lifecycle,
+old onboarding, and self-learning-loop designs do not describe Pix v2.
 
-Working notes toward upstream contributions. Historical or in-flight, not
-adopter docs.
+`docs/upstream/` contains version-specific sbx/Pi investigations. Check the
+version and current implementation before applying an old workaround. The active
+[terminal renderer patch](upstream/tui-bottom-pin.md) is checked when Pi is bumped.
 
-- [tui-bottom-pin.md](upstream/tui-bottom-pin.md) — the vendored renderer patch.
-- [pi-subagents-hang-pi-0.80.md](upstream/pi-subagents-hang-pi-0.80.md)
-- [sbx-0.34-custom-kit-credentials.md](upstream/sbx-0.34-custom-kit-credentials.md)
-- [sbx-version-box.md](upstream/sbx-version-box.md)
+Legal and release requirements live under [legal/RELEASE-SAFEGUARDS.md](legal/RELEASE-SAFEGUARDS.md).

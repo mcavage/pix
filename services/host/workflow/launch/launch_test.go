@@ -26,7 +26,7 @@ func TestBuildSbxArgsKeepsCreateInputs(t *testing.T) {
 	}, "0.0.1")
 	got := strings.Join(args, " ")
 	for _, want := range []string{
-		"run pix", "--name pix-x", "--template docker.io/mcavage/pix:local-1",
+		"run pix", "--name pix-x", "--template docker.io/mcavage/pix-agent:local-1",
 		"--kit /repo/pi-kit", "--kit /packkit", "--kit /stacked",
 		"--static-mcp slack", "/ws", "-- ", "--model anthropic/x", "--models a,b", "-p hi",
 	} {

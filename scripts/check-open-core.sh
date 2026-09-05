@@ -5,12 +5,9 @@
 #      mirror each other, checked below (skills/agents);
 #   2. nothing company-specific being git-tracked outside them (the generic
 #      marker guard, below);
-#   3. `pix-host` having exactly ONE host-side extension point — the
-#      generic, SHA-pinned `[plugins.*]` external-process mechanism — and no
-#      other compile-in extension seam ever quietly reappearing (the
-#      compile-in guard, below). Private context ships as a runtime **pack**
-#      (skills + knowledge + config), a **container** MCP integration, or a
-#      standalone **host daemon** — see docs/design/packs.md.
+#   3. no company-specific Go code or compile-in extension seam in the launcher.
+#      Private context and integrations belong in separate environment
+#      repositories, consumed through native sbx declarations and the Gateway.
 #
 # build-free, so it runs in public CI without the DHI base image.
 #
@@ -29,12 +26,9 @@ allow() { # $1=file $2=prefix(skills|agents)
 
 # --- Host compile-in extension boundary guard -------------------------------
 #
-# pix-host has exactly one host-side extension point: the generic,
-# SHA-pinned `[plugins.*]` external-process mechanism (services/host/plugin).
-# There is no compile-in extension seam — no private Go source symlinked into
-# services/host, and no init()-registered "extra*" factory hooks wiring extra
-# commands/services/servers into the binary at build time. This guard fails
-# closed if either pattern reappears in tracked source.
+# The launcher has no plugin system or private compile-in extension seam.
+# Refuse private source symlinks and the old init()-registered factory hooks
+# if they reappear in tracked source.
 COMPILE_IN_MARKERS_REGEX='extraMcpServers|extraServiceFactories|extraServiceAliases|extraBrokerFactory|extraCommands\b|extraUsage\b'
 
 # Paths excluded from the guard: this script itself, which has to NAME the

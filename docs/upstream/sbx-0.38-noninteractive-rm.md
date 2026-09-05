@@ -48,7 +48,9 @@ same pix-* scope and name-safety validation as the existing `PlanRemove`
 (`workflow/launch/reap.go`'s `decideTeardown`/`removeAndConfirm`, used by the
 session teardown, the orphan sweep, and an explicit non-force `pix rm NAME`)
 and the explicit `--force` seam (`workflow/launch/sandbox.go`'s
-`RemovePixSandbox`) now route through `PlanForceRemove`, so the WIRE argv
+`removePixSandbox`, reachable from outside that package only through
+`RemoveScopedPixSandbox`, which validates the current stack id first) now
+route through `PlanForceRemove`, so the WIRE argv
 always carries `-f`/`--force` while pix's own authorization logic — the two
 proofs above — is completely unchanged. `PlanRemove` (no `-f`) is kept as the
 pure, tested argv shape a hypothetical interactive caller could still use; no

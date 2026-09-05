@@ -45,3 +45,7 @@ declare module "typebox" {
 	const _default: any;
 	export default _default;
 }
+
+declare module "@earendil-works/pi-ai/providers/all" {
+	export function getBuiltinModel(provider: string, id: string): any;
+}

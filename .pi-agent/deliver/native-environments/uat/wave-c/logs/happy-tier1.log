@@ -1,0 +1,60 @@
+
+=== 10. env add work (tier1 via secrets.command) ===
+Environment "work" runs code on your host and hands it credentials.
+
+  1 host command       secret:db
+  1 credential target  command: echo secret-value      -> (unbound)
+
+  full argv and content digests: pix env review work --verbose
+
+Accept this host-execution footprint? [y/N]:pix: environment "work" would run the above on your host; refusing to review it non-interactively (fail closed).
+     recorded: nothing
+     retry: pix env add work /tmp/wave-c-run/xdg-data/pix/envs/work --yes
+exit=2
+
+=== 11. env show work (unaccepted tier1) ===
+pix: no environment named "work".
+     known: home
+     register one: pix env add <name> [path]
+exit=2
+
+=== 12. env show work --json (unaccepted) ===
+pix: no environment named "work".
+     known: home
+     register one: pix env add <name> [path]
+exit=2
+
+=== 13. env use work nonTTY without --yes -> fail closed (unaccepted) ===
+pix: no environment named "work".
+     known: home
+     register one: pix env add <name> [path]
+exit=2
+
+=== 14. env review work nonTTY without --yes -> fail closed ===
+pix: no environment named "work".
+     known: home
+     register one: pix env add <name> [path]
+exit=2
+
+=== 15. env review work --yes (accept, non-interactive) ===
+pix: no environment named "work".
+     known: home
+     register one: pix env add <name> [path]
+exit=2
+
+=== 16. env show work --json (accepted) ===
+pix: no environment named "work".
+     known: home
+     register one: pix env add <name> [path]
+exit=2
+
+=== 17. env use work (now accepted, tier1) ===
+pix: no environment named "work".
+     known: home
+     register one: pix env add <name> [path]
+exit=2
+
+=== 18. env ls (tier1 accepted default) ===
+NAME  DEFAULT  REVIEW  ROOT
+home  *        n/a     /tmp/wave-c-run/xdg-data/pix/envs/home
+exit=0

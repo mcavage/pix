@@ -1,0 +1,16 @@
+=== RUN   TestRunHint_AbsentFile_NoHint
+--- PASS: TestRunHint_AbsentFile_NoHint (0.00s)
+=== RUN   TestRunHint_PresentFile_NoRegistration_Hints
+--- PASS: TestRunHint_PresentFile_NoRegistration_Hints (0.00s)
+=== RUN   TestRunHint_ExactRegisterAndSelectCommand
+--- PASS: TestRunHint_ExactRegisterAndSelectCommand (0.00s)
+=== RUN   TestRunHint_RegisteredEnvironment_Suppresses
+--- PASS: TestRunHint_RegisteredEnvironment_Suppresses (0.00s)
+=== RUN   TestRunHint_RepeatedRun_ShowsOnce
+--- PASS: TestRunHint_RepeatedRun_ShowsOnce (0.00s)
+=== RUN   TestRunHint_DifferentWorkspaces_EachShowsOnce
+--- PASS: TestRunHint_DifferentWorkspaces_EachShowsOnce (0.00s)
+=== RUN   TestRunHint_MarkerIsDurableOnDisk
+--- PASS: TestRunHint_MarkerIsDurableOnDisk (0.00s)
+PASS
+ok  	pix/host/workflow/env	0.007s

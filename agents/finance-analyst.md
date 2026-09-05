@@ -1,7 +1,6 @@
 ---
 description: SaaS metrics, financial models, and market sizing. Use when the task involves unit economics, scenario planning, or any quantitative financial analysis. Unit economics (LTV/CAC, payback), contribution margin, cohort analysis, Rule of 40, driver-based modeling, scenario analysis.
 tools: read, write, edit, bash, grep, find, ls
-intent: advisory
 thinking: high
 max_turns: 30
 ---

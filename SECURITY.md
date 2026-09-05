@@ -11,14 +11,14 @@ confirmation. pi runs full-auto inside a disposable, network-limited VM.
 
 What the sandbox protects:
 
-- **Your host filesystem.** The agent only sees the mounted workspace, not the
-  rest of your machine.
+- **Your host filesystem.** The agent sees the workspace and additional mounts
+  declared by the environment, not arbitrary host files.
 - **Your provider credentials.** Anthropic, OpenAI, and Google keys are injected
   by the host proxy at the network layer. The VM never holds them; it only sees
   model responses. GitHub uses the same proxy injection.
-- **The network.** Egress is limited to the allowlist in `pi-kit/spec.yaml`. A
-  new external host has to be added there explicitly.
-- **Host data tools.** Google Workspace, Slack, and pack-provided connectors
+- **The network.** Egress is limited to the allowlist in `pi-kit/spec.yaml`. Environments may extend that policy through native kits; such changes
+  participate in environment approval.
+- **Host data tools.** Google Workspace, Slack, and environment-declared connectors
   (containerized MCP servers or host daemons) run host-side, reached through the
   sbx gateway. Tokens stay on the host; the sandbox talks to a gateway, not to the
   service.
@@ -39,24 +39,41 @@ Be clear-eyed about these:
   Slack server stamps message results with an untrusted-content guard. Treat any
   capability that returns third-party text as a channel an attacker can write to,
   and prefer read-only, least-privilege configuration.
-- **Local models run on your machine.** Ollama models the memory loop uses run on
-  the host, outside the VM boundary.
+- **Memory inference runs outside the VM.** The memory service uses the configured
+  Ollama endpoint. A local endpoint stays on your host; a remote endpoint or
+  cloud-backed model can send content off-host. Recalled memory also becomes
+  part of the active model's prompt.
 
 ## Host-side MCP servers run with your trust, not the sandbox's
 
-A local-command MCP server (a mail bridge, `gog`, a pack's host wrapper) is a
-process the sbx gateway spawns on your **host**, not inside the sandbox. Pix
-ships none of them: every server is declared by the active pack, which is why
-adoption is gated. Registering one (`sbx mcp add`, `pix mcp add`) is a host-level
-trust decision:
-the command you register runs with whatever access the gateway's spawn
-environment has, resolved credentials included. Review a server's registered
-command before trusting it (`sbx mcp get <name>`), and treat a pack that ships
-a host-executing integration as running code on your machine, not just in the
-sandbox; `pix pack use` gates that with an explicit bill-of-materials
-prompt before adoption. A remote MCP server (notion/atlassian/granola-style,
-added by URL) authenticates through hosted OAuth handled entirely host-side by
-the gateway; the sandbox never sees the token.
+A local-command MCP server (a mail bridge, `gog`) is a process the sbx
+gateway spawns on your **host**, not inside the sandbox. Environments
+declare their integrations in `.sbxenv.yaml`; Pix also supplies its own
+memory service through the Gateway. Registering one (`sbx mcp
+add`) is a host-level trust decision: the command you register runs with
+whatever access the gateway's spawn environment has, resolved credentials
+included. Review a server's registered command before trusting it (`sbx mcp
+inspect <name>`), and treat an environment that declares a host-executing
+integration as running code on your machine, not just in the sandbox. `pix
+env trust NAME` gates that with a plain-language consent prompt that
+defaults to No; `--verbose` shows the technical review. A remote MCP server (notion/atlassian/granola-style, added
+by URL) authenticates through hosted OAuth handled entirely host-side by the
+gateway; the sandbox uses the authenticated Gateway connection.
+
+**Environment setup hooks run on your host.** An environment's `pix.toml` may
+include `[[setup]]` hooks for preparing tools and authenticating accounts.
+Setup runs reviewed hook snapshots containing the executable and declared
+companion inputs, after verifying their hashes. Undeclared files are not copied
+into the snapshot. Hooks still run with the host user's privileges and can
+access that user's filesystem; a snapshot is a consistency mechanism, not a
+sandbox for the hook.
+
+`pix setup --env NAME` is the explicit environment setup path. Bare interactive
+`pix` can invoke setup on a new installation. Ordinary launch does not replay
+environment install/authentication steps. Approved diagnostic `probe_args` are
+also host execution and must be written to be read-only. Review an unfamiliar
+environment's source before approving it; technical details are available with
+`pix env trust NAME --verbose`.
 
 **Remote content is untrusted content.** Anything a capability reads back
 from the outside world, an email body, a Slack message, a doc, a wiki
@@ -67,26 +84,44 @@ that text as an instruction, but it is a mitigation, not a guarantee: assume
 fetched content can attempt prompt injection and keep write-capable tools off
 by default.
 
-**Revoking and rotating access.** An OAuth grant (Google Workspace, a remote
-catalog server) is revoked from that provider's own account security page,
-not from pix; re-authorize through the pack's own setup step afterward if you
-need the integration back, then `pix mcp add <name>` again. A 1Password-backed
-MCP credential (an API token, a keyring password) is rotated in 1Password itself;
-the gateway only resolves an `op://` ref at spawn time, so the new value takes
-effect once you re-register the server (`pix mcp add <name>`), which triggers a
-fresh spawn. `pix secret sync` is the equivalent for the cloud model provider
-keys (Anthropic/OpenAI/Google), not MCP credentials.
+**Revoking and rotating access.** Revoke an OAuth grant at the provider, then
+reconnect through environment setup or `sbx mcp auth NAME` as appropriate. Update
+1Password items to rotate referenced credentials. Each Pix create/attach
+re-resolves provider and GitHub references into sandbox-scoped secrets; local
+MCP credentials are resolved when the Gateway spawns their process. A running
+MCP process can retain its previous credential until restarted. Pix does not
+create, depend on, or automatically delete host-global sbx secrets.
+
+## The memory service is scoped, not sealed
+
+Every Pix-owned runtime resource carries a stack id derived from your
+`PIX_HOME`, so two installations on one host never take each other's
+container, port, sandbox, or MCP registration by accident. That is a
+collision guarantee, not a confidentiality one.
+
+The memory registration's endpoint URL carries that stack's bearer token as a
+query parameter, because sbx has no way to declare a secret authorization
+header for a registered MCP server. sbx's registry is host-global and owned by
+your user account, so any other process running as the SAME host user can read
+the token-bearing URL back out of it and call your memory service. Closing
+that needs an upstream sbx capability (a header-bearing MCP declaration, or
+per-registration ACLs) this project does not own. Until then: a shared login is
+a shared memory service, and nothing in memory should be a secret you would not
+hand to any process on that account.
 
 ## Provider-key process exposure
 
-Docker Sandboxes currently accepts provider secret values through `sbx secret
-set -t`. During `pix setup`, a resolved value therefore exists briefly in the
-`sbx` child process argument vector and may be visible to same-user process
-inspection or endpoint audit tooling. Pix never logs or persists that value and
-scrubs it from subprocess errors, but it cannot remove the argv exposure until
-`sbx` provides a stdin or file-descriptor input mode. Treat hosts with untrusted
-same-user processes as outside the supported credential boundary. This is an
-accepted upstream limitation, not a claim that the value never enters argv.
+A resolved provider value never enters an argument vector. Pix writes each
+sandbox-scoped credential with `sbx secret set -f --sandbox <name> <service>`
+and feeds the value to that command's stdin, so the host's process table
+carries the flags and the service name only. Pix also never logs or persists
+the value and scrubs it from subprocess errors, which stays in place as
+defence in depth: `sbx` is free to echo back whatever it read.
+
+What remains: the pipe is readable by the two processes holding it, and
+anything that can already read this user's memory or ptrace its processes can
+read the value there. A host where another user's code runs as your user is
+outside the supported credential boundary either way.
 
 ## Reporting a vulnerability
 

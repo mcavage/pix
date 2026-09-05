@@ -1,12 +1,23 @@
-// Package sandbox is the pure, dependency-free L1 sandbox domain: name a
-// sandbox, read what `sbx`/docker say about it, plan what to run next. It owns
-// four things, each in its own file:
+// Package sandbox is the L1 sandbox domain: name a sandbox, read what
+// `sbx`/docker say about it, plan what to run next. It has no sibling
+// import (see docs/design/architecture.md's L1-capability contract), but it
+// is not otherwise dependency-free: it imports pix/host/stack (L0) for its
+// stack-scoped naming — see name.go/resolvename.go below. It owns five
+// things, each in its own file:
 //
-//   - name.go       — a deterministic, collision-free sandbox name:
-//     "pix-<basename>-<8-hex path digest>", truncated (basename only, digest
-//     always intact) to fit the RFC1123 label cap. Two different directories
-//     that share a basename get different names; the same directory always
-//     gets the same name.
+//   - name.go       — a deterministic, collision-free, STACK-SCOPED sandbox
+//     name: "pix-<stack16>-<basename>-<8-hex path digest>", truncated
+//     (basename only, digest always intact) to fit the RFC1123 label cap.
+//     Two different directories that share a basename get different names;
+//     the same directory named from two different PIX_HOMEs (two different
+//     stacks) also gets different names — the coexistence property this
+//     package exists to give; the same directory named twice from the SAME
+//     PIX_HOME always gets the same name.
+//   - resolvename.go — ScopeExplicitName: what a user-typed `--name` may
+//     become. A short logical name is scoped into this stack's namespace; an
+//     already-scoped full name for THIS stack round-trips verbatim; a full
+//     name scoped to a DIFFERENT stack, or any argv-unsafe form, is refused
+//     — there is no bypass of stack scoping through an explicit name.
 //   - list.go        — a JSON parser for an `sbx`-style sandbox listing,
 //     against one of two pinned canonical profiles (legacy bare-array,
 //     v0.38 `{"sandboxes": [...]}`): a tri-state State (Running/Stopped/
@@ -21,10 +32,11 @@
 //   - remove.go      — planning a removal, scoped to names in this package's
 //     own pix-* namespace: PlanRemove (`rm`, no `-f`) and PlanForceRemove
 //     (`rm -f`) share the exact same scope/name-safety check, so neither argv
-//     shape can be handed a name the other would refuse. PlanForceRemove's
-//     `-f` is a transport detail (sbx v0.38 refuses a bare, non-interactive
-//     `rm` outright), never a widened authority — see its doc comment for
-//     the two proofs a caller must already hold before reaching for it.
+//     shape can be handed a name the other would refuse. This is a general
+//     pix-* safety planner, not a per-stack one — a CALLER (workflow/launch)
+//     narrows further to the current stack before ever reaching it; see its
+//     own doc comment for the two proofs a caller must already hold before
+//     reaching for PlanForceRemove.
 //
 // # What this package deliberately is NOT
 //

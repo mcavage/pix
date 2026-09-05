@@ -1,5 +1,12 @@
 # Pinned live subagent tracker
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 **Status: IMPLEMENTED** — shipped in `extensions/subagents.ts` (the pin-tracker
 section). Successes use `PI_SUBAGENT_PIN_TTL_MS` (default 6000 ms); failures use
 `PI_SUBAGENT_FAILED_PIN_TTL_MS` (default 15000 ms) so errors remain readable but

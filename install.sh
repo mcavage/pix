@@ -6,7 +6,7 @@
 #
 # This script remains for existing non-Homebrew installations. It fetches the
 # release's notice-bearing tarball (the SAME artifact Homebrew installs),
-# verifies its sha256, and drops pix + pix-host in ~/.local/bin with the
+# verifies its sha256, and drops pix in ~/.local/bin with the
 # licenses and notices alongside them. No repo checkout, no sudo.
 #
 #   curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
@@ -20,9 +20,9 @@
 #   - resolves the latest release (or PIX_VERSION if you set one)
 #   - downloads pix_<ver>_<os>_<arch>.tar.gz and SHA256SUMS
 #   - verifies the tarball's sha256 against SHA256SUMS (aborts on mismatch)
-#   - installs pix + pix-host to ~/.local/bin (chmod +x), and the notices
+#   - installs pix and its release bundle to ~/.local/bin, and the notices
 #     (THIRD_PARTY_NOTICES.md, NOTICE.md, LICENSE, licenses/) to
-#     ~/.local/share/pix. The licenses that must travel with the binaries
+#     ~/.local/bin/pix-notices (or $PIX_PREFIX/pix-notices). The licenses that must travel with the binaries
 #     (MIT s2, MPL-2.0 s3.1) are part of the artifact, not an optional extra.
 #     The loose pix-<os>-<arch> assets this script used to fetch are no longer
 #     published: they were the same binaries with none of those notices.
@@ -41,16 +41,15 @@ set -eu
 REPO="mcavage/pix"
 GH="https://github.com/${REPO}"
 PREFIX="${PIX_PREFIX:-${HOME}/.local/bin}"
-CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/pix"
+CONFIG_DIR="${PIX_HOME:-${HOME}/.pix}"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
-DOC_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/pix"
+DOC_DIR="${PREFIX}/pix-notices"
 SOURCE_URL="${GH}/blob/main/install.sh"
 
-BINARIES="pix pix-host"
+BINARIES="pix"
 # Every path the release tarball must contain. Missing any one of them means
 # the artifact is not a complete distribution (pix's own MIT terms, the
-# third-party attributions, and the verbatim MPL-2.0 text for the go-plugin /
-# yamux code linked into pix-host), so we refuse to install it.
+# third-party attributions, and retained license texts), so we refuse to install it.
 NOTICES="THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses/MPL-2.0.txt"
 
 log()  { printf '%s\n' "$*"; }
@@ -60,15 +59,14 @@ die()  { err "$*"; exit 1; }
 
 # --- OS/arch detection ------------------------------------------------------
 # Emits "<os> <arch>" using the Go convention (darwin, amd64/arm64). pix's
-# host lifecycle (launchd-managed serve, the pix/pix-host binaries) is
-# macOS-only: there is no linux release asset to fetch any more.
+# host lifecycle is macOS-only: there is no linux release asset to fetch any more.
 detect_platform() {
 	os_raw="$(uname -s)"
 	arch_raw="$(uname -m)"
 
 	case "$os_raw" in
 		Darwin) os="darwin" ;;
-		Linux)  die "pix's host is macOS-only; there is no Linux release of pix/pix-host. Run pix inside a Linux sandbox instead of installing the host binaries there." ;;
+		Linux)  die "pix's host is macOS-only; there is no Linux release of pix. Run pix inside a Linux sandbox instead of installing the host binary there." ;;
 		*) die "unsupported OS '$os_raw' (need Darwin)" ;;
 	esac
 
@@ -199,6 +197,7 @@ do_install() {
 	base="${GH}/releases/download/v${ver}"
 	sums_url="${base}/SHA256SUMS"
 	tarball="pix_${ver}_${os}_${arch}.tar.gz"
+	bundle="release-manifest.json pix-runtime-${ver}.tar.gz"
 
 	if [ "${PIX_DRYRUN:-}" = "1" ]; then
 		log "DRY RUN: nothing will be downloaded or written."
@@ -210,6 +209,7 @@ do_install() {
 		for b in $BINARIES; do
 			log "Install:   ${PREFIX}/${b}"
 		done
+		log "Bundle:    ${PREFIX}/ (${bundle})"
 		log "Notices:   ${DOC_DIR} (${NOTICES})"
 		log "Config:    ${CONFIG_FILE} (seeded by 'pix setup', left untouched here)"
 		return 0
@@ -224,9 +224,8 @@ do_install() {
 	trap 'rm -rf "$tmp"' EXIT INT TERM
 
 	# Verify-then-install: the release ships ONE tarball per platform (the same
-	# artifact Homebrew installs), so pix, pix-host and the notices are a single
-	# checksummed unit. A mismatched pair (new pix + stale pix-host) is not
-	# even expressible any more. Stage and verify EVERYTHING in the temp dir
+	# artifact Homebrew installs), so pix and the notices are a single
+	# checksummed unit. Stage and verify EVERYTHING in the temp dir
 	# first; only then move anything into place. Any failure before that point
 	# installs nothing (the temp dir is cleaned by the EXIT trap and ${PREFIX} is
 	# left untouched).
@@ -251,9 +250,13 @@ do_install() {
 		[ -f "${stage}/${n}" ] || die "${tarball} does not contain ${n}; refusing to install a distribution with no notices"
 	done
 
+	for f in $bundle; do
+		[ -f "${stage}/${f}" ] || die "${tarball} does not contain ${f}; refusing an incomplete release bundle"
+	done
+
 	# Compare verified bytes, never execute an existing untrusted installation.
 	all_current=1
-	for b in $BINARIES; do
+	for b in $BINARIES $bundle; do
 		if [ ! -f "${PREFIX}/${b}" ] || [ "$(sha256_of "${PREFIX}/${b}")" != "$(sha256_of "${stage}/${b}")" ]; then
 			all_current=0
 		fi
@@ -268,7 +271,7 @@ do_install() {
 	# Everything verified: now install. These moves are the only writes to
 	# ${PREFIX}; they happen last so a failed/mismatched download never lands.
 	mkdir -p "$PREFIX"
-	for b in $BINARIES; do
+	for b in $bundle $BINARIES; do
 		mv -f "${stage}/${b}" "${PREFIX}/${b}"
 	done
 	install_notices "$stage"
@@ -330,7 +333,7 @@ report() {
 }
 
 preflight_collision() {
-	for binary in pix pix-host; do
+	for binary in $BINARIES; do
 		found="$(command -v "$binary" 2>/dev/null || true)"
 		[ -z "$found" ] && continue
 		[ "$found" = "${PREFIX}/${binary}" ] && continue
@@ -345,7 +348,7 @@ preflight_collision() {
 }
 
 assert_installed_resolution() {
-	for binary in pix pix-host; do
+	for binary in $BINARIES; do
 		found="$(command -v "$binary" 2>/dev/null || true)"
 		[ -z "$found" ] && continue
 		if [ "$found" != "${PREFIX}/${binary}" ]; then
@@ -356,11 +359,6 @@ assert_installed_resolution() {
 
 check_required_prereqs() {
 	missing=0
-	if ! have op; then
-		err "missing required dependency: op"
-		err "  fix: brew install 1password-cli"
-		missing=1
-	fi
 	if ! have sbx; then
 		err "missing required dependency: sbx"
 		err "  fix: brew install docker/tap/sbx"
@@ -386,24 +384,9 @@ do_uninstall() {
 		info "removed ${DOC_DIR}"
 	fi
 
-	if [ -e "$CONFIG_FILE" ] || [ -d "$CONFIG_DIR" ]; then
-		log ""
-		printf 'Also remove config at %s? [y/N] ' "$CONFIG_DIR"
-		# Prefer the controlling terminal (so a `curl | sh -s -- --uninstall` still
-		# prompts), but fall back to stdin, then to an empty (=keep) answer. The
-		# `|| :` chain keeps `set -e` from aborting when no tty/stdin is attached.
-		ans=""
-		{ read -r ans </dev/tty || read -r ans || ans=""; } 2>/dev/null
-		case "$ans" in
-			y | Y | yes | YES)
-				rm -rf "$CONFIG_DIR"
-				info "removed ${CONFIG_DIR}"
-				;;
-			*)
-				info "kept ${CONFIG_DIR}"
-				;;
-		esac
-	fi
+	# User environments, credentials and memory survive uninstall.
+	info "kept ${CONFIG_DIR}"
+	rm -f "${PREFIX}/release-manifest.json" "${PREFIX}"/pix-runtime-*.tar.gz
 	log "Done."
 }
 

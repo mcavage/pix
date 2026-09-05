@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -47,10 +49,15 @@ func TestRootOwnsEveryVerb(t *testing.T) {
 	for _, v := range rootVerbs() {
 		got[v] = true
 	}
+	// The v2 accepted surface (docs/design/pix-v2-surface.md §3, root.go's
+	// own doc comment): run, ls, rm, task, setup, doctor, reset, env, secret,
+	// version, help. A removed verb (status, config, serve, mcp, models,
+	// agent, pack, memory, and every v1 alias) belongs in a NEGATIVE test
+	// (TestDeletionSweep_NoServeOrPackVerbInHelpText et al in pix_test.go),
+	// never a positive membership assertion here.
 	for _, want := range []string{
-		"run", "status", "st", "ls", "rm", "version", "config", "serve",
-		"doctor", "setup", "mcp", "pack", "secret", "memory", "mem",
-		"models", "agent", "task", "help",
+		"run", "ls", "rm", "version",
+		"doctor", "setup", "reset", "secret", "env", "task", "help",
 	} {
 		if !got[want] {
 			t.Errorf("verb %q is not a child of the kong root (got %v)", want, rootVerbs())
@@ -76,24 +83,6 @@ func TestKnownVerbsDerivedFromRoot(t *testing.T) {
 func TestTieredHelpStaysShort(t *testing.T) {
 	if n := len(strings.Split(strings.TrimRight(helpText, "\n"), "\n")); n > 25 {
 		t.Errorf("tiered `pix help` is %d lines, budget is 25 — move detail to `help --all`", n)
-	}
-}
-
-// TestHelpTextMoreLine_NamesOnlyLiveVerbs: DX finding 4 — the curated
-// landing screen's "More" line hand-lists a few verbs `help --all` covers in
-// full. Every token in it must be a REAL, currently dispatchable verb (never
-// a retired one like "state", which has no live subcommand left at all), so
-// the short screen can never point a reader at a name that only answers
-// PIX_RETIRED.
-func TestHelpTextMoreLine_NamesOnlyLiveVerbs(t *testing.T) {
-	line, ok := findMoreLine(helpText)
-	if !ok {
-		t.Fatal("helpText has no \"More\" line to check")
-	}
-	for _, tok := range moreLineTokens(line) {
-		if !knownVerbs()[tok] {
-			t.Errorf("helpText's More line names %q, which is not a live verb (knownVerbs); line: %q", tok, line)
-		}
 	}
 }
 
@@ -156,33 +145,6 @@ func TestTieredHelpTiersMatchGeneratedGroups(t *testing.T) {
 			}
 		}
 	}
-}
-
-// findMoreLine locates the "More" line in the curated help text.
-func findMoreLine(text string) (string, bool) {
-	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "More") {
-			return line, true
-		}
-	}
-	return "", false
-}
-
-// moreLineTokens extracts the comma-separated verb list between "More" and
-// the trailing "(see ...)" parenthetical.
-func moreLineTokens(line string) []string {
-	after, _, _ := strings.Cut(line, "(")
-	_, list, found := strings.Cut(after, "More")
-	if !found {
-		return nil
-	}
-	var out []string
-	for _, tok := range strings.Split(list, ",") {
-		if t := strings.TrimSpace(tok); t != "" {
-			out = append(out, t)
-		}
-	}
-	return out
 }
 
 // TestRootHelpIsTheCuratedScreen: a root help request prints the tiered text,
@@ -255,7 +217,6 @@ func TestDispatch_BareNonTTY_RefusesWithNoCreate(t *testing.T) {
 func bareLaunchDeps(t *testing.T) (*cli.Deps, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	t.Setenv("PATH", t.TempDir())
-	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	return rootDeps()
 }
 
@@ -273,13 +234,10 @@ func TestDispatch_BareInteractive_StillLaunches(t *testing.T) {
 
 // TestDispatch_BareInteractive_NeverTouchesARealSandbox is the side-effect
 // proof bareLaunchDeps exists for: with sbx forced absent, `pix DIR` must fail
-// CLOSED — sandbox state it cannot determine is never treated as "absent"
-// (safety invariant 6's sibling for sbx itself) — rather than reaching the
-// real `exec.Command("sbx", ...)` spawn buried at the bottom of runLaunch. The
-// exact refusal text is PlanSandboxLaunch's own "could not determine whether
-// sandbox ... exists", which only prints if run stopped BEFORE that exec, so
-// asserting it is evidence no subprocess was spawned, not just an absence of
-// a crash.
+// CLOSED before reaching the real `exec.Command("sbx", ...)` spawn buried at
+// the bottom of runLaunch. With no provider refs, the model-selection gate now
+// refuses first rather than letting Pi pick its retired native default; either
+// way the forbidden exec markers below prove no subprocess was spawned.
 func TestDispatch_BareInteractive_NeverTouchesARealSandbox(t *testing.T) {
 	dir := t.TempDir()
 	d, _, errb := bareLaunchDeps(t)
@@ -290,8 +248,8 @@ func TestDispatch_BareInteractive_NeverTouchesARealSandbox(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("a launch with sbx forced absent must not report success, stderr = %q", errb.String())
 	}
-	if !strings.Contains(errb.String(), "could not determine whether sandbox") {
-		t.Errorf("expected the fail-closed sbx-unknown refusal (proof the real `sbx` exec was never reached), got stderr = %q", errb.String())
+	if !strings.Contains(errb.String(), "no model selected") {
+		t.Errorf("expected the fail-closed model-selection refusal, got stderr = %q", errb.String())
 	}
 	for _, leak := range []string{"attaching to running sandbox", "starting + attaching", "exec sbx:"} {
 		if strings.Contains(errb.String(), leak) {
@@ -305,16 +263,14 @@ func TestDispatch_BareInteractive_NeverTouchesARealSandbox(t *testing.T) {
 func TestMigratedVerbHelpIsGenerated(t *testing.T) {
 	for verb, want := range map[string]string{
 		"ls":     "Usage: pix ls",
-		"models": "Usage: pix models",
-		"agent":  "Usage: pix agent",
 		"secret": "Usage: pix secret",
 		"rm":     "Usage: pix rm",
-		"serve":  "Usage: pix serve",
 		"task":   "Usage: pix task",
 		"run":    "Usage: pix run",
-		"status": "Usage: pix status",
+		"env":    "Usage: pix env",
 		"doctor": "Usage: pix doctor",
 		"setup":  "Usage: pix setup",
+		"reset":  "Usage: pix reset",
 	} {
 		d, out, errb := rootDeps()
 		if code := dispatch([]string{verb, "--help"}, d); code != 0 {
@@ -334,10 +290,10 @@ func TestExitMapper(t *testing.T) {
 		{"rm", "--this-is-not-a-real-flag-9x7z"},
 		{"task", "--this-is-not-a-real-flag-9x7z"},
 		{"run", "--this-is-not-a-real-flag-9x7z"},
-		{"status", "--this-is-not-a-real-flag-9x7z"},
+		{"env", "--this-is-not-a-real-flag-9x7z"},
 		{"doctor", "--this-is-not-a-real-flag-9x7z"},
 		{"setup", "--this-is-not-a-real-flag-9x7z"},
-		{"serve", "--this-is-not-a-real-flag-9x7z"},
+		{"reset", "--this-is-not-a-real-flag-9x7z"},
 	} {
 		d, _, errb := rootDeps()
 		if code := dispatch(argv, d); code != 2 {
@@ -349,6 +305,53 @@ func TestExitMapper(t *testing.T) {
 	}
 	if got := cli.ExitCode(cli.SilentError{Code: 3}); got != 3 {
 		t.Errorf("ExitCode(SilentError{3}) = %d, want 3", got)
+	}
+}
+
+// TestDispatch_NeverDoublesThePixPrefix guards the regression a user hit
+// live: a command that already self-names ("pix secret set: ...", "pix
+// setup --env work: ...") must not ALSO get dispatch's generic "pix: "
+// prefix stacked in front of it, reading as the program name twice in one
+// line ("pix: pix secret set: ..."). `pix secret set` with a malformed env
+// var name is the real, easy-to-drive repro: secret.SetRef's own error
+// already opens with "pix secret set: ", exactly the shape
+// setupSelectedEnvironment's own "pix setup --env NAME: ..." errors share.
+func TestDispatch_NeverDoublesThePixPrefix(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PIX_HOME", home)
+	d, _, errb := rootDeps()
+	code := dispatch([]string{"secret", "set", "not a var name!", "op://x/y/z"}, d)
+	if code == 0 {
+		t.Fatalf("a malformed env var name must refuse, stderr=%q", errb.String())
+	}
+	got := errb.String()
+	if strings.HasPrefix(got, "pix: pix ") {
+		t.Fatalf("stderr = %q, doubles the program name (\"pix: pix ...\")", got)
+	}
+	if n := strings.Count(got, "pix secret set:"); n != 1 {
+		t.Fatalf("stderr = %q, want \"pix secret set:\" named exactly once, got %d", got, n)
+	}
+}
+
+// TestPrintRootError_Table pins printRootError's own decision directly:
+// exactly one "pix: " prefix, whether or not the message already opens
+// with one.
+func TestPrintRootError_Table(t *testing.T) {
+	for _, tc := range []struct {
+		msg  string
+		want string
+	}{
+		{"pix setup --env work: 1 requirement(s) not recorded; see the exact commands above",
+			"pix setup --env work: 1 requirement(s) not recorded; see the exact commands above\n"},
+		{"pix secret set: GOG is not an op:// reference", "pix secret set: GOG is not an op:// reference\n"},
+		{"pix: already prefixed", "pix: already prefixed\n"},
+		{"no release manifest found", "pix: no release manifest found\n"},
+	} {
+		var buf bytes.Buffer
+		printRootError(&buf, errors.New(tc.msg))
+		if got := buf.String(); got != tc.want {
+			t.Errorf("printRootError(%q) = %q, want %q", tc.msg, got, tc.want)
+		}
 	}
 }
 
@@ -427,6 +430,76 @@ func TestTaskNameThenVerbRewrite(t *testing.T) {
 		if after := strings.Join(normalizeArgv(argv), " "); after != before {
 			t.Errorf("normalizeArgv(%q) rewrote to %q, want unchanged", before, after)
 		}
+	}
+}
+
+// TestEnvNameShorthand_RewritesToShow is QA re-review F3: the accepted
+// surface (docs/design/pix-v2-surface.md §3.4) lists `pix env NAME
+// [--path|--effective|--json]` as its OWN shape, distinct from `pix env show
+// NAME` — both must work, and neither may break the four real subcommands.
+func TestEnvNameShorthand_RewritesToShow(t *testing.T) {
+	for _, tc := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"env", "work"}, "env show work"},
+		{[]string{"env", "work", "--effective"}, "env show work --effective"},
+		{[]string{"env", "work", "--json"}, "env show work --json"},
+		{[]string{"env", "work", "--path"}, "env show work --path"},
+		// The four real subcommands, and a bare/flag-only invocation, must
+		// never be touched by the shorthand rewrite.
+		{[]string{"env"}, "env"},
+		{[]string{"env", "--json"}, "env --json"},
+		{[]string{"env", "list"}, "env list"},
+		{[]string{"env", "list", "--json"}, "env list --json"},
+		{[]string{"env", "show", "work"}, "env show work"},
+		{[]string{"env", "default"}, "env default"},
+		{[]string{"env", "default", "work"}, "env default work"},
+		{[]string{"env", "trust", "work"}, "env trust work"},
+		{[]string{"env", "trust", "work", "--yes"}, "env trust work --yes"},
+	} {
+		got := strings.Join(normalizeArgv(tc.argv), " ")
+		if got != tc.want {
+			t.Errorf("normalizeArgv(%v) = %q, want %q", tc.argv, got, tc.want)
+		}
+	}
+}
+
+// TestEnvNameShorthand_RealDispatchShowsTheNamedEnvironment proves the
+// rewrite through the REAL dispatcher, not merely the argv shape: `pix env
+// work` must print exactly what `pix env show work` prints, for a real
+// registered environment.
+func TestEnvNameShorthand_RealDispatchShowsTheNamedEnvironment(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "pixhome")
+	envDir := filepath.Join(home, "envs", "work")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, ".sbxenv.yaml"), []byte("schemaVersion: \"1\"\nagent: pix\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "pix.toml"), []byte("schema = 1\n[models]\nmain = \"openai/gpt-5.6-sol\"\n[agents]\nreview = \"google/gemini-3.1-pro-preview\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PIX_HOME", home)
+
+	d1, out1, _ := rootDeps()
+	if code := dispatch([]string{"env", "work"}, d1); code != 0 {
+		t.Fatalf("dispatch(env work) = %d", code)
+	}
+	d2, out2, _ := rootDeps()
+	if code := dispatch([]string{"env", "show", "work"}, d2); code != 0 {
+		t.Fatalf("dispatch(env show work) = %d", code)
+	}
+	if out1.String() != out2.String() {
+		t.Errorf("pix env work = %q, want the same as pix env show work = %q", out1.String(), out2.String())
+	}
+	if !strings.Contains(out1.String(), "name:        work") {
+		t.Errorf("pix env work did not show the named environment: %q", out1.String())
+	}
+	if !strings.Contains(out1.String(), "model:       openai/gpt-5.6-sol ([models].main)") ||
+		!strings.Contains(out1.String(), "review -> google/gemini-3.1-pro-preview") {
+		t.Errorf("pix env work did not show effective model mapping: %q", out1.String())
 	}
 }
 

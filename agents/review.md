@@ -2,7 +2,6 @@
 description: Adversarial second-opinion reviewer on a DIFFERENT vendor than your main model. Use to refute a plan, diff, or claim before committing.
 tools: read, grep, find, ls
 web: false
-intent: review
 thinking: high
 max_turns: 30
 ---
@@ -22,7 +21,7 @@ Your job is to *refute*, not to agree.
 - If you find nothing after a real attempt, say so plainly. Do not invent
   problems to look useful.
 
-> NOTE: this agent's `review` intent resolves to `google/gemini-3.1-pro-preview`
+> NOTE: this agent runs on `google/gemini-3.1-pro-preview`
 > — a third vendor, distinct from both the GPT overlord and the Claude authors it
 > checks (needs a Google key). Always fully-qualify an explicit override
 > (`provider/id`); a bare name like `gpt-5.6-sol` or `haiku` can resolve to a

@@ -1,101 +1,88 @@
-# Google Workspace comes from a pack
+# Google Workspace in an environment
 
-Google Workspace is **not a pix feature**. Pix ships no MCP servers, installs
-no `gog`, stores no Google account, and special-cases no vendor. The
-`gworkspace` verb is deleted and is not coming back.
+This is an environment-authoring example. Users should follow their environment's
+README and run `pix setup --env NAME`; they do not need to install or wire a
+Google connector by hand.
 
-What pix has is the `gworkspace` **capability** (`capabilities.json`) and the
-`gworkspace` **skill** (read tools, the untrusted-content rule). Both resolve to
-an MCP server named `google-workspace`. Something has to *provide* that server,
-and the only thing that can is the active pack.
+Pix supplies the generic environment/setup machinery and a Google Workspace skill.
+The environment supplies the connector, OAuth client, account choices, and setup
+hooks. Google does not have a special host command in Pix.
 
-## What the pack declares
+## Declaration and credentials
 
-One `[[integrations]]` stanza in the pack's `pack.toml`, with exactly ONE
-transport — `command` (a host binary over stdio), `image` (a container the
-gateway runs), `manifest` (an OCI server manifest), or `url` (a remote endpoint
-the gateway OAuths):
+The native `.sbxenv.yaml` owns the MCP server command. Prefer a pinned container
+with an explicit state mount. This abbreviated example assumes a reviewed `gog`
+build has already been installed on the host by environment setup:
+
+```yaml
+schemaVersion: "1"
+agent: pix
+mcp:
+  servers:
+    - name: google-workspace
+      command: gog
+      args: [--gmail-no-send, --wrap-untrusted, --readonly, mcp, --allow-tool, read]
+```
+
+Use the sidecar for credential and probe annotations:
 
 ```toml
-[[integrations]]
-  name    = "Google Workspace"
-  mcp     = "google-workspace"
-  command = "gog"
-  args    = ["--gmail-no-send", "--wrap-untrusted", "--readonly",
-             "mcp", "--allow-tool", "read"]   # LITERAL argv, never templated
-  env      = "GOG_KEYRING_PASSWORD"           # the op:// secret
-  env_keys = ["GOG_ACCOUNT"]                  # extra env NAMES forwarded
-  probe    = ["gog", "--readonly", "gmail", "labels", "list"]  # a REAL read; see below
-  setup    = "google-workspace"               # a [[setup]] block, declarative
+schema = 1
+
+[host.mcp.google-workspace]
+env_keys = ["GOG_KEYRING_PASSWORD"]
+plain_keys = ["GOG_ACCOUNT"]
+probe_args = ["gog", "--readonly", "gmail", "labels", "list"]
 ```
 
-The pack owns the hardened flags, the credential names, the health probe, and
-the install/authorize steps (`[[setup.require]]` / `[[setup.apply]]`). Pix
-registers what the pack declared and probes it; it contributes no flags of its
-own. Full schema: `docs/reference.md` §5.
+`env_keys` resolve 1Password references; `plain_keys` identify non-secret values
+such as an account email. Account names do not need to be stored as passwords.
+The environment can label these fields with `[host.values.NAME]` and collect them
+during setup. The native MCP entry has no per-server `env` map; Pix composes the
+credential wrapper from the sidecar. The Gateway starts the resulting process.
 
-Adopting a pack that declares a host command halts at the Tier-1
-bill-of-materials review, which prints that exact argv before anything runs.
+For a containerized connector, use the same state mount, account, and keyring
+settings in setup, the MCP command, and the probe. Do not point one at an unrelated
+host keyring or blindly copy a platform-dependent storage path. A connector with
+its own rotating OAuth grant need not declare an unrelated 1Password credential.
 
-## Wiring it up
+## Setup and verification
+
+Declare install/authentication work as `[[setup]]` hooks in `pix.toml`, with every
+companion input listed. Collect the OAuth client-file path with the account and
+keyring details. Keep the client JSON outside the environment repository. The
+hook imports it, completes browser authorization, and checks a real account read.
+See [setup in the command reference](reference.md) for the hook schema.
 
 ```bash
-pix pack use <path|git-url>   # Tier-1 review, then it registers what it declared
-pix mcp add google-workspace  # re-register by hand (after rotating a credential)
-pix doctor                    # registered, or actually working?
-pix rm BOX && pix run         # a registration reaches a session at CREATE only
+pix setup --env NAME
+pix env show NAME
+pix run --env NAME
 ```
 
-## Verifying it
+`pix env show` can run a declared probe for an approved environment. A server
+being registered is a separate fact from its request succeeding. Check the live
+MCP tool in a sandbox too; this proves the Gateway gives the connector the same
+working credentials that setup used.
 
-`pix doctor` distinguishes **registered** from **working**. For a declared
-command it checks the binary resolves on PATH, then runs the pack's `probe`
-through the same `op run` wrapper the gateway will use to spawn the server — so
-a credential that only works because it happens to be exported in your shell
-fails here, which is the point. A server with no declared probe is reported as
-*unverified*, never as healthy. A registered server no active pack declares is
-reported as a gap even though the gateway lists it.
+For gog, listing Gmail labels is a useful read probe. A static tool listing such
+as `gog mcp --list-tools` proves no account access. A diagnostic that reports an
+error in text but exits zero is also unsuitable as a setup success check. Probe
+commands must fail when the real operation fails and must not open a browser.
 
-For gog itself the probe has to be a real READ — `gog --readonly gmail labels
-list`, which exits 0 when the keyring opens and a token is readable and 2 when
-it cannot. Two obvious-looking alternatives verify nothing, both measured on gog
-v0.35.0: its MCP tool-listing flag prints the full tool list with no credentials
-at all, and its auth self-diagnosis prints `status error` on a dead keyring and
-still exits 0. Pix judges a probe by its exit code, so either would pass on a
-completely broken install.
+## Access boundaries
 
-**`gog mcp --list-tools` proves nothing.** It dumps a static tool registry
-without touching the keyring: it prints the full list and exits 0 with no
-credentials at all. It passes on a completely broken install. Do not use it as
-a check, and do not trust a doc that tells you to.
+Keep reading and document creation separate. A read connector should retain its
+read-only/no-send flags and untrusted-content wrapping. If document creation is
+needed, declare a separate write capability with the narrowest suitable grant.
+A read-only connector must not gain write access just to support one workflow.
 
-**Do not copy a `GOG_HOME` out of any document, including this one.** gog's root
-is platform-dependent, so no path written down here can be right for you. Run
-`gog auth status`; it prints the home it is actually using. Setting the variable
-to a path you read somewhere points gog at an empty, unauthorized home — which is
-exactly what the guidance this file replaced did.
+Returned messages and documents are untrusted content and may enter the active
+model's context. Wrapping content reduces confusion with instructions but does
+not eliminate prompt injection. The connector executes outside the agent sandbox
+and can access the mounted account state. See [Security](../SECURITY.md).
 
-## Security posture
-
-A `command`-transport MCP server runs **on the host, outside the sandbox, with
-your host-user privileges**, and everything it returns lands in the
-conversation sent to your model provider. That is the trade for reaching your
-real mailbox at all.
-
-- **Prompt injection through returned content.** Anyone can send you an email or
-  share a doc. A read-only server stops writes, not reads: an injected agent can
-  still read your Google data and try to exfiltrate it elsewhere. gog's
-  `--wrap-untrusted` fences returned bodies as data rather than instructions —
-  a mitigation, not a guarantee. The `gworkspace` skill carries the rule the
-  agent is asked to hold.
-- **Writing Documents.** The base capability is read-only. A private pack can provide a separate `docs-write` capability (defaulting to none in `capabilities.json`) that resolves to a narrowly wired write server without altering existing gworkspace read-only boundaries. If `docs-write` resolves to none, the agent will plainly state that writing docs is not wired.
-- **The keyring password unlocks standing OAuth.** Whatever process env holds
-  it can read your mail. Keep gog's home and keyring file owner-only and the
-  host single-user; if the password leaks, treat the OAuth grant as compromised.
-- **Revoking** is a Google-side action: your account's
-  [third-party access page](https://myaccount.google.com/permissions), then
-  re-authorize through the pack's setup step. Rotating the password means
-  updating the `op://` item and re-running `pix mcp add google-workspace` so the
-  next spawn picks it up.
-
-See `../SECURITY.md` for the trust boundary this sits outside of.
+Revoke OAuth grants with the account provider. Rerun environment setup to
+reconnect, and restart the connector when rotating a credential held by an
+existing process. Never put resolved keys, OAuth tokens, or client JSON in Git,
+image layers, or a diagnostic transcript.

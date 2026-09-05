@@ -1,3 +1,5 @@
+> **Historical design record.** For the current product, read [the reference](../reference.md); for the accepted architecture, read [Pix v2 architecture](pix-v2-architecture.md). Commands and implementation status below describe an earlier stage.
+
 # Handoff: the drain is finished
 
 `services/host/cmd/pix` was 40,905 production lines in one Go package — 91

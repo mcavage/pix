@@ -1,0 +1,735 @@
+fast gate (non-race) — budget 0.000s absolute, target 120.000s
+
+  go-build       0.829s  ok
+  go-vet         0.367s  ok
+  go-test       13.457s  ok
+  node-test      9.026s  FAIL (exit 1)
+  typecheck      0.919s  ok
+  open-core      0.610s  ok
+  recall-xport   0.020s  ok
+  secret-scan    1.232s  ok
+  arch-metrics   0.349s  ok
+  deadcode       6.818s  ok
+  rename-guard   0.464s  ok
+
+go packages:
+  ok  	pix/host	3.132s
+  ok  	pix/host/cli	0.008s
+  ok  	pix/host/cmd/pix	7.882s
+  ok  	pix/host/cmd/pix/corpus	0.886s
+  ok  	pix/host/config	0.054s
+  ok  	pix/host/envinfo	0.023s
+  ok  	pix/host/health	3.676s
+  ?   	pix/host/hostenv	[no test files]
+  ok  	pix/host/hosttrust	0.012s
+  ok  	pix/host/inference	0.008s
+  ?   	pix/host/launcher	[no test files]
+  ok  	pix/host/lease	0.893s
+  ok  	pix/host/mcp	0.038s
+  ok  	pix/host/memory	0.004s
+  ok  	pix/host/packinfo	0.008s
+  ok  	pix/host/plugin	0.004s
+  ok  	pix/host/recreatelog	0.317s
+  ok  	pix/host/routing	0.010s
+  ?   	pix/host/rpc	[no test files]
+  ok  	pix/host/sandbox	0.028s
+  ok  	pix/host/secret	0.204s
+  ok  	pix/host/service	0.483s
+  ok  	pix/host/supervise	12.417s
+  ok  	pix/host/sys	0.569s
+  ?   	pix/host/sys/systest	[no test files]
+  ok  	pix/host/uat	0.298s
+  ok  	pix/host/uatenvmatrix	1.113s
+  ok  	pix/host/uatmatrix	0.004s
+  ok  	pix/host/unitreport	0.005s
+  ?   	pix/host/unitreport/unitreporttest	[no test files]
+  ok  	pix/host/workflow/doctor	0.140s
+  ok  	pix/host/workflow/env	0.247s
+  ok  	pix/host/workflow/launch	0.696s
+  ok  	pix/host/workflow/models	0.097s
+  ok  	pix/host/workflow/pack	0.698s
+  ok  	pix/host/workflow/provision	0.136s
+  ok  	pix/host/workflow/reset	0.025s
+  ok  	pix/host/workflow/task	0.395s
+  ok  	pix/host/workflow/uat	6.934s
+  ok  	pix/host/workspace	0.039s
+
+=== node-test output ======================================
+✔ every enumerated safety invariant is still stated in AGENTS.md (3.31825ms)
+✔ the invariant enumeration itself is not silently shrunk (0.110917ms)
+✔ AGENTS.md carries no CLI reference block (0.304917ms)
+✔ AGENTS.md is under its non-regression size ceiling (0.0865ms)
+✔ the pointers AGENTS.md offers instead of the reference all resolve (0.283167ms)
+✔ docs/reference.md carries the command map AGENTS.md defers to (0.329792ms)
+✔ the primary-surface list has no stale entries (0.83725ms)
+✔ primary surfaces carry no em dashes (—) (6.683ms)
+✔ arch-metrics builds (161.513084ms)
+✔ current services/host tree passes its own committed shrink-only budget (341.630584ms)
+✔ shrink-only check fails loud against an artificially tightened budget (518.96075ms)
+✔ a package absent from the budgets file never fails (seeding is a separate, non-breaking step) (331.749833ms)
+✔ budgets.json is tracked, valid, and covers every current package (345.584292ms)
+✔ the fast gate wires arch-metrics as a cheap, non-coverage segment (0.4465ms)
+✔ CI has an untimed job for full corpus/coverage/LOC, separate from the timed gate (0.280625ms)
+✔ CI has a required macos-latest build/test job (0.319541ms)
+✔ extractRegion slices between two literal anchors (1.373167ms)
+✔ extractRegion with no end anchor runs to end of file (0.080625ms)
+✔ extractRegion throws when the start anchor is missing (rotted pin, not a silent skip) (0.219917ms)
+✔ extractRegion throws when the end anchor is missing but the start anchor was found (0.088958ms)
+✔ extractSet dedupes and sorts capture-group matches (0.511ms)
+✔ evaluateCheck: contains reports every missing value (0.199292ms)
+✔ evaluateCheck: notContains flags forbidden text (0.102792ms)
+✔ evaluateCheck: set is order-independent and catches additions AND removals (0.166ms)
+✔ evaluateCheck: equals matches the first capture group exactly (0.12725ms)
+✔ loadManifest requires non-empty id/rationale/evidence/changes on every entry (0.39825ms)
+✔ loadManifest tolerates a missing file (empty manifest, the W0 default) (0.114541ms)
+✔ loadActivation tolerates a missing file (empty activation set, nothing turned on) (0.12225ms)
+✔ loadActivation requires non-empty key/rationale/evidence on every entry (0.145458ms)
+✔ loadActivation rejects a non-array root (0.147583ms)
+✔ activationKeySet turns a loaded activation array into a Set of its keys (0.063625ms)
+✔ planted corruption: an untouched fixture passes both witnesses (0.321167ms)
+✔ planted corruption: renaming ONLY the production side is caught immediately (0.222875ms)
+✔ LOCKSTEP CORRUPTION: renaming production AND its consumer witness TOGETHER still fails, because `expected` is a third fixed literal neither file controls (0.178625ms)
+✔ an intended-change manifest entry waives an EXACT, documented transition (0.239583ms)
+✔ a manifest entry whose `to` does not match reality does not waive anything (typo/drift protection) (0.181041ms)
+✔ a staged pin is PENDING (not evaluated, not failed) when its activation key is not active (0.098542ms)
+✔ the SAME staged pin, activated, is evaluated for real and FAILS against the unimplemented fixture (0.113625ms)
+✔ the SAME staged pin, activated, PASSES once the fixture actually implements the behavior (0.141125ms)
+✔ activation only turns on pins naming that exact key — an unrelated activated key leaves it pending (0.093291ms)
+✔ an unstaged pin (no `activation` field) is always evaluated regardless of the active key set (0.163709ms)
+✔ checkRuleDrift treats flipping a pin's `activation` field alone (no check change) as drift requiring a manifest entry (13.920708ms)
+✔ checkRuleDrift is a no-op (ok, skipped) with no git base to compare against (1.889917ms)
+✔ checkRuleDrift FAILS when a pin's expected value changed with no matching manifest entry (9.844917ms)
+✔ checkRuleDrift PASSES the same drift once a matching intended-change manifest entry exists (10.456ms)
+✔ README workflow: rule change + waiver together (same commit) passes, stale-waiver removal in a SUBSEQUENT commit passes, but removing the waiver in the SAME commit as the rule change fails (17.331ms)
+✔ checkRuleDrift ignores an unrelated (non-checkable) description-only edit (10.293584ms)
+✔ staleManifestEntries: an entry unused by evaluatePins AND not explaining any real drift is reported stale (0.144625ms)
+✔ staleManifestEntries: an entry unused by evaluatePins BUT consumed by checkRuleDrift (a real transition landing this commit) is NOT stale (0.049875ms)
+✔ staleManifestEntries: with no usable git base (skipped), nothing can be proven stale (0.042291ms)
+✔ entriesExplainingDrift: credits an entry that is unused as a waiver but not flagged stale (i.e. consumed by real drift) (0.181834ms)
+✔ entriesExplainingDrift never claims an entry explains drift when drift.skipped, even though it is unused-as-waiver and (per staleManifestEntries) not flagged stale either (0.052125ms)
+✔ pipeline FAILS on a stale manifest entry (no waiver use, no matching drift vs. the given base) (12.17675ms)
+✔ pipeline PASSES when the SAME manifest entry lands in the SAME commit as the rule-drift it documents (base predates the change) (15.287208ms)
+✔ resolveDefaultBase prefers SEMANTIC_DIFF_BASE_SHA when it names a real commit (9.699083ms)
+✔ resolveDefaultBase ignores a bogus SEMANTIC_DIFF_BASE_SHA and falls through (13.199667ms)
+✔ resolveDefaultBase prefers merge-base(HEAD, origin/main) over a bare HEAD self-compare, and that base actually surfaces drift a literal HEAD never could (27.588834ms)
+✔ resolveDefaultBase falls back to HEAD~1 with no remote at all, still more meaningful than HEAD (15.606ms)
+✔ resolveDefaultBase falls back to the literal HEAD only for a brand-new, single-commit repo (12.103166ms)
+✔ resolveDefaultBase rejects a resolvable origin/main merge-base that predates the semantic rules directory entirely, falling through to HEAD~1 (long-lived-branch case) (38.614792ms)
+﹣ post-merge on THIS repo: resolveDefaultBase does not silently degrade to the stale origin/main merge-base (the real long-lived-branch case this fix targets) (16.705167ms) # origin/main's merge-base already carries the rules directory (this checkout is level with, or merged into, main), so no stale base exists to degrade to
+✔ the CLI's own default (no --base flag) resolves through resolveDefaultBase against the real repo, not a hardcoded HEAD self-compare (199.086417ms)
+✔ the shipped rules/lifecycle.rules.mjs ships the whole Story04 pin set, all ACTIVE (nothing left staged) (0.658833ms)
+✔ every real pin holds against THIS repository right now under the shipped activation.json (8.508375ms)
+✔ the three formerly-staged Story04 pins now HOLD against this repo (the behavior landed, the pins were not weakened) (1.072375ms)
+✔ the ports domain no longer pins the retired broker port (W2/U03B deleted it) (0.301708ms)
+✔ the shipped intended-changes.json no longer carries the two now-spent U04f manifest entries (0.19375ms)
+✔ the CLI exits 0 against the real repo and exits 1 against a fixture with a planted corruption (210.587875ms)
+✔ the shipped run is clean and has nothing pending; --activate story04 is now a no-op (86.2375ms)
+✔ PR branches do not launch duplicate push and pull_request workflows (0.568917ms)
+✔ Node test workers cannot strand CI after results complete (0.094458ms)
+✔ the timing ceiling is advisory locally and enforced in exactly one place: CI (0.076042ms)
+✔ the fast gate's Go test segment runs -short, so it never blocks on a test that is slow by design (0.072167ms)
+✔ every test skipped under -short is still run in full by an untimed CI job (race or metrics), never dropped (0.11825ms)
+✔ the macos job runs the full suite too, never gaining a -short flag (0.0765ms)
+(node:1689286) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/mcavage/dev/pix/extensions/compaction-continuation.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/mcavage/dev/pix/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ latestTodoSnapshot uses the newest durable todo result (1.0065ms)
+✔ durable todo clear supersedes an older active snapshot (0.110459ms)
+✔ legacy durable todo clear remains compatible (0.092333ms)
+✔ latestAssistantStoppedAtLength reads the newest assistant result (0.106958ms)
+✔ continuation requires threshold compaction and unfinished work (0.123542ms)
+✔ extension queues one private follow-up for a compacted active task (0.201333ms)
+✔ extension resumes output-limit compaction without requiring a todo (0.176209ms)
+✔ extension does not race a prompt during idle preflight compaction (0.102375ms)
+✔ extension defers to messages already queued by the user (0.119875ms)
+✔ extension stays quiet for completed work and overflow retry (0.179166ms)
+✔ skill catalog is under its 8 KB budget (0.551791ms)
+✔ extension prompt snippets and guidelines are under their 2 KB budget (0.144583ms)
+✔ every gated segment is either under budget or a named, ratcheted exception (0.446375ms)
+✔ known-over-budget segments have not grown (0.093666ms)
+✔ a known-over-budget segment that came under budget is removed from the list (0.08775ms)
+✔ the AC-P0-111 budgets are the PRD's numbers, not whatever the tree happens to be (0.137208ms)
+✔ every segment names an owner, and host-owned segments are never gated (0.11375ms)
+✔ an unmeasured ancestor AGENTS.md reports as unmeasured, not as zero (4.239917ms)
+✔ recall net-new is the enforced ceiling, the one remaining channel (0.13225ms)
+✔ the measurement is deterministic (7.747708ms)
+✔ probes.go's Required() set matches what this test expects to guard (fitness function pins itself against drift) (0.723583ms)
+✔ docs/reference.md's doctor exit-code section names sbx among the required checks (0.4495ms)
+✔ docs/reference.md does not claim launchd or pack are required (0.132416ms)
+✔ the pinned PRD decision table itself parses to exactly D1..D24, in order (0.862334ms)
+✔ design doc has a decision-alignment table for D1-D24 (0.294459ms)
+✔ D1-D24 each appear exactly once in the alignment table, in order, with no gap or duplicate (0.240583ms)
+✔ every design-doc decision row's text is drawn from the PRD's actual decision, not an invented substitute (0.369916ms)
+✔ every alignment-table section pointer names a section heading that actually exists (1.059958ms)
+✔ no D-id reference leaks outside the alignment table into other prose in the design doc (0.235041ms)
+✔ upstream env doc: list-concatenation/key-merge composition is an explicit non-claim (A6), not proven by Story 0 (0.625208ms)
+✔ upstream env doc: the existing digest-equality non-claim survives untouched, correctly cross-referenced as AC-2, not A3 (0.190833ms)
+✔ design doc trust section: every authored ${VAR} reference must appear in host trust review with source var + destination field (0.316667ms)
+✔ design doc trust section: creation fingerprint must use keyed digest/HMAC of resolved interpolated values, never a raw hash (0.215291ms)
+✔ design doc trust section: the interpolation review/fingerprint requirement is scoped to Story 1, not claimed as shipped (0.220083ms)
+✔ self-development-uat doc: documents that candidate code runs with the operator shell's inherited authenticated environment (0.115584ms)
+✔ self-development-uat doc: warns operators not to launch --dev from a shell exporting long-lived secrets (0.101666ms)
+✔ self-development-uat doc: never claims env scrubbing exists, and non-goals explicitly disclaim it (0.174208ms)
+✔ upstream env doc: host-global binding/MCP-registration preservation across removal is an explicit non-claim (A3), distinct from the digest-equality correction (AC-2) (0.244709ms)
+✔ self-development-uat doc: production/non-dev sessions never receive the UAT surface (0.172041ms)
+(node:1689474) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/mcavage/dev/pix/extensions/help.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/mcavage/dev/pix/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ /getting-started is a real registered command, not only a docs promise (0.581167ms)
+✔ /getting-started renders the core agent workflow without triggering a model turn (0.245834ms)
+✔ the formula only installs paths the tarball actually contains (1.153417ms)
+✔ the formula installs both binaries, so a bad edit cannot ship a formula that installs nothing runnable (0.120125ms)
+✔ Homebrew installs every notice install.sh installs, so brew is not the one channel that drops them (0.17525ms)
+✔ the bump job copies this file over the tap's, so the vendored formula is genuinely the source of truth (0.135ms)
+✔ Go writer declares an inferenceManifestFilename constant (0.542083ms)
+✔ Go writer's os.WriteFile call uses the named constant, not a re-spelled literal (0.210667ms)
+✔ extensions/inference.ts reads the same filename the Go writer declares (0.10025ms)
+✔ extensions/ollama-bridge.ts reads the same filename the Go writer declares (0.099ms)
+✔ both TS readers agree with each other on the manifest path segment (0.0805ms)
+✔ extensions/inference.ts warns loudly (not silently) on a present-but-invalid manifest (0.096833ms)
+✔ extensions/ollama-bridge.ts warns loudly (not silently) on a present-but-invalid manifest (0.098208ms)
+✔ generated providers require catalog-owned context and output limits (0.507709ms)
+✔ generated Responses gateways suppress the underscore session_id header (0.460459ms)
+✔ non-Responses providers retain their native transport behavior (0.094167ms)
+✔ Anthropic SDK gateways do not duplicate the v1 path (0.136084ms)
+✔ catalog metadata selects Anthropic adaptive thinking without guessing model names (0.110208ms)
+✔ exclusive gateways hide native proxy sentinels from direct-search extensions (0.187541ms)
+✔ native runtime keeps its own proxy-managed credential sentinel (0.08475ms)
+✔ installer never executes an existing unverified Pix binary (0.557625ms)
+✔ installer cleanup trap does not interpolate attacker-controlled TMPDIR as shell code (0.0905ms)
+✔ installer checks both public binaries for PATH collisions and shadowing (0.09925ms)
+✔ installer fetches the notice-bearing tarball, not the loose binaries (0.0925ms)
+✔ publish.yml publishes only notice-bearing tarballs + SHA256SUMS, and proves the notices are inside them (0.117542ms)
+✔ e2e: a good tarball installs both binaries AND the notices beside them (30.76575ms)
+✔ e2e: a checksum mismatch installs NOTHING (18.384417ms)
+✔ e2e: a tarball with a valid checksum but NO notices is refused, and installs nothing (20.748042ms)
+✔ the kit roster names intents for fanout/deep/review, not vendor/model nicknames (0.942083ms)
+node:fs:436
+    return binding.readFileUtf8(path, stringToFlags(options.flag));
+                   ^
+
+Error: ENOENT: no such file or directory, open '/Users/mcavage/dev/pix/THIRD_PARTY_NOTICES.md'
+    at Object.readFileSync (node:fs:436:20)
+    at read (file:///Users/mcavage/dev/pix/tests/legal-authorizations-and-privacy.test.mjs:17:24)
+    at file:///Users/mcavage/dev/pix/tests/legal-authorizations-and-privacy.test.mjs:20:17
+    at ModuleJob.run (node:internal/modules/esm/module_job:437:25)
+    at async node:internal/modules/esm/loader:639:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/mcavage/dev/pix/THIRD_PARTY_NOTICES.md'
+}
+
+Node.js v25.9.0
+✖ tests/legal-authorizations-and-privacy.test.mjs (33.833125ms)
+✖ scripts/check-third-party-notices.sh passes on the real tree (1050.410459ms)
+✔ scripts/check-third-party-notices.sh fails closed when the notices file is stale (746.227708ms)
+✔ Dockerfile pins the base image behind a BASE_IMAGE build ARG, not a bare FROM (0.543417ms)
+✔ Dockerfile documents an immutable-digest path and a public fallback without claiming DHI rights (0.097625ms)
+✔ Dockerfile bakes THIRD_PARTY_NOTICES.md and NOTICE.md into the image (0.096375ms)
+✔ Dockerfile bakes LICENSE and licenses/ (MPL-2.0 text) into the image (0.155708ms)
+✔ publish.yml bundles the notices, LICENSE and licenses/ into the Homebrew darwin tarball (0.1505ms)
+✔ licenses/MPL-2.0.txt is the full verbatim MPL-2.0 text, not a stub (0.248833ms)
+✖ NOTICE.md states ownership, disclaims third-party affiliation, and claims no legal advice (0.168584ms)
+✔ resolve-base-digest.sh --parse extracts the digest from an imagetools inspect JSON fixture (4.154041ms)
+✔ resolve-base-digest.sh --parse fails closed on a fixture with no digest (2.490958ms)
+✔ resolve-base-digest.sh live mode fails closed (not fabricated) when docker is unavailable (1.397709ms)
+✔ verify-provenance.sh rejects a non-semver version (1.482416ms)
+✔ verify-provenance.sh rejects a malformed digest (1.532584ms)
+✔ verify-provenance.sh records a fresh version and is idempotent on a re-run with the same digest (5.675666ms)
+✔ verify-provenance.sh fails closed when a version's recorded digest would change (immutability WITHIN a run / against a restored record) (8.882125ms)
+✔ tag-availability.sh: a successful inspect means the tag is TAKEN (2.546959ms)
+✔ tag-availability.sh: registry 'not found' shapes mean FREE (12.101834ms)
+✔ tag-availability.sh: FAILS CLOSED on auth/network/unknown — never 'free' (15.8135ms)
+✔ tag-availability.sh live mode fails closed (not fabricated) when docker is unavailable (1.682125ms)
+✔ publish.yml asks the registry BOTH when selecting a version and again before mutating a tag (0.232375ms)
+✔ docs do NOT claim the ephemeral provenance record enforces cross-run immutability (0.402167ms)
+✔ a fail-closed verdict inside an `if [ "$(...)" ]` really would fail OPEN (why the assignment above matters) (1.769125ms)
+secret-scan: FAIL-CLOSED — 1 finding(s) across full history:
+  - AWS access key ID in config.py (blob 56814b31c36d)
+secret-scan: FAIL-CLOSED — 1 finding(s) across full history:
+  - AWS access key ID in notes.md (blob 05c61e935c69)
+✔ scanText() flags each known secret shape and does not false-positive on ordinary text (1.346917ms)
+✔ secret-scan.mjs --self-test exits 0 (35.526708ms)
+✔ full-history scan catches a secret buried in an amended-away commit (51.45925ms)
+✔ parseBatchOutput() parses a blob record and a missing record from a raw Buffer (0.292375ms)
+✔ batchCheck() and batchContent() report the same type/size/content as per-object `git cat-file` (12.650542ms)
+✔ scanRepo() makes a FIXED, small number of git invocations regardless of history size (no per-object spawnSync loop) (191.019042ms)
+✔ the allowlist file's own path is excluded from the scan (self-referential fixed-point guard) (44.286875ms)
+✔ the release-safeguards doc is excluded from the scan (same fixed-point guard) (86.276001ms)
+✔ full-history scan passes clean on a fixture repo with no secrets (47.628334ms)
+✔ ledger declares MPL-2.0 for go-plugin and yamux, allowlisted by policy (0.643708ms)
+✔ bakedTools ledger records ruff, fd, and go with license/source/version provenance (0.115458ms)
+✔ validateBakedTools(): passes when the Dockerfile ARG pins match the ledger (0.307541ms)
+✔ validateBakedTools(): fails closed when the Dockerfile ARG drifts from the ledger version (0.158833ms)
+✔ validateBakedTools(): fails closed when a ledger tool has no matching Dockerfile ARG (0.132333ms)
+✔ CLI --check-baked-tools passes against the real Dockerfile (43.587833ms)
+✔ Suture is a live, license-verified ledger entry (0.137875ms)
+✔ npm globals include the patched pi-tui with attribution (0.090958ms)
+✔ classify(): permissive licenses pass, unlisted weak-copyleft fails, unknown module fails closed (0.13075ms)
+✔ validateLiveModules(): fails closed on a live dependency absent from the ledger (0.254875ms)
+✔ validateLiveModules(): fails closed on a version drift from the pinned ledger entry (0.106292ms)
+✔ validateLiveModules(): passes when every live module matches the ledger (0.700458ms)
+✔ renderNotices() output contains required sections (9.959708ms)
+✖ committed THIRD_PARTY_NOTICES.md is in sync with the ledger (no drift) (0.522375ms)
+✔ CLI --check-live fails closed on an undeclared module (32.315666ms)
+✔ CLI --check-live passes on the real, live services/host module set (815.124834ms)
+✔ validateLedgerLiveness(): fails closed on a ledger row that is no longer in the live build graph (0.334084ms)
+✔ validateLedgerLiveness(): refuses to judge the ledger against an EMPTY live list (0.082583ms)
+✔ validateLedgerLiveness(): passes against the REAL live module set (778.483001ms)
+✔ CLI --check-live fails closed on a STALE ledger row (reverse direction) (30.042833ms)
+✔ RELEASE-SAFEGUARDS.md's stated Go module count matches the ledger (no unreproducible number) (0.345375ms)
+✔ the ledger's typescript row is ARG-pinned and matches the Dockerfile and package.json (0.354209ms)
+✔ validateNpmGlobalPins(): fails closed on ARG drift, and on an unpinned install (0.185792ms)
+✔ CLI --check-npm-pins passes against the real Dockerfile (40.83525ms)
+✔ legal.yml defines the three gate jobs and nothing else (0.95425ms)
+✔ legal.yml is callable as a reusable workflow AND still runs on PRs (0.211417ms)
+✔ publish.yml calls legal.yml as an in-graph job (not a workflow racing it) (0.135958ms)
+✔ NOTHING is pushed before the legal gate: build and merge both depend on it (0.094875ms)
+✔ every publish job that can push, tag, or release is downstream of legal-gate (0.1365ms)
+✔ the legal gate itself waits on nothing in publish (it cannot be gated by the thing it gates) (0.072958ms)
+✔ test.yml is callable as a reusable workflow AND still runs on PRs (0.145417ms)
+✔ publish.yml calls test.yml as an in-graph job (not a workflow racing it) (0.97275ms)
+✔ NOTHING is pushed before the test gate: build and merge both depend on it (0.100709ms)
+✔ every publish job that can push, tag, or release is downstream of test-gate (0.141667ms)
+✔ the test gate itself waits on nothing in publish (it cannot be gated by the thing it gates) (0.073625ms)
+✔ legal.yml's secret-scan job fetches FULL history, not just the checked-out tip (0.075167ms)
+✔ legal.yml uploads the secret-scan report even on failure (0.10475ms)
+✔ legal.yml runs check-third-party-notices.sh and asserts a non-empty repo SBOM (0.069834ms)
+✔ legal.yml's jobs are defined once, in legal.yml (publish reuses, never duplicates) (0.078958ms)
+(node:1690433) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/mcavage/dev/pix/extensions/math-sum-precise.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/mcavage/dev/pix/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ integer sums are exact, which is what pdf.js asks for (0.7985ms)
+✔ compensated summation beats the naive sum it replaces (0.107916ms)
+✔ non-finite inputs propagate rather than being swallowed (0.079583ms)
+✔ a non-number element is a TypeError, not a coercion (0.266167ms)
+✔ a native implementation is never overwritten (0.101083ms)
+✔ the extension factory never throws at load (0.104666ms)
+(node:1690459) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/mcavage/dev/pix/extensions/memory-capture.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/mcavage/dev/pix/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ a pix-generated message (onboarding kickoff shape) is never captured (0.553208ms)
+✔ any [pix-generated:...] prefixed message is skipped, not just onboarding (0.080833ms)
+✔ a slash command is not captured (0.065875ms)
+✔ text under 12 chars is not captured (0.062916ms)
+✔ a normal user message is captured (0.079791ms)
+✔ a real message that merely mentions setup/onboarding is still captured (no broad skip) (0.060125ms)
+✔ capture transport reports a plain-text gateway failure as HTTP, not a JSON parser error (13.140208ms)
+✔ capture transport gives a stable diagnostic for non-JSON 2xx responses (3.749791ms)
+✔ a failed observe POST is retried on the next awaited hook instead of being deduplicated as sent (7.917625ms)
+✔ the observe RPC params object has exactly profile/project/user (8.089ms)
+✔ explicit mode (absent or garbled marker) sends zero observe requests (8.616125ms)
+✔ experimental-auto mode sends exactly one observe call for a completed exchange (7.329458ms)
+✔ a not-accepted observe surfaces its reason through ctx.ui.notify, once per session (6.43325ms)
+✔ a failed observe POST notifies through ctx.ui.notify too (7.247541ms)
+✔ without a ctx.ui the not-accepted reason falls back to stderr (7.406084ms)
+(node:1690507) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/mcavage/dev/pix/extensions/memory-recall.ts?case=0 is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/mcavage/dev/pix/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ blank /recall queries '*' instead of an empty string (26.684375ms)
+✔ an explicit /recall query is passed through unchanged, keeping the daemon's own defaults (11.704708ms)
+✔ /recall on '*' appends a truncation notice when the daemon returns a full 100-hit page (9.102416ms)
+✔ formatMemoryIso preserves the encoded offset and removes fractions (0.273625ms)
+✔ formatMemoryIso omits absent or invalid createdAt cleanly (0.068709ms)
+✔ formatHitLine includes the timestamp when createdAt is valid, omits it when not (0.132417ms)
+✔ formatHitLine no longer renders a durability segment, even if a hit still carries one (0.0755ms)
+✔ displayKind aliases learning to correction and leaves everything else unchanged (0.083167ms)
+✔ formatHitLine renders a learning hit's kind as correction, other kinds unchanged (0.063542ms)
+✔ formatHitLine tags a watcher-sourced hit as auto, leaves an explicit hit untagged (0.077708ms)
+✔ a transport error from a dead daemon surfaces a visible error notification (10.172667ms)
+✔ an HTTP error surfaces a visible error instead of '(nothing)' (9.970166ms)
+✔ a JSON-RPC error surfaces a visible error instead of '(nothing)' (8.370083ms)
+✔ /remember: a transport error from a dead daemon surfaces a visible error notification (5.580666ms)
+✔ /remember: a JSON-RPC error surfaces a visible error instead of silently vanishing (5.251625ms)
+✔ /remember: blank args show usage and never call the daemon or claim success (4.165167ms)
+✔ /remember: a daemon response with an empty id is a visible error, never 'remembered' (5.099375ms)
+✔ /forget: a transport error from a dead daemon surfaces a visible error notification (4.601416ms)
+✔ /forget: a JSON-RPC error surfaces a visible error instead of silently vanishing (6.454708ms)
+✔ /forget: an id miss (daemon responds ok:false) notifies at error severity with an actionable, non-formatting message (5.773917ms)
+✔ /forget: a query with no match notifies at error severity with an actionable message (7.95825ms)
+✔ a slow daemon past the command timeout surfaces a visible error, not a hang (28.886708ms)
+✔ the real production timeout defaults are unchanged (5.702959ms)
+✔ /recall survives a delay well past the (shrunk) auto-recall timeout (35.271834ms)
+✔ the auto-recall hook (before_agent_start) stays silent on a dead daemon (10.120625ms)
+✔ buildRecallBlock itself rejects on a dead daemon (safe() is the hook's job, not buildRecallBlock's) (4.675833ms)
+✔ buildRecallBlock returns null on a zero-hit response, never an empty header-only block (4.546042ms)
+✔ only the two read-only memory tools are registered; write/delete stay human slash commands (3.628375ms)
+✔ memory_recall defaults query to '*', requests up to 100 rows with a large charBudget, and returns formatted hit lines (7.937583ms)
+✔ memory_recall keeps a search default of 6 (and no charBudget override) for an explicit non-'*' query (7.961625ms)
+✔ memory_recall passes an explicit query through and clamps limit to 1..100 (7.592125ms)
+✔ memory_recall appends a clear truncation line when hits.length equals the effective limit (8.926209ms)
+✔ memory_recall does NOT append a truncation line when hits.length is below the limit (11.185208ms)
+✔ memory_recall throws (does not swallow) when the daemon is unreachable (6.598083ms)
+✔ memory_stats calls the stats RPC with the active profile and returns the raw counts (4.55075ms)
+✔ memory_stats throws when the daemon is unreachable (3.772125ms)
+✔ the injected block tells the model it's a relevance-filtered subset and to use memory_recall (5.286791ms)
+✔ memory tool descriptions state this tool surface is read-only, without over-claiming the agent/sandbox cannot mutate memory (4.41225ms)
+✔ memory_recall description tells the model when to use it and that it can return up to 100 rows, not the whole store (7.215708ms)
+✔ every memory tool description states direct-daemon access, never shelling out, and no claim that anything expires (3.9015ms)
+✔ memory_recall and memory_stats promptGuidelines carry the exact capture-honesty guideline (3.670875ms)
+✔ the capture-honesty guideline never claims a statement is off-topic for code so it won't save (0.091958ms)
+✔ no /learnings command is registered (the promotable surface is deleted) (4.37225ms)
+✔ memory-recall.ts carries no AUTO_INJECT_PERISHABLE score floor (0.384625ms)
+✔ every ollama model in the manifest is registered, so the --models cycle matches (0.570542ms)
+✔ the manifest's backend prefix is stripped, never double-qualified (0.119541ms)
+✔ catalog limits are carried through, with the bridge tag's as the floor (0.104583ms)
+✔ the configured bridge tag is always present exactly once (0.10775ms)
+✔ a missing or junk manifest degrades to the bridge tag alone (0.494125ms)
+✔ onboarding requires setup only when no inference route is resolved (0.545667ms)
+✔ onboarding distinguishes disabled memory from enabled-but-stopped memory (0.157042ms)
+✔ onboarding never claims ordinary setup creates a pack (0.109208ms)
+✔ findPersonalContextDir prefers the explicit env and otherwise derives the mounted context from --skill (0.63625ms)
+✔ style names become bounded safe slugs (0.307666ms)
+✔ parseStyleFile requires frontmatter and rejects oversized style bodies (0.758375ms)
+✔ the rendered style block reconciles style, user, project, verbatim, and quality precedence (0.32275ms)
+✔ style bodies cannot break out of the quoted form-only region (0.140375ms)
+✔ the output_style tool saves, activates, lists, and disables a durable style (3.267333ms)
+✔ before_agent_start appends each active style version once and appends revocation after off (2.162125ms)
+✔ compaction makes the active style eligible for one fresh append (0.820875ms)
+✔ /output-style uses the same durable state and reports unavailable personal context (0.923416ms)
+✔ save refuses to replace a broken symlink in the durable context (0.654125ms)
+✔ corrupt active state and oversized files are visible but never block a turn (0.53575ms)
+✔ the default extension factory registers without throwing when personal context discovery fails (0.113084ms)
+✔ live docs/help never cite the retired `pack new`/`pack add` verbs as runnable (2.041417ms)
+✔ docs/reference.md's pack row has no authoring verb and points at hand-editing (0.296958ms)
+✔ historical pack design docs still mentioning the retired verbs carry a U08f marker (0.449375ms)
+✔ pack_cmd.go help text explains direct pack.toml/skills editing, not a scaffolding verb (0.2475ms)
+✔ tui bottom-pin patch applies to a fixture pi-tui and passes the render harness (295.153125ms)
+✔ tui bottom-pin patch catches upstream drift instead of silently applying (35.467042ms)
+✔ pi resume patch emits an exact host-runnable pix command (63.988167ms)
+✔ pi resume patch fails when upstream command formatting drifts (31.569541ms)
+✔ MCP status patch adds a problems-only mode (65.950334ms)
+✔ MCP status patch upgrades the old disconnected-count behavior (64.078375ms)
+✔ MCP status patch fails when adapter status rendering drifts (29.126ms)
+✔ baked and gateway MCP configs show only connection problems (0.501792ms)
+✔ todo controls patch applies to a fixture pi-manage-todo-list (122.798333ms)
+✔ todo durable-clear patch catches upstream drift instead of silently applying (31.2895ms)
+✔ host-state patch hides the block from display but keeps it for the model (60.406875ms)
+✔ host-state patch catches upstream drift instead of silently applying (31.37525ms)
+✔ systemPromptHash is constant across a >=20-turn append-only session (1.256875ms)
+✔ compaction does not disturb the system prompt (0.451292ms)
+✔ the message prefix is stable across consecutive provider requests (0.472042ms)
+✔ compaction turns are excluded, and the assertion names which ones (0.833916ms)
+✔ a compaction that was NOT excluded would have failed the gate (0.758458ms)
+✔ the old system-prompt transport fails FF5a, so the gate measures something (0.285708ms)
+✔ a mutated earlier message is caught even though it is not a new message (0.454375ms)
+✔ the fixtures are the real tap's output, in the shapes summarizeRequest produced (1.858292ms)
+✔ the publish version comes from committed package.json, not the run number (0.591208ms)
+✔ later publishes select an unused patch tag without overwriting a release (0.123125ms)
+✔ Homebrew archives are additive and contain both binaries, no manpage (0.31125ms)
+✔ the tap bump reads release hashes and opens a gated PR (0.232458ms)
+(node:1690877) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/mcavage/dev/pix/lib/recall-message.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/mcavage/dev/pix/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ every extension `context` hook leaves protected append-only messages in place (3.270625ms)
+✔ the harness catches a hook that does strip it (so a clean pass means something) (0.327042ms)
+✔ the set of extensions with a context hook is pinned (1.534083ms)
+✔ protected custom types are pinned, and the frozen legacy ones are untouched (0.336416ms)
+(node:1690931) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/mcavage/dev/pix/lib/recall-message.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/mcavage/dev/pix/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ message shape is the append-only custom type, never a system prompt (0.871625ms)
+✔ nothing to say returns null, so no empty message is appended (0.121666ms)
+✔ a row recalled on turns 3, 7 and 12 is injected exactly once (0.187083ms)
+✔ dedup falls back to sha256(content) when the store has no id (0.329333ms)
+✔ rowKey namespaces ids and hashes so they cannot alias (0.13ms)
+✔ the same batch never injects the same row twice (0.080167ms)
+✔ net-new content is capped at 1 KB and never exceeds it (0.879416ms)
+✔ truncation happens at a row boundary with the fixed visible marker (0.38925ms)
+✔ the marker is singular for exactly one dropped row (0.15875ms)
+✔ a truncated row is not marked seen, so it lands on a later turn (0.274291ms)
+✔ no message at all when the message would be over cap (0.092458ms)
+✔ no row fits: the header plus the marker still says recall was suppressed (0.084833ms)
+✔ the untrusted-content wrapper and provenance labels are byte-for-byte and charged against the cap (0.232292ms)
+✔ same input, same bytes (0.596625ms)
+✔ buildRecallMessage mutates only the seen set it was given (0.086041ms)
+✔ non-string row content is coerced, never thrown on (0.105875ms)
+✔ every public skills/*/SKILL.md description is <=200 chars (6.520916ms)
+✔ no skill description is empty (4.012167ms)
+✔ .dockerignore skills/ allowlist matches the actual skills/ directories on disk (0.426334ms)
+✔ skills/delegation-guide/SKILL.md states the worktree-parallel-by-default invariant (0.964583ms)
+✔ skills/delegation-guide/SKILL.md does not default to a single shared working tree (0.242875ms)
+✔ skills/deliver/SKILL.md states the worktree-parallel-by-default invariant (1.180166ms)
+✔ skills/deliver/SKILL.md does not default to a single shared working tree (1.336833ms)
+✔ deliver's Forbidden table names the shared-tree anti-pattern with the worktree-per-unit correction (0.329125ms)
+(node:1691020) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/mcavage/dev/pix/extensions/subagents.ts?reaper=0 is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/mcavage/dev/pix/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ session shutdown reaps a subagent that is still running (90.366792ms)
+✔ the reaper signals the whole process GROUP, not just the direct child (69.639542ms)
+✔ reaping is idempotent and survives an already-dead pid (37.7225ms)
+(node:1691046) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/mcavage/dev/pix/extensions/subagents.ts?toolidle=0 is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/mcavage/dev/pix/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ a silent TOOL call outliving the short idle budget is not killed (1328.7485ms)
+✔ the same silence with NO tool in flight is still killed as idle (388.979542ms)
+✔ the tool budget never demotes an explicit longer per-agent idle_ms (1304.091ms)
+(node:1691149) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/mcavage/dev/pix/lib/subagent-usage.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/mcavage/dev/pix/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ aggregates child and nested subagent usage exactly once (1.019167ms)
+✔ recognizes actual nested-tool and compaction event shapes (0.172709ms)
+✔ includes compaction usage that has no message (0.115708ms)
+✔ returns undefined when no metered messages were captured (0.088791ms)
+(node:1691188) MaxListenersExceededWarning: Possible EventEmitter memory leak detected. 11 exit listeners added to [process]. MaxListeners is 10. Use emitter.setMaxListeners() to increase limit
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ curated children reload generated inference providers before subagents (58.551834ms)
+✔ an explicit parent Ollama model becomes the subagent availability boundary (10.713625ms)
+✔ policy-refusal detection is narrow and recognizes Anthropic cyber refusals (10.545584ms)
+✔ invalid compiled routes become actionable diagnostics (10.194292ms)
+✔ PI_SUBAGENT_DISABLED=1 refuses single, parallel, chain, and doctor (10.098ms)
+✔ PI_SUBAGENT_DISABLED="0" / "false" do not disable (30.637166ms)
+✔ a skill name gets a skill-specific correction, not only an agent dump (10.212458ms)
+✔ PI_SUBAGENT_MAX_DEPTH=0 refuses at depth 0/0 (9.340792ms)
+✔ unset / invalid MAX_DEPTH still defaults to 3 (18.762917ms)
+✔ docs/design/environments.md's live env-verb spec carries no stale references (1.916375ms)
+✔ every `pix <verb>` in a user- or agent-facing surface names a real verb (22.483625ms)
+ERROR:sbx ls --json exited 1: boom: sbx daemon unreachable 
+ERROR:sbx ls --json exited 1: boom: sbx daemon unreachable 
+✔ the script is syntactically valid bash (bash -n) (4.91675ms)
+﹣ shellcheck reports no ERROR-severity findings, when shellcheck is available (0.851334ms) # shellcheck is not on PATH in this environment — not asserted here, run it in CI
+✔ the OAuth pass authorizes each shipped catalog server individually, asserting its own exit code (0.228167ms)
+✔ OAuth auth is gated on current doctor evidence BEFORE forcing any browser flow: an already registered+authenticated server is never re-authorized (0.105333ms)
+✔ the OAuth pass never sweeps in every registered server via --all (an unrelated 8th server must not fail this release check) (0.358792ms)
+✔ OAuth completion is certified by a machine-readable probe (pix doctor --json), not operator say-so (0.1025ms)
+✔ the optional human confirmation reads a bounded /dev/tty via a real fd open, never the script's own stdin (0.086375ms)
+✔ the /dev/tty open suppresses device-open noise instead of relying on a -r/-w stat check that can lie (0.080083ms)
+✔ optional operator confirmation cannot make machine-verified OAuth incomplete or failed (0.092334ms)
+✔ the bare 'attached' substring check is gone (it always tripped on mcp ls's own honest disclaimer) (0.178834ms)
+✔ mcp ls is checked for the honest disclaimer (positive claim) and a precise negative attachment-claim regex (0.08825ms)
+✔ only catalog registrations this run actually added are removed on cleanup (0.113208ms)
+✔ pre-existing catalog servers are verified individually and left unchanged (0.067917ms)
+✔ backgrounded pix run invocations read stdin from their OWN hold FIFO, never /dev/null or an inherited terminal (0.164083ms)
+✔ each backgrounded hold closes both hold FDs for ITSELF first, so the second job cannot inherit the first job's open write end (0.145167ms)
+✔ every background wait is bounded, so a wedged pix run cannot hang the whole UAT run (0.113916ms)
+✔ multi-shell readiness windows are bounded appropriately for a COLD post-load image pull (180s create / 90s attach by default), not the old flat 30s (0.052083ms)
+✔ the assert_box_listed/assert_box_not_listed wrappers use the same cold-pull CREATE window, not a smaller magic number that could expire before creation finishes (0.081542ms)
+✔ every bounded_wait_* poll loop sleeps an injectable interval (UAT_POLL_INTERVAL), not a hardcoded 'sleep 1', so a test harness can shrink real wall time without editing the script (0.08225ms)
+✔ the snapshot secret scan does not pass vacuously when units[] is empty in a service-enabled run (0.105417ms)
+✔ snapshot secret scan (behavioral): empty units[] FAILs, it does not pass vacuously (1.971459ms)
+✔ snapshot secret scan (behavioral): a real unit with no credential-shaped text PASSes (2.515167ms)
+✔ snapshot secret scan (behavioral): a real unit WITH credential-shaped text still FAILs (2.719834ms)
+✔ host services preflight WHICH pix-host binary an already-running serve is before trusting it (0.244333ms)
+✔ installing serve for this run is reported as reversible and names the binary under test (0.087833ms)
+✔ the launchd preflight + reversible install runs BEFORE this script's first `pix run` (section [3]'s digest naming) (0.084583ms)
+✔ section [8] Host services CONSUMES the already-installed daemon; it does not re-preflight or reinstall it (0.104208ms)
+✔ the install-if-down gate uses the machine-readable serve_is_running helper, not a text substring match (0.118375ms)
+✔ serve_is_running (behavioral): reports NOT_RUNNING when the JSON boolean is false, even though the human line contains the substring 'running' (3.286458ms)
+✔ serve_is_running (behavioral): reports RUNNING when the JSON boolean is true (2.421834ms)
+✔ the destructive-flag self-check still finds nothing in the rewritten script (0.440417ms)
+✔ docs/HOST-UAT.md documents the machine-probe OAuth verdict and the binary preflight (0.320584ms)
+✔ OAuth classification only PASSes on the exact registered+attachmentCaveat evidence line (0.0855ms)
+✔ OAuth classification explicitly FAILs on 'not registered', separately from 'not authenticated' (0.0735ms)
+✔ OAuth classification no longer matches on the bare '$s:' substring (the false-PASS this rewrite closes) (0.080834ms)
+✔ OAuth classification (behavioral): explicit ready/authenticated evidence is the only PASS (4.059125ms)
+✔ OAuth classification (behavioral): unknown or missing evidence is SKIP, never a silent PASS or a FAIL (5.471458ms)
+✔ OAuth classification (behavioral): a totally empty doctor payload is SKIP for every server, not a free PASS (5.439208ms)
+✔ resolve_symlink_final follows a relative multi-hop symlink chain through directories containing spaces (7.18375ms)
+✔ current_bin_path resolves a make-install-style PATH symlink to the real executable's path (3.707666ms)
+✔ current_bin_path (PATH symlink) and running_bin_path (lsof-reported real file) compare equal (6.619333ms)
+✔ section [4] no longer uses `find ... -newer` to locate the lease record (0.398209ms)
+✔ section [4] asserts the EXACT lease record path, keyed by the final sandbox name ($BOX1) (0.09175ms)
+✔ section [4] captures pix run's stderr separately and surfaces it on BOTH a launch failure and a missing-record failure (0.087084ms)
+✔ section [4] skips (never double-fails) the record check when the launch itself already failed (0.079792ms)
+✔ section [4] record check (behavioral): launch OK + record present at the exact path PASSes and reports the instance id (2.960292ms)
+✔ section [4] record check (behavioral): launch OK but no record at the exact path FAILs and surfaces the launch stderr, it never SKIPs a launch that reported success (2.95725ms)
+✔ section [4] record check (behavioral): a failed launch SKIPs the record check (never asserts a record that could not exist) and captures the launch's stderr in its own FAIL (2.7935ms)
+✔ section [4] launches BOX1 with --keep, so it survives its own non-interactive exit for the checks that follow (0.130917ms)
+✔ section [4]'s changed-MCP fingerprint-refusal attach does NOT itself pass --keep, so the refusal it asserts can never be attributed to (or masked by) the --keep BOX1 was created with (0.13525ms)
+✔ section [5] runs its exit-propagation check against a FRESH $BOX_EXIT create, then explicitly removes the kept $BOX1 sandbox AFTER that coverage and BEFORE section [6] begins (0.099791ms)
+✔ section [5] never reuses an already-created box name for exit-propagation: it creates a brand-new $BOX_EXIT via runbox, the same helper used for every other genuinely-fresh box in this script (0.112292ms)
+✔ section [5] documents WHY it cannot reuse $BOX1: attach replays the stored create-time invocation, ignoring new passthrough flags by design (0.080791ms)
+✔ section [5] asserts $BOX_EXIT is absent after the failing create, or removes it explicitly — it never just assumes teardown happened (0.09425ms)
+✔ section [4] does not reappear inside section [6]: BOX1's explicit removal happens strictly before the [6] header, never after (0.198833ms)
+✔ section [4]->[5] (behavioral): the record and fingerprint-refusal checks run, in order, BEFORE BOX1's explicit removal, against the ACTUAL shipped bash (11.279959ms)
+✔ section [4]->[5] (behavioral): the exit-propagation invocation names a box pix has NEVER SEEN BEFORE in this run — proof no attach path is used, since an attach requires a name pix already created (10.993875ms)
+✔ section [4]->[5] (behavioral): when the failing create somehow leaves $BOX_EXIT listed, section [5] explicitly removes it rather than assuming teardown happened (12.796709ms)
+✔ multi-shell FIFO holds (behavioral): two real background sessions stay alive with zero bytes sent, released one then the other, deterministically — even with a delayed create/attach, proving the waits actually wait rather than winning a timing race (4080.637252ms)
+✔ multi-shell FIFO holds (behavioral): readiness needing MORE than 30 polls still succeeds under the cold-pull windows (180s create / 90s attach), proven via shrunk injectable poll-interval/window constants rather than real minutes of sleep (1933.787959ms)
+✔ multi-shell FIFO holds (behavioral): a create that never gets listed within the bound FAILs with the log tail, it does not hang or silently pass (35.928416ms)
+✔ OAuth auth gate (behavioral): all three already registered+authenticated per doctor evidence PASSes with ZERO `pix mcp auth` invocations (9.128625ms)
+✔ OAuth auth gate (behavioral): only the servers with a real gap are authorized, individually — an already-authenticated server is skipped (10.283917ms)
+✔ OAuth auth gate (behavioral): a totally empty doctor payload treats every server as a gap and authorizes all three (never silently skips an unclassifiable server) (10.191167ms)
+✔ ls_json_lists (behavioral): reports LISTED / ABSENT / ERROR as three distinct outcomes, never collapsing a failure into absence (11.881459ms)
+✔ multi-shell FIFO holds: no prompt (-p) or sleep-based timing gate remains in section [6] (0.173ms)
+✔ multi-shell FIFO holds: presence/absence of $BOX2 is asserted through pix ls --json, distinguishing an ls failure from a genuine absence, not a bare grep on possibly-failed output (0.1645ms)
+✔ verdict() checks rc (die/abort) BEFORE the accumulated FAIL count, not after (0.150125ms)
+✔ verdict (behavioral): a die/abort (rc != 0) reports UAT ABORTED / exit 2, even with FAILs already accumulated (1.636625ms)
+✔ verdict (behavioral): rc=0 with accumulated FAIL still reports UAT FAILED / exit 1 (1.513208ms)
+✔ verdict (behavioral): rc=0, no FAIL, PASS=0 reports the vacuous-run INCOMPLETE / exit 2 (1.503333ms)
+✔ verdict (behavioral): rc=0, no FAIL, PASS>0, SKIP>0 reports INCOMPLETE / exit 2 (1.368875ms)
+✔ verdict (behavioral): a fully clean run (rc=0, no FAIL, PASS>0, no SKIP) reports UAT PASSED / exit 0 (1.316917ms)
+✔ section [7] no longer asserts the orphan-reaper verdict or the post-rm absence through a bare `pix ls | grep` (0.110084ms)
+✔ section [7] captures pix rm --orphans's own output and requires the exact kept-keep verdict for $BOX3 (0.076916ms)
+✔ section [7] independently verifies $BOX3 via raw `sbx ls --json` (never `pix ls`/`pix ls --json`), both after --orphans and after the explicit rm, distinguishing a failed sbx probe from genuine absence (0.088917ms)
+✔ section [7] orphan block (behavioral): $BOX3 stopped and omitted from `pix ls`, but present in `sbx ls --json` — every check PASSes, proving no false failure (9.010833ms)
+✔ section [7] orphan block (behavioral): a REAL orphan-reaper regression (it actually removed the --keep box) still FAILs both the verdict grep and the raw sbx confirmation — the fix does not paper over a genuine bug (45.863ms)
+✔ section [7] orphan block (behavioral): a failed `sbx ls --json` is reported as a command failure, never silently read as absence (8.402333ms)
+✔ sbx_json_lists (behavioral): reports LISTED / ABSENT / ERROR from sbx's own canonical {"sandboxes": [...]} schema, never collapsing a failure into absence (8.942125ms)
+✔ sbx_json_lists (behavioral): a response that is not the canonical object-wrapped {"sandboxes": [...]} shape is an ERROR, never silently read as absence (3.268ms)
+✔ pinned pi-web-access patch adds gateway seams and preserves pack provider policy (62.638292ms)
+(node:1691490) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/mcavage/dev/pix/extensions/memory-recall.ts?case=0 is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/mcavage/dev/pix/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ memory-recall.ts resolves ACTIVE_PROFILE from the exact .pix/profile bytes writeMemoryScope produces (64.355542ms)
+✔ memory-recall.ts falls back to 'default' when .pix/profile is absent (the un-scoped, backward-compatible case) (10.758209ms)
+✔ memory-capture.ts stamps captured exchanges with the SAME .pix/profile marker memory-recall.ts reads (7.1755ms)
+✔ memory-capture.ts resolves CAPTURE_MODE from the exact .pix/memory-capture bytes WriteMemoryCaptureFile produces (6.777541ms)
+✔ ollama-bridge.ts registers the model id from the exact .pix/ollama-bridge.model bytes writeOllamaBridgeFile produces (3.465625ms)
+✔ ollama-bridge.ts falls back to its own default model when .pix/ollama-bridge.model is absent (2.808083ms)
+✔ none of these fixtures require or read .pix/host-state.json (0.187583ms)
+ℹ tests 466
+ℹ suites 0
+ℹ pass 460
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 2
+ℹ todo 0
+ℹ duration_ms 8991.447671
+
+✖ failing tests:
+
+test at tests/legal-authorizations-and-privacy.test.mjs:1:1
+✖ tests/legal-authorizations-and-privacy.test.mjs (33.833125ms)
+  'test failed'
+
+test at tests/legal-inclusion-and-docker-base.test.mjs:20:1
+✖ scripts/check-third-party-notices.sh passes on the real tree (1050.410459ms)
+  AssertionError [ERR_ASSERTION]: check-third-party-notices: ok — live Go module set passes the license-class gate, and the ledger carries no stale rows
+  check-third-party-notices: ok — baked-tool (ruff/fd/go) versions match the ledger
+  check-third-party-notices: ok — ARG-pinned npm globals (typescript) match the ledger
+  check-third-party-notices: ok — Dockerfile installs typescript at the pinned ARG version
+  check-third-party-notices: ok — package.json devDependency typescript matches the ledger version
+  check-third-party-notices: ok — MPL-2.0 components disclose a pinned Source Code Form URL + a shipped license text
+  check-third-party-notices: ok — licenses/MPL-2.0.txt carries the full, verbatim MPL-2.0 text
+  check-third-party-notices: ok — notices make no self-contradictory claim about reproduced license texts
+  check-third-party-notices: ok — no planned dependencies in the ledger (nothing to disclose)
+  check-third-party-notices: ok — Dockerfile COPYs THIRD_PARTY_NOTICES.md into the image
+  check-third-party-notices: ok — Dockerfile COPYs LICENSE into the image
+  check-third-party-notices: ok — Dockerfile COPYs licenses/ (MPL-2.0 text) into the image
+  check-third-party-notices: ok — publish.yml bundles THIRD_PARTY_NOTICES.md into the Homebrew tarball
+  check-third-party-notices: ok — publish.yml bundles LICENSE + licenses/MPL-2.0.txt into the Homebrew tarball
+  check-third-party-notices: ok — publish.yml runs verify-provenance.sh against the published manifest digest
+  check-third-party-notices: ok — publish.yml generates the SBOM against the PUBLISHED image digest
+  check-third-party-notices: ok — legal.yml has no silently-passing (continue-on-error) job
+  check-third-party-notices: ok — docs/legal/AUTHORIZATIONS.md exists
+  check-third-party-notices: ok — docs/legal/PRIVACY.md exists
+  diff: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — THIRD_PARTY_NOTICES.md is stale — run: node scripts/legal/generate-third-party-notices.mjs --write THIRD_PARTY_NOTICES.md
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — notices are missing required attribution: ruff (baked tool) attribution
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — notices are missing required attribution: fd (baked tool) attribution
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — notices are missing required attribution: Go toolchain (baked tool) attribution
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — notices are missing required attribution: go-plugin MPL-2.0
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — notices are missing required attribution: yamux MPL-2.0
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — notices are missing required attribution: Suture attribution
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — notices are missing required attribution: patched pi-tui attribution
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — notices are missing required attribution: patched-component marker
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — notices are missing required attribution: go-plugin Source Code Form URL (MPL-2.0 s3.2)
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — notices are missing required attribution: yamux Source Code Form URL (MPL-2.0 s3.2)
+  grep: THIRD_PARTY_NOTICES.md: No such file or directory
+  check-third-party-notices: FAIL — notices are missing required attribution: pointer to the shipped MPL-2.0 license text
+  grep: NOTICE.md: No such file or directory
+  check-third-party-notices: FAIL — NOTICE.md does not point at docs/legal/AUTHORIZATIONS.md (the DHI basis of record)
+  check-third-party-notices: FAIL — LICENSE copyright holder does not match the recorded employer-IP authorization
+  grep: CONTRIBUTING.md: No such file or directory
+  check-third-party-notices: FAIL — CONTRIBUTING.md does not state the inbound contribution license (MIT)
+  
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///Users/mcavage/dev/pix/tests/legal-inclusion-and-docker-base.test.mjs:25:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.start (node:internal/test_runner/test:1096:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:385:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/legal-inclusion-and-docker-base.test.mjs:107:1
+✖ NOTICE.md states ownership, disclaims third-party affiliation, and claims no legal advice (0.168584ms)
+  Error: ENOENT: no such file or directory, open '/Users/mcavage/dev/pix/NOTICE.md'
+      at Object.readFileSync (node:fs:436:20)
+      at TestContext.<anonymous> (file:///Users/mcavage/dev/pix/tests/legal-inclusion-and-docker-base.test.mjs:108:20)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'open',
+    path: '/Users/mcavage/dev/pix/NOTICE.md'
+  }
+
+test at tests/legal-third-party-notices.test.mjs:153:1
+✖ committed THIRD_PARTY_NOTICES.md is in sync with the ledger (no drift) (0.522375ms)
+  AssertionError [ERR_ASSERTION]: THIRD_PARTY_NOTICES.md must exist and be committed
+      at TestContext.<anonymous> (file:///Users/mcavage/dev/pix/tests/legal-third-party-notices.test.mjs:154:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+
+total: 34.095s
+budget: not evaluated (a segment failed)
+
+reviewable findings (over 1.000s — comment, not a block):
+  go-test      5.010s  TestVerifyOllamaInferenceUsesResolvedEndpoint
+  go-test      3.050s  TestDaemonRefusesWhenAnotherProcessOwnsThePort
+  go-test      2.110s  TestSbxVersionGate_MissingOrDeniedNeverBlocks
+  go-test      1.980s  TestDaemonWedgedIsEvicted
+  go-test      1.890s  TestAdapters_MCPAuthDeadlineOutranksTheKilledProcess
+  go-test      1.680s  TestHolderUseNeverMissesInflightBeforeDrain
+  go-test      1.660s  TestDaemonSlowStartIsNotAFailure
+  go-test      1.310s  TestDaemonNeverBindingFailsWithinTheBudget
+  go-test      1.110s  TestBrowserAllocatorArgv
+  go-test      1.060s  TestRunner_CandidateBuildConcurrency
+  go-test      1.000s  TestCheckEnvironmentCreateThenExecInvocation_FreshProbeFailureFailsTheCheck
+  node-test    4.080s  multi-shell FIFO holds (behavioral): two real background sessions stay alive with zero bytes sent, released one then the other, deterministically — even with a delayed create/attach, proving the waits actually wait rather than winning a timing race
+  node-test    1.933s  multi-shell FIFO holds (behavioral): readiness needing MORE than 30 polls still succeeds under the cold-pull windows (180s create / 90s attach), proven via shrunk injectable poll-interval/window constants rather than real minutes of sleep
+  node-test    1.328s  a silent TOOL call outliving the short idle budget is not killed
+  node-test    1.304s  the tool budget never demotes an explicit longer per-agent idle_ms
+  node-test    1.050s  scripts/check-third-party-notices.sh passes on the real tree
+  node-test    1.050s  scripts/check-third-party-notices.sh passes on the real tree
+
+timing artifact: /tmp/wave-c-evidence/gate-asis/timing.json (logs in /tmp/wave-c-evidence/gate-asis/logs/)

@@ -1,87 +1,40 @@
-# pix-host
+# The Pix launcher
 
-The single compiled **Go** binary for everything that runs on the **host** (outside
-the sandbox).
+This Go module builds `pix`, the only user-facing host binary. It resolves a named
+environment, composes a native sbx document, launches or attaches Pi, and manages
+Pix-owned session/task lifetime. The separate [memory module](../memory/README.md)
+runs in a Docker container; integrations are reached through the sbx MCP Gateway.
 
-**Convention:** host code is Go (one static binary); in-sandbox code (pi
-extensions, in-box MCP) is TypeScript. Why Go on the host: a single binary is
-saner to ship, and a Node/Python interpreter that listens on a socket and spawns a
-child process from network input is backdoor-shaped — endpoint security / EDR
-flags exactly that. A compiled Go binary doing the same work runs unflagged.
+Read [AGENTS.md](../../AGENTS.md) for code ownership and safety invariants, and
+[the architecture](../../docs/design/pix-v2-architecture.md) before changing a
+boundary. There is no host daemon, plugin framework, model router, or private
+memory RPC to extend.
 
-## Subcommands
+## Entry points
 
-```
-# non-MCP host HTTP services (run by `make serve`, reached over host.docker.internal):
-pix-host memory        memory store, JSON-RPC         (:11435)
-pix-host serve         run the enabled services together (SERVICES) —
-                            supervises memory (:11435) + knowledge (:11436 when enabled)
+- `cmd/pix/root.go`: command dispatch; `pix help --all` is generated from it.
+- `workflow/env/`: shared environment preview/launch composition and fingerprints.
+- `workflow/launch/`: sandbox creation, attachment, session locks, and teardown.
+- `workflow/provision/` and `container/`: runtime preparation and memory lifecycle.
+- `envinfo/`, `envsetup/`, `hosttrust/`: sidecar parsing, approved snapshots, trust.
+- `inference/` and `secret/`: named model bindings and scoped credential delivery.
+- `pixhome/` and `stack/`: authoritative storage paths and stack resource names.
 
-# MCP servers (stdio, run by the sbx gateway via `sbx mcp add` / `make mcp-register`):
-pix-host slack         Slack read/search MCP
-# NB: Google Workspace (`gog`) is the EXTERNAL `gog` CLI registered as a host MCP
-#     server — NOT a pix-host subcommand. See the gog bullet below.
-```
+## Build and test
 
-- **memory** — the self-learning store: JSON-RPC over HTTP, pure-Go sqlite + FTS5,
-  embeddings + capture watcher via Ollama. Env: `MEMORY_*`, `OLLAMA_HOST`.
-- **knowledge** — the OKF knowledge store: JSON-RPC over HTTP (:11436), pure-Go
-  sqlite + FTS5 + embeddings, indexing the OKF bundle dirs listed in
-  `knowledge_bundles`. NOT a top-level subcommand — it runs under `serve` (and via
-  `plugin knowledge`) when `knowledge` is in the enabled services set.
-- **gog** — Google Workspace read MCP. This is the **external `gog` CLI**, NOT a
-  `pix-host` subcommand: it is registered as a host MCP server (via `pix
-  mcp register` / `make mcp-register`) and the sbx gateway runs it on the host once
-  registered — like `slack`, but a separate binary. NOT an HTTP daemon, NOT in
-  `make serve`. Creds stay on the host in `GOG_HOME` (never in the VM). **Read-only
-  + `--gmail-no-send` by default** — typed read tools (`gmail_search`,
-  `gmail_get_message`, `drive_search`, `drive_get`, `docs_get`, `sheets_read_range`,
-  `calendar_events`); write tools are gated/off. Returned Gmail/Doc content is
-  **wrapped as untrusted** (prompt-injection guard). Registered via `make
-  mcp-register`, attached at sandbox creation.
-- **slack** — stdio MCP server. NOT an HTTP daemon, NOT in `make serve`; the MCP
-  gateway runs it on the host once registered. `sbx mcp add` (local stdio) has no
-  `--env`, so creds come from 1Password: the registered command is
-  `op run --env-file=config/op-refs.env -- pix-host slack` (see
-  `make mcp-register`), and `op` resolves the refs at spawn time — nothing in the
-  registration or the VM. Reads `SLACK_TOKEN`/`SLACK_TEAM_ID` at startup; declare
-  the refs in `config/op-refs.env`.
-
-**Private integrations.** Company-specific connectors are NOT compiled in and are
-never in the public tree. A host-executing MCP server (e.g. an HR-directory MCP)
-ships as a **container** (OCI image + `server.json`), referenced by a pack
-`[[integrations]] manifest` and run on the HOST by the sbx gateway; a host-only
-service (e.g. a warehouse exec-proxy) ships as a standalone **host daemon** with a
-thin in-sandbox `[[proxy]]` wrapper in the pack. **No `pix-host` recompile is
-ever needed** — the only host-side extension point is the generic, SHA-pinned
-`[plugins.*]` external-process mechanism (`serve_plugin.go`): an operator points a
-capability slot at an external binary (path + sha256), and the supervisor
-sha-verifies and launches it as a go-plugin subprocess. See
-`docs/design/packs.md`.
-
-The MCP stdio transport is newline-delimited JSON (what the gateway speaks);
-`mcpStdio` also tolerates Content-Length framing on input.
-
-## Build / run
+From this directory:
 
 ```bash
-make serve            # builds pix-host + runs `serve` (the `services` list from config.toml)
-# or directly:
-cd services/host && go build -o pix-host . && ./pix-host serve
+go build ./...
+go test ./...
+go vet ./...
 ```
 
-Deps: `modernc.org/sqlite` (pure-Go sqlite + FTS5, so the binary stays single and
-static) and `github.com/google/uuid`. The binary is gitignored.
+From the repository root, `bash scripts/gate.sh` adds the cross-language and
+architecture checks. Use `make load` for a complete host-UAT bundle, not a binary
+copied away from its matching runtime archive and manifest. A unit test that
+imports a helper does not replace an integration test of its real CLI caller.
 
-In-sandbox code (pi extensions, e.g. `extensions/memory-recall.ts`) stays
-TypeScript and talks to these over HTTP.
-
-## Security note: host service trust boundary
-
-The host HTTP services bind to `127.0.0.1` and are **unauthenticated by default** —
-any process on the host (including any sandbox reaching `host.docker.internal`) can
-drive them (e.g. read/write the memory store). This is the
-deliberate single-user assumption: your machine, your disposable VMs, your data.
-It's bounded by loopback binding. To require a shared secret on a service, set its
-`*_AUTH` env var (the sandbox wrapper sends the matching value). Do not bind these
-to a routable interface or run them on a shared host without an auth proxy.
+All user-owned state is under `PIX_HOME`, default `~/.pix`. Resolve it through
+`pixhome`, and derive resource identities through `stack`. Host-global sbx secrets
+are ignored; provider and GitHub references are resolved for each sandbox.

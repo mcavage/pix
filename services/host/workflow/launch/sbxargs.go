@@ -14,9 +14,10 @@ const kitRepo = "git+https://github.com/mcavage/pix.git"
 
 // DockerImageRepo is the published image repo. A local build pins a locally
 // loaded tag from <repo>/out/.local-image-tag via --template.
-const DockerImageRepo = "docker.io/mcavage/pix"
+const DockerImageRepo = "docker.io/mcavage/pix-agent"
 
 type RunOpts struct {
+	Verbose       bool
 	Workspace     string   // positional DIR (default ".")
 	Dev           bool     // --dev: Mode B, skills load live from a repo checkout
 	DevRoot       string   // resolved repo root when Dev is set (caller resolves)
@@ -26,19 +27,39 @@ type RunOpts struct {
 	Skills        []string // --skills DIR: extra live skill trees
 	Kits          []string // --kit K: escape hatch. When present they REPLACE the auto git/local pin, then the config stack applies.
 	KitRef        string
-	MCP           []string // --mcp M: extra servers on top of config.MCP (folded into StaticMCP by the caller)
-	StaticMCP     []string // RESOLVED create-time set, emitted as --static-mcp (mcp.AllPreloadedMCP of cfg.MCP+MCP)
+	MCP           []string // --mcp M: flag-requested servers (folded into StaticMCP by the caller)
+	StaticMCP     []string // RESOLVED create-time set, emitted as --static-mcp (mcp.AllPreloadedMCP of MCP + built-ins)
 	Name          string   // --name N: sandbox name
-	Model         string   // --model M: active pi model (passed through to pi)
-	Models        []string // create-time callable model cycle, derived from probed bindings
-	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
-	Pack          string   // --pack PATH: active pack for this run (overrides config.Pack)
+	// Env is `--env NAME`: the EXACT registered environment this run
+	// launches under, overriding the configured default for this run only
+	// (never written back to config). EnvName is the name that actually
+	// RESOLVED (the explicit one, else the machine default, else "" for
+	// D17's `none`), filled in by the command layer once selection ran.
+	Env     string
+	EnvName string
+	Model   string   // --model M: active pi model (passed through to pi)
+	Resume  string   // --resume SESSION: resume this pi session, on every path (create or attach)
+	Models  []string // create-time callable model cycle, derived from probed bindings
 	// Keep is -k/--keep: bind a sticky, identity-bound keep marker to this
 	// session — what the teardown and the orphan sweep refuse on.
 	Keep        bool
 	PackKits    []string
 	Passthrough []string // args after `--`, handed straight to pi
 	Token       string
+	// Recreated marks the retry of a launch whose sandbox was removed by a
+	// SAFE AUTOMATIC RECREATE on this invocation. It exists so exactly one
+	// recreate can happen per `pix run`: a second recreation-safe drift on
+	// the retry is a refusal with the manual sequence, never a loop.
+	Recreated bool
+	// LauncherVersion is the version string THIS pix binary was stamped
+	// with (`main.version`, set by the Makefile's LAUNCHER_VERSION
+	// -ldflags). It is carried on RunOpts rather than threaded as yet
+	// another `version string` parameter so there is ONE field every launch
+	// decision that depends on the build identity reads: the session
+	// fingerprint's `launcher_version` component and the Pix-managed
+	// `PIX_LAUNCHER_VERSION` environment fact both come from here, so they
+	// can never disagree about which build created a sandbox.
+	LauncherVersion string
 }
 
 func gitKitURLRef(ref, version string) string {
@@ -168,7 +189,7 @@ func MountDirs(cfg *config.Config, o RunOpts) []string {
 }
 
 func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
-	var piArgs []string
+	piArgs := []string{"--session-dir", ".pi-sessions"}
 	if o.Dev {
 		// Mode B: turn off baked skills and load the repo tree live.
 		piArgs = append(piArgs, "--no-skills", "--skill", filepath.Join(o.DevRoot, "skills"))
@@ -178,6 +199,9 @@ func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
 	}
 	if o.Model != "" {
 		piArgs = append(piArgs, "--model", o.Model)
+	}
+	if o.Resume != "" {
+		piArgs = append(piArgs, "--session", o.Resume)
 	}
 	if len(o.Models) > 0 {
 		piArgs = append(piArgs, "--models", strings.Join(o.Models, ","))
@@ -232,9 +256,12 @@ func WillCreate(state SbxState) bool { return state == SbxAbsent }
 // the session, exactly as on a fresh create.
 func BuildReattachArgs(o RunOpts) []string {
 	args := []string{"run", "--name", o.Name}
-	var piArgs []string
+	piArgs := []string{"--session-dir", ".pi-sessions"}
 	if o.Model != "" {
 		piArgs = append(piArgs, "--model", o.Model)
+	}
+	if o.Resume != "" {
+		piArgs = append(piArgs, "--session", o.Resume)
 	}
 	piArgs = append(piArgs, o.Passthrough...)
 	if len(piArgs) > 0 {

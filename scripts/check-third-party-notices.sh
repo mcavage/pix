@@ -62,7 +62,7 @@ fi
 # the Dockerfile (not npm/go.mod managed), pinned by an ARG. Fails closed if
 # the Dockerfile ARG drifts from the ledger's recorded, license-verified
 # version (e.g. someone bumps RUFF_VERSION without touching the ledger).
-if node scripts/legal/generate-third-party-notices.mjs --check-baked-tools Dockerfile >"$TMP_DIR/baked.out" 2>"$TMP_DIR/baked.err"; then
+if node scripts/legal/generate-third-party-notices.mjs --check-baked-tools images/agent/Dockerfile >"$TMP_DIR/baked.out" 2>"$TMP_DIR/baked.err"; then
 	ok "baked-tool (ruff/fd/go) versions match the ledger"
 else
 	fail "baked-tool (ruff/fd/go) version drift between Dockerfile and the ledger"
@@ -74,14 +74,14 @@ fi
 # serves at build time, which makes the ledger's recorded version/license a
 # claim about an unreproducible build. Fails closed on drift between
 # ARG TYPESCRIPT_VERSION and the ledger's npmGlobal entry.
-if node scripts/legal/generate-third-party-notices.mjs --check-npm-pins Dockerfile >"$TMP_DIR/npmpins.out" 2>"$TMP_DIR/npmpins.err"; then
+if node scripts/legal/generate-third-party-notices.mjs --check-npm-pins images/agent/Dockerfile >"$TMP_DIR/npmpins.out" 2>"$TMP_DIR/npmpins.err"; then
 	ok "ARG-pinned npm globals (typescript) match the ledger"
 else
 	fail "ARG-pinned npm global version drift between Dockerfile and the ledger"
 	cat "$TMP_DIR/npmpins.err" >&2
 fi
 
-if grep -qE 'npm install -g --ignore-scripts "typescript@\$\{TYPESCRIPT_VERSION\}"' Dockerfile; then
+if grep -qE 'npm install -g --ignore-scripts "typescript@\$\{TYPESCRIPT_VERSION\}"' images/agent/Dockerfile; then
 	ok "Dockerfile installs typescript at the pinned ARG version"
 else
 	fail "Dockerfile installs an UNPINNED global typescript (use typescript@\${TYPESCRIPT_VERSION})"
@@ -130,11 +130,24 @@ require_text() { # require_text <pattern> <label>
 require_text 'astral-sh/ruff' "ruff (baked tool) attribution"
 require_text 'sharkdp/fd' "fd (baked tool) attribution"
 require_text 'go\.dev/dl' "Go toolchain (baked tool) attribution"
-require_text 'hashicorp/go-plugin.*MPL-2\.0|MPL-2\.0.*go-plugin' "go-plugin MPL-2.0"
-require_text 'hashicorp/yamux.*MPL-2\.0|MPL-2\.0.*yamux' "yamux MPL-2.0"
-require_text 'thejerf/suture' "Suture attribution"
+# go-plugin/yamux (MPL-2.0) and Suture were deleted with pix-host's
+# supervision tree in the Pix v2 cutover (docs/design/pix-v2-architecture.md
+# §14, AC-16). Their attribution is required ONLY while the ledger actually
+# carries a live entry for them — requiring it unconditionally would fail
+# closed on a correct, honest ledger the moment the dependency is gone.
+if [ "$(node -e 'process.stdout.write(String((require("./scripts/legal/dependencies.json").goModules||[]).filter(m=>m.class==="weak-copyleft").length))')" != "0" ]; then
+	require_text 'MPL-2\.0' "weak-copyleft (MPL-2.0) attribution for the live ledger entry/entries"
+	require_text 'licenses/MPL-2\.0\.txt' "pointer to the shipped MPL-2.0 license text"
+else
+	ok "no weak-copyleft (MPL-2.0) dependency in the ledger (go-plugin/yamux deleted with pix-host; nothing to attribute)"
+fi
+if [ "$(node -e 'process.stdout.write(String((require("./scripts/legal/dependencies.json").goModules||[]).filter(m=>/suture/.test(m.module)).length))')" != "0" ]; then
+	require_text 'thejerf/suture' "Suture attribution"
+else
+	ok "no live Suture dependency in the ledger (deleted with pix-host's supervision tree; nothing to attribute)"
+fi
 # The planned-dependency marker is only required while the ledger actually
-# carries a planned entry (Suture was the last one; it is live as of U07).
+# carries a planned entry.
 if [ "$(node -e 'process.stdout.write(String((require("./scripts/legal/dependencies.json").goModulesPlanned||[]).length))')" != "0" ]; then
 	require_text 'planned' "planned-dependency marker"
 else
@@ -142,12 +155,9 @@ else
 fi
 require_text '@earendil-works/pi-tui' "patched pi-tui attribution"
 require_text 'PATCH' "patched-component marker"
-require_text 'github\.com/hashicorp/go-plugin/tree/v1\.8\.0' "go-plugin Source Code Form URL (MPL-2.0 s3.2)"
-require_text 'github\.com/hashicorp/yamux/tree/v0\.1\.2' "yamux Source Code Form URL (MPL-2.0 s3.2)"
-require_text 'licenses/MPL-2\.0\.txt' "pointer to the shipped MPL-2.0 license text"
 
 # --- 4. inclusion: image + tarball -------------------------------------------
-if grep -qE 'COPY[[:space:]].*THIRD_PARTY_NOTICES\.md[[:space:]]' Dockerfile; then
+if grep -qE 'COPY[[:space:]].*THIRD_PARTY_NOTICES\.md[[:space:]]' images/agent/Dockerfile; then
 	ok "Dockerfile COPYs THIRD_PARTY_NOTICES.md into the image"
 else
 	fail "Dockerfile does not COPY THIRD_PARTY_NOTICES.md into the image"
@@ -155,13 +165,13 @@ fi
 
 # MIT s2 ("included in all copies") + MPL-2.0 s3.1: pix's own license and the
 # MPL text must travel with the image, not only live in the repo.
-if grep -qE 'COPY[[:space:]].*[[:space:]]LICENSE[[:space:]]' Dockerfile; then
+if grep -qE 'COPY[[:space:]].*[[:space:]]LICENSE[[:space:]]' images/agent/Dockerfile; then
 	ok "Dockerfile COPYs LICENSE into the image"
 else
 	fail "Dockerfile does not COPY LICENSE into the image (MIT s2)"
 fi
 
-if grep -qE 'COPY[[:space:]].*[[:space:]]licenses/[[:space:]]' Dockerfile; then
+if grep -qE 'COPY[[:space:]].*[[:space:]]licenses/[[:space:]]' images/agent/Dockerfile; then
 	ok "Dockerfile COPYs licenses/ (MPL-2.0 text) into the image"
 else
 	fail "Dockerfile does not COPY licenses/ into the image (MPL-2.0 s3.1)"
@@ -189,7 +199,7 @@ else
 	fail "publish.yml does not run verify-provenance.sh against the merge job's published digest (AC-REL-04)"
 fi
 
-if grep -qF 'image: ${{ env.IMAGE }}@${{ needs.merge.outputs.digest }}' .github/workflows/publish.yml; then
+if grep -qF 'image: ${{ env.AGENT_IMAGE }}@${{ needs.merge.outputs.digest }}' .github/workflows/publish.yml; then
 	ok "publish.yml generates the SBOM against the PUBLISHED image digest"
 else
 	fail "publish.yml does not generate an SBOM against the published image digest (AC-REL-04)"

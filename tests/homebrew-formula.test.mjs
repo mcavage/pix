@@ -32,7 +32,7 @@ const INSTALL_SH = fs.readFileSync(path.join(REPO_ROOT, "install.sh"), "utf8");
 function tarballMembers() {
 	const m = PUBLISH.match(/tar -C "\$stage" -czf "[^"]+"\s+(.+)$/m);
 	assert.ok(m, "could not find the darwin tarball's `tar` command in publish.yml; if the packaging step moved, this parser must move with it");
-	return m[1].trim().split(/\s+/).filter(Boolean);
+	return m[1].trim().split(/\s+/).filter(Boolean).map(p => p.replaceAll('"', "").replace("${V}", "VERSION"));
 }
 
 /**
@@ -45,10 +45,10 @@ function formulaInstalledPaths() {
 	assert.ok(block, "packaging/homebrew/pix.rb has no `def install` block");
 	const paths = [];
 	for (const line of block[1].split("\n")) {
-		const stripped = line.replace(/#.*$/, "");
+		const stripped = line.replace(/^\s*#.*$/, "");
 		const call = stripped.match(/^\s*[\w.]+\.install\s+(.+)$/);
 		if (!call) continue;
-		for (const q of call[1].matchAll(/"([^"]+)"/g)) paths.push(q[1]);
+		for (const q of call[1].matchAll(/"([^"]+)"/g)) paths.push(q[1].replace("#{version}", "VERSION"));
 	}
 	assert.ok(paths.length > 0, "parsed no installed paths out of `def install`");
 	return paths;
@@ -65,11 +65,13 @@ test("the formula only installs paths the tarball actually contains", () => {
 	);
 });
 
-test("the formula installs both binaries, so a bad edit cannot ship a formula that installs nothing runnable", () => {
+test("the formula installs the pix binary, so a bad edit cannot ship a formula that installs nothing runnable", () => {
 	const installed = formulaInstalledPaths();
-	for (const bin of ["pix", "pix-host"]) {
-		assert.ok(installed.includes(bin), `the formula must install ${bin}`);
-	}
+	assert.ok(installed.includes("pix"), "the formula must install pix");
+	// There is no pix-host any more (services/host/cmd/pix is the one build
+	// target): a formula that reintroduces it would be installing a binary the
+	// tarball no longer stages.
+	assert.ok(!installed.includes("pix-host"), "the formula must not install pix-host (it no longer ships)");
 });
 
 test("Homebrew installs every notice install.sh installs, so brew is not the one channel that drops them", () => {
@@ -101,4 +103,11 @@ test("the bump job copies this file over the tap's, so the vendored formula is g
 		/cp "\$GITHUB_WORKSPACE\/packaging\/homebrew\/pix\.rb" tap\/Formula\/pix\.rb/,
 		"publish.yml must copy packaging/homebrew/pix.rb over the tap's Formula/pix.rb before rewriting version/url/sha256",
 	);
+});
+
+// Bundle discovery follows the executable symlink. Keep the entire bundle in
+// the private keg directory, and expose only the command in Homebrew's bin.
+test("Homebrew keeps the runtime beside the resolved executable", () => {
+	assert.match(FORMULA, /libexec\.install "pix", "release-manifest\.json", "pix-runtime-#\{version\}\.tar\.gz"/);
+	assert.match(FORMULA, /bin\.install_symlink libexec\/"pix"/);
 });

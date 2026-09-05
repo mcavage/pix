@@ -7,38 +7,13 @@
 export default [
 	{
 		id: "argv.op-run-wrapper.exact-grammar",
-		description: 'mcp.OpRunWrap is the ONE op-run wrapper grammar the launcher ever generates: `<op> run --no-masking --env-file=<refs> --`. Widening this (extra flags, different ordering, a different env-file form) changes what credentials the sbx gateway resolves at spawn, so it must stay exactly this shape. It is a shared function rather than an inline string because TWO callers must produce byte-identical commands — registration (what the gateway spawns) and doctor\'s health probe (what we claim to have verified). A probe that does not go through this wrapper proves nothing about the thing it checks.',
+		description: 'Pin the single op-run credential wrapper. Preview and launch both use workflow/env.EnvironmentFacts; the end anchor follows the next surviving function after deletion of unused MCP administration code.',
 		checks: [
 			{
 				file: "services/host/mcp/mcp.go",
 				kind: "contains",
-				region: { start: "func OpRunWrap(opPath, opRefs string, argv []string) []string {", end: "\n// RegisterServers" },
+				region: { start: "func OpRunWrap(opPath, opRefs string, argv []string) []string {", end: "\n// outputContainsCanonicalEndpoint" },
 				values: ['return append([]string{opPath, "run", "--no-masking", "--env-file=" + opRefs, "--"}, argv...)'],
-			},
-			{
-				// The probe path must go through the shared wrapper, not rebuild
-				// its own. This is the check that keeps "verified" honest.
-				file: "services/host/workflow/doctor/mcp.go",
-				kind: "contains",
-				values: ["mcp.OpRunWrap(creds.OpPath, creds.OpRefsPath, s.Probe)"],
-			},
-		],
-	},
-	{
-		id: "argv.raw-add-args.no-env-flag",
-		description: 'McpRegistrar.AddArgs registers a local MCP server via `sbx mcp add <name> --command <argv[0]> --args <argv[1]> ...`. There is deliberately no `--env` form (see AGENTS.md MCP section, "no `--env`") \u2014 credentials only ever arrive via the op-run wrapper above, never as a literal env flag on the registration command.',
-		checks: [
-			{
-				file: "services/host/mcp/mcp.go",
-				kind: "contains",
-				region: { start: "func (m McpRegistrar) AddArgs(name string) []string {", end: "\n// ExecArgv" },
-				values: ['args := []string{"mcp", "add", name, "--command", argv[0]}', 'args = append(args, "--args", c)'],
-			},
-			{
-				file: "services/host/mcp/mcp.go",
-				kind: "notContains",
-				region: { start: "func (m McpRegistrar) AddArgs(name string) []string {", end: "\n// ExecArgv" },
-				values: ["--env"],
 			},
 		],
 	},

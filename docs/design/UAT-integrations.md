@@ -1,5 +1,12 @@
 # UAT — integrations remediation
 
+> **HISTORICAL — pre-v2 design note.** This document predates the accepted
+> Pix v2 surface and architecture (`docs/design/pix-v2-surface.md`,
+> `docs/design/pix-v2-architecture.md`), which supersede it. Commands,
+> files, and components described here may no longer exist. Nothing in it
+> is a description of current behavior; read it as history only.
+
+
 Acceptance criteria for the pix + gm-pix-pack integrations work. Written to be
 executed by someone with **no context on how it was implemented**: every item
 below is a behaviour a user can observe, not an implementation detail.

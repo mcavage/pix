@@ -6,7 +6,6 @@ description: >-
   time-to-value, zero yak-shaving, and no walls of text.
 tools: read, grep, find, ls, bash
 web: false
-intent: review
 thinking: high
 max_turns: 30
 ---
