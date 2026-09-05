@@ -8,252 +8,53 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
-### Fixed: complete release installation
+Pix v2 is a breaking cutover to native Docker Sandbox environments. Existing
+v1 configuration and removed commands are not translated automatically. See
+[getting started](docs/getting-started.md) for the current setup flow.
 
-Published macOS tarballs now include the release manifest and runtime archive
-beside the launcher. Homebrew and the compatibility installer retain all three,
-so a fresh install can complete setup. Reinstalling repairs a missing bundle;
-uninstalling preserves environments, credentials and memory. The compatibility
-installer requires 1Password only when setup needs direct provider keys.
+### Environments and onboarding
 
-The user guides, maintainer instructions, security and memory documentation now
-describe the v2 environment workflow. Historical designs are labeled separately.
+- One host command, `pix`, launches the pinned agent image through native sbx
+  environments. The pack system, `pix-host`, plugins, resident supervisor,
+  custom memory RPC and scored model router are removed.
+- `pix env add` adopts a local directory or Git repository. `default` and all
+  other environment names share the same guided setup; names are arbitrary.
+- Setup collects missing connection details, preserves completed work on retry,
+  and explicitly asks whether to make the environment the default for future runs.
+- Terminal input supports editing, backspace, pasted references and Ctrl-C,
+  including in Ghostty. Normal output explains progress; `--verbose` exposes
+  redacted diagnostics and trust details.
 
-Pix v2 is a direct, breaking cutover, not an incremental release: the
-scored model router, `pix-host`, the pack system, and the custom memory RPC
-are deleted outright, not deprecated. There is no migration path and no
-compatibility shim — `~/.pix` from a v1 install is not read by this build.
+### Runtime and credentials
 
-### Fixed — an environment's own inference decides whether a run needs a key
+- The sbx MCP Gateway is the only sandbox-facing integration path. Memory runs
+  as a separate Docker container, with persistent storage under `PIX_HOME`.
+- Each home has scoped runtime resources, its own memory port and cleanup
+  limited to its sandboxes. Stack names prevent collisions, not access by other
+  processes running under the same host login.
+- Provider and GitHub credentials resolve from 1Password references into
+  sandbox-scoped secrets on each create/attach. Host-global sbx secrets are
+  ignored. Environments using an authenticated gateway or keyless models do not
+  trigger an unrelated provider-key interview.
+- Pi is pinned to 0.85.1. GPT-6 Astra and Gemini 3.8 Flash are available; model
+  rates, including cache and context tiers, come from Pi's pinned catalog.
+- Subagent results expose the actual responding provider and model. Harness
+  health and repository health are separate skills. Memory checks distinguish
+  effective capture mode from backend readiness and probe embeddings after use.
 
-`pix run --env NAME` resolved the selected environment's `[inference.*]`
-declarations AFTER the personal provider-key gate, so an environment that
-reaches every model through an sbx-session gateway still opened the base
-"Set up model providers from 1Password?" interview — and, non-interactively,
-refused the launch outright — for a key that run was never going to use. The
-effective inference config (machine config merged with the environment's own
-backends and models) is now resolved BEFORE that gate, and one per-run
-`keyless` fact derived from it gates both the bootstrap and the per-sandbox
-credential preparation. An environment that declares no inference of its own
-is unchanged: it still needs a provider key and still says so.
+### Installation and maintenance
 
-### Added — a successful `pix setup --env NAME` offers to select it
-
-Setting up an environment never moved the machine default, so `pix setup
---env work` could finish clean and a bare `pix` would keep launching
-`default` — the work environment's whole configuration silently absent, with
-no error to read. A successful named setup now ends with one default-Yes
-question ("Use work as the default environment for future pix runs?"), and
-records the answer through `config.SetDefaultEnvironmentAt`, the same single
-writer `pix env default NAME` owns. Declining changes nothing;
-a non-interactive run never writes and prints the exact command instead.
-
-### Added — resident host services on the same status surface
-
-The `integrations:` section of `pix env show NAME` now also carries one row
-per `[[host.services]]` entry the environment's `pix.toml` declares, probed
-through that entry's own `probe` URL. Before this, a warehouse proxy that
-was not answering produced no output at all, which reads as "nothing to
-report". A service row reports `declared` and `reachable` only: Pix starts,
-supervises and registers nothing for a host service, so a `registered`
-column there would be a claim about a registry the row does not live in.
-The probe is fetched only when it is plain HTTP on loopback; anything else
-stays `unknown` and is never requested.
-
-### Added — `${PIX_HOME}` in static MCP argv
-
-`mcp.servers[].command`/`args` in `.sbxenv.yaml` are static argv with no
-shell, so a host MCP server that keeps durable state had to choose between
-a hard-coded `/Users/<someone>` and a named Docker volume that no PIX_HOME
-can see, back up, or reset. `${PIX_HOME}` is now the one interpolation
-variable Pix itself defines and substitutes before rendering the effective
-document; every other `${VAR}` is left for sbx to resolve, so the persisted
-effective document never becomes a sink of resolved host values. The
-convention for that state is `<PIX_HOME>/.state/integrations/<name>`, which
-Pix locates but never creates or populates.
-
-### Added — typed metadata for an environment's declared setup values
-
-`pix.toml` `[host.values.<NAME>]` takes `label`, `help`, `example` and
-`required` for a name the environment already declares in some
-`[host.mcp.<x>]`'s `env_keys`/`plain_keys`. It is presentation only: those
-fields are shown by `pix setup --env NAME` and are never fingerprinted,
-because they cannot change what an environment executes, mounts, or is
-handed. `required = false` is the one behavioral bit; absent means true.
-
-### Changed — `pix setup --env NAME` is scoped to that environment
-
-An environment-scoped setup asks nothing about personal provider keys: it
-prompts for exactly the values the named environment declares. Personal
-provider configuration stays in the unscoped `pix setup`.
-
-### Fixed
-
-- `[[setup]]` hooks run in authored order. They were sorted by id, so an
-  environment whose second hook depended on its first could not express
-  that ordering at all.
-- The sandbox creation path passes sbx's actual `--skip-auth` flag; the
-  underscore spelling was rejected by sbx.
-
-### Removed — the last of the `pix-host serve` supervision surface
-
-`DesiredHostServices`/`EnvironmentHolders` (the v1 desired-set union and
-live-holder query that `pix-host serve` and `pix env forget` called) are
-deleted rather than kept alive by their own tests. Neither verb exists in
-v2, `[[host.services]]` is review-and-report only, and the reference-lock
-proofs are what `pix rm` actually uses.
-
-### Added — MCP integration status: declared, registered, reachable
-
-`pix env show NAME` now reports three separate facts for every MCP server
-an environment's `mcp:` block declares, instead of letting a bare
-registration count stand in for "working"
-(`docs/design/integrations-remediation.md`'s own name for that gap):
-
-- **declared** — the server is in `.sbxenv.yaml`.
-- **registered** — `ready`/`absent`/`unknown`, read from the same bounded
-  `sbx mcp ls` evidence `pix mcp ls` itself uses
-  (`pix/host/mcp.McpRegEvidenceFrom`), never a second, disagreeing
-  definition of "registered".
-- **reachable** — `ready` only after this environment's OWN declared health
-  probe (`pix.toml [host.mcp.<name>].probe_args`) actually exits zero;
-  `absent` for a verified non-zero exit; `unknown` for everything this host
-  cannot positively resolve, including a server with no declared probe at
-  all. `reachable` is never guessed `ready` from registration alone — a
-  bare TCP dial or unauthenticated HTTP request would prove a socket is
-  open, not that the integration works, so none is attempted.
-
-This is the first real caller of `pix.toml`'s `probe_args` field
-(`HostMCPFact`), which the schema has carried since environments shipped
-but nothing ever executed. `--json` carries the same fields (`declared`,
-`registered`, `registered_detail`, `reachable`, `reachable_detail`) per
-server; an environment with no declared MCP server gets no `integrations`
-section or key at all, in either form.
-
-### Added — coexistence: one PIX_HOME = one stack
-
-Two Pix installations (a release stack and a dev checkout, or two projects'
-homes) can now run on the SAME host at the same time without either one
-adopting, replacing, or deleting the other's resources.
-
-- **One PIX_HOME = one stack, always suffixed.** A stack id is the first 16
-  lowercase hex characters of the sha256 of the canonical (absolute,
-  symlink-resolved) `PIX_HOME` path. Every Pix-owned runtime resource
-  carries it, with no unscoped fallback anywhere: sandboxes are
-  `pix-<stack-id>-<basename>-<workspace-digest>` (an explicit `--name` is
-  scoped too), the memory container is `pix-memory-<stack-id>`, and the two
-  reserved MCP servers are `pix-memory-<stack-id>` and
-  `pix-session-<stack-id>`. A stack id that cannot be derived is an error,
-  never a bare legacy name.
-- **The MCP registry is host-global but namespaced.** `mcp.servers`
-  registration still happens once per host, in the sbx Gateway; the two
-  built-ins simply register under stack-scoped names, so two homes' entries
-  sit side by side instead of overwriting one another.
-- **Each home gets its own loopback memory port**, allocated by `pix setup`
-  and persisted as `memory_port` in that home's `config.toml`. Every reader
-  — the launch's trusted host-state payload, the readiness probe, the
-  effective-document preview — reads THAT value; there is no compiled-in
-  `11435` left in the launcher.
-- **Cleanup only ever touches the current stack.** `pix rm --all`,
-  `pix rm --orphans` and `pix reset` discover sandboxes through a listing
-  filtered to this stack's id, and `pix reset` refuses outright rather than
-  guessing a container name.
-
-### Changed — credentials are sandbox-scoped, never host-global
-
-- **`pix setup` creates the refs file; each run refreshes the sandbox's own
-  secrets.** Provider credentials live in `$PIX_HOME/secrets.env` as
-  `op://` references only. Every create AND every attach re-resolves them
-  and writes them as `sbx secret set -f --sandbox <name> ...`. There is no
-  "already set, skip it" branch, so a rotated 1Password item takes effect on
-  the next run.
-- **Host-global sbx secrets are ignored and never removed automatically.** A
-  global belongs to whoever pushed it, and may be another stack's. Pix reads
-  only its own refs as evidence — `pix doctor`'s provider row is now graded
-  off `secrets.env`, not off `sbx secret ls` — and reports any globals it
-  finds in a separate, read-only "ignored" row. Removing one is your call,
-  never Pix's.
-
-### Added — version identity in every launch
-
-- The stamped launcher version travels on `RunOpts.LauncherVersion`, enters
-  the session fingerprint as `launcher_version`, and is composed into every
-  effective document as the Pix-managed `PIX_LAUNCHER_VERSION` environment
-  fact (beside `PIX_STACK_ID`). `pix env --effective` shows the same two
-  facts a real create writes.
-- Exactly those two composed keys (`env.PIX_LAUNCHER_VERSION`,
-  `env.PIX_STACK_ID`) are recreation-safe, so a version bump takes the
-  existing proof-gated automatic recreate path (fresh listing, zero holders,
-  no keep marker, direct host-mounted workspace). Every other environment
-  variable's drift is substantive and still refuses.
-- **Local builds carry a distinct, derived identity.** A local
-  `make`-produced version is `X.Y.(Z+1)-beta.g<sha7>[.dirty.<12hex>]`, and
-  the launcher binary, the runtime archive, the release manifest, and both
-  locally built image tags (`pix-agent`, `pix-memory`) all share it. Release
-  CI publishes the clean semver instead. `make load` tags and prunes sbx
-  templates under a hash of the canonical worktree path, so one checkout
-  never deletes another's loaded templates, and `make run` no longer pins a
-  fixed `NAME=pix-pix` — the launcher derives its own stack-scoped name.
-
-### Changed (breaking)
-
-- **One binary, not two.** `pix` is now the only host executable: it
-  resolves a named environment, compiles it into one effective native `sbx`
-  document, and launches the pinned `pix-agent` image with `sbx env create`
-  / `sbx exec`. The `pix-host` daemon, `pix serve`, and every launchd/serve
-  lifecycle command are deleted, not merely hidden.
-- **Two images replace the pack system.** `pix-agent` (the sandbox image:
-  pinned pi build, core extensions, patches, entrypoint) and `pix-memory`
-  (an independent Streamable HTTP MCP service, one Docker container) are
-  the whole of what ships. `pack.toml`, pack registration, and pack-scoped
-  MCP wiring are gone.
-- **Native `sbx` environments replace the v1 environment registry.** The
-  only sandbox declaration is `.sbxenv.yaml` plus an optional `pix.toml`
-  sidecar, both plain files under `~/.pix/envs/<name>/`. There is no
-  `add`/`edit`/`use`/`forget` mutation path: create, move, and remove an
-  environment with ordinary filesystem and Git tools. `pix env
-  {list,show,default,trust}` replaces the old registry verbs.
-- **Memory is MCP-only.** `pix-memory` is reached exclusively through the
-  sbx MCP Gateway, over loopback, never a custom protocol and never a
-  direct sandbox connection. `memory_recall`/`memory_remember`/
-  `memory_forget`/`memory_observe`/`memory_stats`/`memory_status`/
-  `memory_snapshot`/`memory_restore` are the whole surface; `/recall`,
-  `/remember`, and `/forget` call the same Gateway-registered endpoint a
-  model's own tool calls use.
-- **`config.toml` is one schema with one writer per field.** `config.Config`
-  is the sole schema for `<PIX_HOME>/config.toml` (`VersionPin`,
-  `Inference`, `DefaultEnvironment`, `MemoryPort`); every mutation is
-  load-modify-save under one file lock, so a concurrent `pix env default`
-  and `pix setup` can never stomp each other's fields. There is no generic
-  `pix config set` verb.
-- **One secrets file.** `<PIX_HOME>/secrets.env` (`op://` references only,
-  mode `0600`) is the only credential file Pix reads or writes — setup
-  seeding, sync, the Gateway wrappers, and `pix secret` CRUD all resolve
-  the same path under one `.secrets.lock` transaction lock.
-- **Removed verbs answer the ordinary unknown-command error, never a
-  retirement notice.** `mcp`, `models`, `config`, `agent`, `pack`, `serve`,
-  `resume`, `status`, and `uat` route nowhere; there are no released users
-  to keep a migration path for.
-
-### Fixed
-
-- **`pix setup` recovers from a lost port-bind race instead of failing
-  opaquely.** A `docker create`/`docker start` failure that names the
-  publish port Pix just tried (`port is already allocated` / `address
-  already in use`) is classified as a recoverable port conflict, the
-  orphaned just-created container is removed by its own ID (never by
-  name), and setup reallocates a fresh loopback port under the config lock
-  and retries, bounded. `config.toml`, the running container, and the
-  registered Gateway URL can never disagree about which port `pix-memory`
-  answers on.
-
-### Unchanged
-
-- **Session-continuity todo clearing is untouched by this cutover.** Task
-  restore and compaction still clear a resumed session's stale todo list
-  using the canonical `pi-stack-todo-cleared` marker (with one release of
-  compatibility for the legacy `pix-todo-cleared` spelling); nothing in the
-  v2 surface change touches this mechanism.
+- Release tarballs include the launcher, release manifest and runtime archive.
+  Homebrew keeps the bundle together; the compatibility installer repairs
+  missing bundle files and preserves user state on uninstall.
+- `make load` builds a coherent binary, runtime and image bundle before loading
+  it into sbx. Local builds have distinct version identities and worktree-scoped
+  image tags.
+- Last-session cleanup retains ownership and liveness proofs, including the
+  concurrent-exit fix from main. Memory setup recovers from a port-allocation
+  race without removing another container.
+- User guides, maintainer instructions and security/privacy documentation now
+  describe v2. Historical designs are labeled separately.
 
 ## 0.1.0 - 2026-07-25
 
