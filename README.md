@@ -1,71 +1,24 @@
 # Pix
 
-Pix runs the [pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-inside a Docker Sandbox. You type `pix` in a directory, you get an agent
-session scoped to that directory, you exit, and your host is untouched.
+An AI workspace for coding, research, and everyday work. Pix runs the
+[Pi agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) in a
+Docker Sandbox with your chosen models, reusable skills, and optional account
+connections.
 
-The sandbox is the boundary, so the agent does not stop to ask permission for
-each command. It can build, test, review its own work with a second model,
-and open a pull request in one run.
+Open a terminal in the folder you want to work on, run `pix`, and describe what
+you need. The agent can read and edit that folder, run tools, and delegate work
+to other models. Your files and saved conversations remain after you exit.
 
-macOS only.
+## Get started
 
-## 1. What you need first
-
-Pix installs none of these. Install them yourself, then check each one.
-
-| Thing | Required? | Install | Check |
-| --- | --- | --- | --- |
-| Homebrew | required | [brew.sh](https://brew.sh) | `brew --version` |
-| `sbx`, Docker Sandboxes, plus a signed-in Docker account | required | `brew install docker/tap/sbx` | `sbx diagnose` |
-| `op`, the 1Password CLI | required to add a direct provider key | `brew install 1password-cli` | `op --version` |
-| `gh`, the GitHub CLI | required to push or open PRs from a sandbox | `brew install gh` | `gh auth status` |
-| llmman or Ollama | optional (see section 5) | [ollama.com](https://ollama.com) | `ollama --version` |
-
-`sbx diagnose` prints a checklist. Every line must be a green tick, including
-**Authentication**. If it is not authenticated, run `sbx login`.
-
-A sandbox has no GitHub credential of its own. Give one every environment
-uses, once:
+Pix's supported host setup is macOS with [Homebrew](https://brew.sh),
+[Docker Desktop](https://docs.docker.com/get-docker/), and Git. Start Docker
+Desktop, then install and sign into Docker Sandboxes:
 
 ```bash
-pix secret set GITHUB_TOKEN op://vault/item/field
+brew install docker/tap/sbx
+sbx login
 ```
-
-Without it the agent can commit inside the sandbox but cannot push or open a
-pull request. Like every other credential this is a reference, not a value:
-each run resolves it into that run's own sandbox-scoped sbx secret. A
-host-global `sbx secret set github` is ignored by Pix (and never removed by
-it).
-
-Pix stores provider keys as 1Password references, never as values on disk.
-That is the only reason `op` is on the required list. If your environment
-already carries credentialed inference, you never add a key and `op` stays
-optional.
-
-### Coexisting installations
-
-One `PIX_HOME` = one **stack**, identified by a 16-hex id derived from the
-canonical `PIX_HOME` path and carried by every Pix-owned resource:
-sandboxes (`pix-<id>-…`), the memory container (`pix-memory-<id>`), and the
-two reserved MCP servers (`pix-memory-<id>`, `pix-session-<id>`). Two homes
-run side by side with their own containers, their own loopback memory ports,
-and their own namespaced entries in the host-global sbx MCP registry.
-Cleanup only ever reaches the current stack.
-
-Scoping is about collisions, not confidentiality. The two homes cannot take
-each other's names, ports, or sandboxes by accident, but the sbx registry is
-one host-global store owned by your user, and a memory registration's URL
-carries that stack's bearer token (sbx has no secret-header alternative yet).
-Anything running as the same host user can read it. Treat a shared login as
-a shared memory service.
-
-Provider keys are `op://` references in `$PIX_HOME/secrets.env`. `pix setup`
-creates that file; every run resolves the refs into **sandbox-scoped** sbx
-secrets, so a rotated 1Password item takes effect on the next run.
-Host-global sbx secrets are ignored and never removed automatically.
-
-## 2. Install
 
 <!-- PIX_PRIMARY_PATH_START -->
 ```bash
@@ -74,213 +27,138 @@ pix setup
 ```
 <!-- PIX_PRIMARY_PATH_END -->
 
-Use the `mcavage/tap/` prefix. Bare `brew install pix` matches no formula,
-and Homebrew will suggest `pixi`, which is a different tool.
+Setup guides you through choosing a model and connecting what it needs. You can
+rerun it if interrupted; completed setup is kept.
 
-`pix setup` is repeatable and idempotent. It checks Docker and `sbx`,
-initializes `PIX_HOME` (default `~/.pix`) as a Git repository,
-installs the pinned `pix-agent` image and strict kit, creates and selects a
-default environment if none exists, and reconciles the `pix-memory`
-container. On an interactive first run it offers to record provider `op://`
-references, without choosing a provider for you; the explicit path is
-`pix secret set`. Local inference is authored directly in an environment's
-own `pix.toml` (section 5).
-A gap it cannot repair is printed with the exact command that fixes it.
+- **API models:** one OpenAI, Anthropic, or Google API key is enough. Store it in
+  1Password, install its CLI with `brew install 1password-cli`, and enable the
+  desktop app's CLI integration. Paste the field's `op://...` reference when
+  prompted, rather than the key itself.
+- **Ollama:** if Ollama is running, setup offers supported installed models,
+  including available cloud models. A local model needs no provider API key;
+  Ollama Cloud uses your Ollama account.
+- **An environment supplied by your team:** follow its setup instructions or
+  [add it below](#use-an-environment). It may provide models without personal API
+  keys.
 
-The home stays small: `context/` is personal content, `envs/` holds named
-environments, `runtime/` is versioned shipped content, and hidden `.state/`
-holds release, memory, trust, sandbox, session, and task state. `config.toml`
-is sparse and records only explicit choices.
+Start a session in an existing project or a new folder:
 
-Bare interactive `pix` runs `pix setup` automatically when this `PIX_HOME`
-has no config, then launches only after setup succeeds. `pix setup` remains the
-explicit first-run and repair command. You do not run it after every upgrade:
-when `brew upgrade` (or a new local bundle) leaves this `PIX_HOME`
-on the previous release, the next ordinary `pix` reconciles the artifacts
-Pix itself owns (runtime, pinned images, default environment, this stack's
-`pix-memory` container and its scoped MCP registration) and prints one
-line saying so. It never resolves a credential, accepts an environment's
-trust, or runs a `[[setup]]` hook on its own; those stay in `pix setup`. A
-machine with no installed release still requires setup, but bare interactive
-`pix` performs it rather than continuing into a partial launch. Explicit
-`pix run` remains the setup opt-out.
+```bash
+mkdir -p ~/pix-work
+cd ~/pix-work
+pix
+```
 
-## 3. How to tell it worked
+Try a request such as “Summarize the documents in this folder” or “Review this
+project and suggest the smallest useful improvement.” Inside the session,
+`/getting-started` gives you a tour.
+
+## Use an environment
+
+An environment supplies a set of models, skills, and connections. `default` is
+created for you; other names are entirely your choice.
+
+For an environment you already have on disk:
+
+```bash
+pix env add ~/path/to/environment team
+pix setup --env team
+pix run --env team
+```
+
+`pix env add` also accepts a Git repository URL. Setup asks whether to make the
+new environment your default. Answer **yes** to use it whenever you type `pix`.
+You can change that choice later:
+
+```bash
+pix env default team
+pix env list
+```
+
+Environment setup may open your browser to connect accounts. If it needs to run
+tools on your computer, Pix asks for your consent. Changes to that access can
+require approval again.
+
+## Daily use
+
+| What you want | Command |
+| --- | --- |
+| Start in the current folder | `pix` |
+| Start in another folder | `pix run ~/path/to/project` |
+| Use an environment for this session | `pix run --env team` |
+| Use a particular configured model | `pix run --model openai/gpt-6-astra` |
+| Keep a sandbox's installed tools between sessions | `pix run --keep` |
+| List your sandboxes | `pix ls` |
+| Remove an idle sandbox | `pix rm NAME` |
+| Work on a separate Git task checkout | `pix task new feature-name` |
+| See all commands | `pix help --all` |
+
+Ordinary sandboxes are removed when their last session exits. Your mounted
+project files and `.pi-sessions` conversations are kept; tools or files stored
+only inside the sandbox are discarded. Use `--keep` when you need those too.
+In scripts, use the explicit `pix run` command; bare `pix` requires a terminal.
+
+## Remember useful context
+
+Inside a session:
+
+```text
+/remember Use concise summaries with the recommendation first.
+/recall writing preferences
+/forget <memory-id>
+```
+
+Memory persists across sessions. Capture is explicit by default. When Ollama's
+embedding model is available, recall can search by meaning as well as keywords;
+otherwise keyword recall still works. Setup can offer to prepare that embedding
+model. See [memory](docs/memory.md) for capture settings, scopes, and backups.
+
+## Push code to GitHub
+
+GitHub access is optional. To let the agent push branches and open pull requests,
+store a suitable token in 1Password and give Pix its reference:
+
+```bash
+pix secret set GITHUB_TOKEN op://vault/item/field
+```
+
+Replace the example with your token's actual reference. The next launch supplies
+it to that sandbox. The sandbox already includes `git` and `gh`; installing or
+logging into `gh` on your host does not configure Pix's sandbox credentials.
+
+## When something needs attention
 
 ```bash
 pix doctor
 ```
 
-Doctor is read-only. Every check reports what it proved: docker and sbx
-availability, environment trust state, model reachability, `op://` reference
-resolution, sbx Gateway MCP registration, and the memory container's health.
-Every failing row names the owning system and one exact next action. Exit
-codes: `0` when nothing required is verifiably broken, a nonzero operational
-failure otherwise, `2` on a usage error.
+Doctor checks readiness and suggests fixes without changing your setup. Rerun
+`pix setup` to finish setup, or `pix setup --env team` to reconnect that
+environment's accounts. Add `--verbose` to setup, run, or doctor for diagnostics.
+If the problem is Docker Sandboxes itself, start with `sbx diagnose`.
 
-## 4. Do I need a model provider API key?
+Upgrade with `brew upgrade mcavage/tap/pix`. Your next launch updates Pix's own
+runtime and memory service as needed. Connection changes remain part of setup.
 
-Usually yes, for a direct key. One key for any one of Anthropic, OpenAI, or
-Google is enough; you do not need all three. Interactive `pix setup` can offer
-to record a 1Password reference; `pix secret check` proves it with a live read.
-When neither `--model` nor `[models].main` is set, Pix uses the shipped current
-default in OpenAI, Anthropic, Google order among configured providers instead
-of Pi's native fallback.
-If your environment's backends carry their own auth (a credentialed gateway,
-for example), doctor reports no provider key needed and means it.
+## Your files and accounts
 
-## 5. Is llmman or Ollama required?
+The agent can change files in mounted folders and use whatever account access
+you authorize. Sandboxing does not undo edits or prevent an authorized tool
+from acting on an external service. Review changes before committing or sharing
+them. Connected content and recalled memory may be sent to your selected model
+provider; see [the security boundary](SECURITY.md).
 
-No. Pix supports both, reached over Ollama's native transport or an
-OpenAI-compatible one (llmman, or any other OpenAI-compatible endpoint). There
-is no setup interview for either: you author a backend and its models
-directly in the environment's own `pix.toml`:
+Pix keeps its settings, environment definitions, credential references, and
+memory under `~/.pix`. Set `PIX_HOME` to use a separate installation; cleanup is
+scoped to that home. Provider keys stay in 1Password, and Pix supplies them through
+sandbox-scoped credentials rather than host-global sbx secrets.
 
-```toml
-[inference.backends.ollama]
-driver = "ollama"
-base_url = "http://host.docker.internal:11434/v1"
-auth = "none"
+## More
 
-[[inference.models]]
-id = "ollama/qwen3.5:9b"
-backend = "ollama"
-upstream_id = "qwen3.5:9b"
-```
-
-`pix run` merges that declaration over machine config for the session it
-launches; `pix setup --env NAME` and `pix doctor` validate what an
-environment declares. Neither ever silently prefers or migrates one backend
-over another. Without a declared backend:
-
-| Capability | With a local backend | Without one |
-| --- | --- | --- |
-| Memory recall | vector ranking plus keyword search | keyword search only |
-| Automatic fact capture (opt-in) | a watcher model extracts facts | unavailable, no watcher model |
-| `/remember` and `/forget` | work | work (an explicit store, not an extraction) |
-| A local model in the session | available, loaded on demand | cloud models only |
-
-Pix does not install model weights during an ordinary run.
-
-## 6. Daily use
-
-```bash
-cd ~/code/my-project
-pix
-```
-
-That is the loop. `pix` launches the sandbox for this directory, or
-reattaches to an existing one, running or stopped, from an interactive
-terminal only; piped or scripted, the same bare form never launches
-anything.
-
-| Command | Does |
-| --- | --- |
-| `pix run [DIR]` | the explicit launch, safe in a script |
-| `pix ls` | your `pix-*` sandboxes: environment, project, holder count |
-| `pix rm NAME` | remove one sandbox (needs zero live holders, unless `--force`) |
-| `pix doctor` | full readiness evidence, with exact fix commands |
-| `pix task new NAME` | an isolated clone plus branch plus sandbox, for parallel work |
-| `pix reset` | remove every `pix-*` sandbox and the memory container, then rename `PIX_HOME` aside |
-
-A normal sandbox is removed after its last holder exits; a **holder** is one
-live node (the interactive session, or a running child agent) that still
-depends on it. `pix reset` is reversible: it renames `PIX_HOME` to a
-timestamped `.bak-` sibling rather than deleting it, and leaves your provider
-keys and Git repos alone.
-
-Removal is never forced by default; it requires proof that no reference
-lock still names the sandbox. `pix rm NAME --force` is the one explicit
-override, and it never widens the `pix-*` namespace.
-
-## 7. Environments
-
-An environment is a directory under `~/.pix/envs/<name>/`, declaring a
-native `.sbxenv.yaml` and an optional `pix.toml` sidecar. There is no
-registration database and no `edit`/`use`/`forget` verb: create, clone,
-edit, and remove one with ordinary filesystem and Git tools. `pix env add`
-is the one exception, adopting an existing source (a local directory or a
-git URL) as a new environment; it never overwrites one that is already
-there.
-
-```bash
-pix env                 # list environments, the default, and trust state
-pix env add SOURCE [NAME] # adopt an existing local dir or git URL as a new one
-pix env NAME --effective # the exact sandbox declaration a new launch would use
-pix env trust NAME       # read and accept what NAME runs on your host
-```
-
-An environment that runs host code or handles a credential must be approved
-with `pix env trust NAME` before a launch will use it. Approval is recorded
-outside the environment directory and rechecked on every launch: a changed
-fact (a kit, a mount, an MCP command or URL, a secret destination) refuses
-launch and reprints the same review, defaulting to No.
-
-## 8. MCP servers and integrations
-
-The only MCP path into a sandbox is the sbx Gateway. An environment declares
-its servers directly in `.sbxenv.yaml` (native `mcp.servers` grammar); Pix
-does not run a second registry and ships no MCP servers of its own.
-
-```bash
-sbx mcp auth <name>   # OAuth a Gateway-registered server, native to sbx
-```
-
-`pix.toml` may annotate a declared server with the 1Password reference name
-it needs and a `pix doctor` probe. See `docs/gworkspace.md` for a worked
-example and `docs/reference.md` section 11 for the full model.
-
-## 9. Memory
-
-Memory is a separate Docker container, `pix-memory`, speaking MCP over
-Streamable HTTP through the sbx Gateway. Pix has no top-level `memory`
-command: everything happens through `/recall`, `/remember`, `/forget`, and
-the `memory_*` MCP tools a model can call directly. Capture is explicit by
-default; see `docs/memory.md`.
-
-## 10. What actually constrains the agent
-
-`AGENTS.md`, skills, and an environment's `context/` are guidance a model
-reads. They are not enforcement. The agent can edit those files, and a model
-can decline to follow an instruction. Do not write a rule there and consider
-a dangerous action blocked.
-
-The things that hold:
-
-- **The sandbox.** The agent cannot touch your host except through the
-  directories you mounted. That is why it needs no permission prompts.
-- **The network allowlist.** A domain absent from the kit's
-  `permissions.network.allow` is unreachable from inside. Credentials never
-  enter the sandbox; the host proxy swaps a sentinel for the real key on the
-  way out.
-- **A `tool_call` gate, if you write one.** A pi extension that hooks
-  `tool_call` and returns `{block: true, reason}` refuses an action before it
-  runs. Pix ships no such extension. An extension is a single `.ts` file in
-  `~/.pi/agent/extensions`; pi's `docs/extensions.md` has
-  `permission-gate.ts` and `protected-paths.ts` examples.
-
-Host-native MCP servers are a second thing to know: they run on the host,
-outside the sandbox, with your host-user privileges, and content they return
-can be included in the conversation sent to your model provider. See
-[SECURITY.md](SECURITY.md).
-
-## 11. Working on Pix itself
-
-Maintenance is `make`, not the CLI:
-
-```bash
-make gate         # the fast test gate
-make build-agent  # build the pix-agent sandbox image
-make load         # build and load it into the sandbox image store
-```
-
-## Where to go next
-
-- [docs/getting-started.md](docs/getting-started.md): a first session, end to end.
-- [docs/reference.md](docs/reference.md): the full command reference, one section per verb.
-- [docs/memory.md](docs/memory.md): how memory captures, ranks, and backs up.
-- [AGENTS.md](AGENTS.md): the architecture, if you are extending Pix.
-
-## License
+- [First-session guide](docs/getting-started.md)
+- [Command reference](docs/reference.md)
+- [Memory](docs/memory.md)
+- [Documentation index](docs/README.md)
+- [Contributing](CONTRIBUTING.md) and [maintainer instructions](AGENTS.md)
 
 MIT. See [LICENSE](LICENSE).

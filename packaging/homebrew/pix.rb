@@ -48,13 +48,8 @@ class Pix < Formula
   end
 
   def install
-    bin.install "pix"
-    # The tarball carries the notices that legally have to travel with this
-    # binary: LICENSE for pix's own MIT s2, and NOTICE.md /
-    # THIRD_PARTY_NOTICES.md / licenses/MPL-2.0.txt for the MPL-2.0
-    # go-plugin/yamux code linked into it (MPL-2.0 s3.1). install.sh places
-    # the same four next to the binary it installs; Homebrew must not be the
-    # one channel that drops them.
+    libexec.install "pix", "release-manifest.json", "pix-runtime-#{version}.tar.gz"
+    bin.install_symlink libexec/"pix"
     doc.install "LICENSE", "NOTICE.md", "THIRD_PARTY_NOTICES.md", "licenses"
   end
 
@@ -70,9 +65,7 @@ class Pix < Formula
 
       Then run `pix setup` to finish onboarding.
 
-      Before uninstalling this formula, run `pix state uninstall` FIRST.
-      Then run `brew uninstall mcavage/tap/pix`. Reversing that order leaves
-      launchd configured with a Cellar path that fails on its next launch.
+      Uninstalling Pix preserves your environments, credentials and memory.
     EOS
   end
 

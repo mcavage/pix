@@ -47,7 +47,7 @@ test("later publishes select an unused patch tag without overwriting a release",
 // pix-host is gone too: services/host/cmd/pix is the only build target.
 test("Homebrew archives are additive and contain the pix binary, no pix-host, no manpage", () => {
 	assert.match(workflow, /pix_\$\{V\}_darwin_\$\{arch\}\.tar\.gz/);
-	assert.match(workflow, /tar -C "\$stage" -czf .* pix THIRD_PARTY_NOTICES\.md NOTICE\.md/);
+	assert.match(workflow, /tar -C "\$stage" -czf .* pix release-manifest\.json "pix-runtime-\$\{V\}\.tar\.gz" THIRD_PARTY_NOTICES\.md NOTICE\.md/);
 	assert.doesNotMatch(workflow, /tar -C "\$stage" -czf .*pix\.1/);
 	assert.doesNotMatch(workflow, /tar -C "\$stage" -czf .*pix-host/);
 	// Only the notice-bearing tarballs are hashed and published now: the loose

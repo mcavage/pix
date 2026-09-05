@@ -28,7 +28,7 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
 ## AC-REL-01 — generated THIRD_PARTY_NOTICES + fail-closed license gate
 
 - `scripts/legal/dependencies.json` — hand-maintained ledger (same convention
-  as `scripts/arch-metrics/budgets.json` / `services/host/inference/catalog/models.json`):
+  as `scripts/arch-metrics/budgets.json` / the shipped model catalog):
   every Go module actually reachable from `services/host`'s build graph (**5**,
   derived via `go list -deps` across the release GOOS/GOARCH set, see
   `scripts/legal/list-go-modules.sh`) and every npm package baked into the
@@ -112,12 +112,12 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
 
 ## AC-REL-02 — tarball/image inclusion
 
-- `Dockerfile` now `COPY`s `THIRD_PARTY_NOTICES.md`, `NOTICE.md`, `LICENSE`
+- `images/agent/Dockerfile` now `COPY`s `THIRD_PARTY_NOTICES.md`, `NOTICE.md`, `LICENSE`
   and `licenses/` into the image (`/home/agent/.pi/agent/`). `LICENSE` is
   there because MIT §2 requires the notice to travel with copies, and
   `licenses/` because MPL-2.0 §3.1 requires recipients be told the terms.
 - `.github/workflows/publish.yml`'s Homebrew darwin tarball step now bundles
-  all four alongside `pix`/`pix-host`. (The man page, `pix.1`, was retired
+  all four alongside `pix`, its release manifest and runtime archive. (The man page, `pix.1`, was retired
   along with `pix man`/`--man`, so it is no longer part of this tarball.)
 - **The bare `pix-darwin-<arch>` / `pix-host-darwin-<arch>` release assets are
   gone.** Bundling the notices into the tarball did not help the artifact most
@@ -126,9 +126,9 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
   linked into `pix-host` (MPL-2.0 s3.1) with no notices attached at all. The
   release now publishes only the notice-bearing tarballs plus `SHA256SUMS`;
   `install.sh` downloads the tarball, verifies its sha256 against
-  `SHA256SUMS`, refuses to install if any binary OR any required notice is
+  `SHA256SUMS`, refuses to install if the binary, runtime bundle or any required notice is
   missing from it, and installs the notices to
-  `${XDG_DATA_HOME:-~/.local/share}/pix` next to the binaries. A release step
+  `${PIX_PREFIX:-~/.local/bin}/pix-notices` alongside the installed bundle. A release step
   additionally unpacks each tarball and asserts the notices are inside it — a
   check on the bytes, not on the workflow text that made them.
 - All of it is asserted by `scripts/check-third-party-notices.sh`,
@@ -139,7 +139,7 @@ dependency edges, so nobody can quietly drop the `needs` and keep the file.
 
 ## AC-REL-03 — Docker base image: explicit digest/build-arg path
 
-- `Dockerfile`: `ARG BASE_IMAGE=dhi.io/node:25-debian13-dev` replaces the bare
+- `images/agent/Dockerfile`: `ARG BASE_IMAGE=dhi.io/node:25-debian13-dev` replaces the bare
   `FROM dhi.io/node:25-debian13-dev` (default behavior unchanged — `make
   load`/CI still resolves the same tag). An immutable build now pins
   `--build-arg BASE_IMAGE=dhi.io/node:25-debian13-dev@sha256:<digest>`.

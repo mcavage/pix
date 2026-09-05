@@ -59,7 +59,7 @@ type OpRef struct {
 // secrets.env instead of an op:// reference.
 //
 // Pix allowlists NOTHING of its own. This set is exactly what the active pack
-// declares as `env_keys` on its integrations, so the pack that needs a
+// declares as `plain_keys` on its integrations, so the environment that needs a
 // plain-text variable is the thing that authorizes it — and deactivating that
 // pack takes its allowances with it. A nil set means "every value here must be
 // a ref", which is the correct posture for a host with no pack.

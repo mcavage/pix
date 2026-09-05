@@ -14,8 +14,9 @@ cd services/host && go build ./... && go test ./... && go vet ./...
 
 - [ ] Host code builds and tests pass (`go build ./... && go test ./...`)
 - [ ] No company-specific data (channels, accounts, hosts, connector env) added to
-      the public tree; that belongs in a private pack
+      the public tree; that belongs in a private environment repository
 - [ ] Skills/agents stay pure mechanism (no one person's specifics baked in)
 - [ ] Docs updated if behavior or commands changed (README / AGENTS.md / docs/)
 - [ ] `CHANGELOG.md` updated under Unreleased if user-facing
-- [ ] If image or baked files changed, noted that a maintainer must `make load`
+- [ ] If image or baked files changed, tested a newly loaded sandbox or stated the UAT gap
+- [ ] Commits are signed and the PR targets the intended base branch

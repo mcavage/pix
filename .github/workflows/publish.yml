@@ -554,7 +554,9 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-manifest-${{ needs.version.outputs.version }}
-          path: out/release-manifest.json
+          path: |
+            out/release-manifest.json
+            out/pix-runtime-${{ needs.version.outputs.version }}.tar.gz
           if-no-files-found: error
           retention-days: 90
 
@@ -622,8 +624,8 @@ jobs:
           git tag -a "v$V" -m "pix v$V"
           git push origin "v$V"
 
-  # Cross-compile the two HOST binaries (pix launcher + pix-host) for
-  # darwin × amd64/arm64, bundle each pair into a NOTICE-BEARING tarball, and
+  # Cross-compile the single Pix launcher binary for
+  # darwin × amd64/arm64, bundle each binary and its runtime into a NOTICE-BEARING tarball, and
   # attach the tarballs plus a SHA256SUMS to the v<VER> GitHub Release. This is
   # the repo-less install path: Homebrew and `install.sh` both fetch the SAME
   # tarball. Pure Go toolchain — no Docker, no DHI base.
@@ -637,7 +639,7 @@ jobs:
   # the commit carrying the stamped spec.yaml (same commit the kit pin resolves to).
   release-binaries:
     name: build + upload release binaries
-    needs: [version, bump]
+    needs: [version, bump, release-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release + upload assets
@@ -675,6 +677,12 @@ jobs:
               -o "$GITHUB_WORKSPACE/dist/pix-$os-$arch" ./cmd/pix
           done
 
+      - name: Download the verified release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-manifest-${{ needs.version.outputs.version }}
+          path: release-bundle
+
       - name: Build combined Darwin tarballs for Homebrew
         working-directory: dist
         env:
@@ -684,21 +692,23 @@ jobs:
           for arch in amd64 arm64; do
             stage="$(mktemp -d)"
             cp "pix-darwin-$arch" "$stage/pix"
+            cp "$GITHUB_WORKSPACE/release-bundle/release-manifest.json" "$stage/"
+            cp "$GITHUB_WORKSPACE/release-bundle/pix-runtime-${V}.tar.gz" "$stage/"
             # AC-REL-01/02: the Homebrew tarball is a real distribution artifact
-            # of the third-party components baked into this binary (incl.
-            # the MPL-2.0 go-plugin/yamux notice) — ship the notices alongside it.
+            # of the third-party components baked into this binary (including retained
+            # license texts) — ship the notices alongside it.
             # (The man page, pix.1, was retired along with `pix man`/`--man`;
             # `pix help --all` is the one verb map now, so nothing bundles it.)
             cp "$GITHUB_WORKSPACE/THIRD_PARTY_NOTICES.md" "$stage/THIRD_PARTY_NOTICES.md"
             cp "$GITHUB_WORKSPACE/NOTICE.md" "$stage/NOTICE.md"
             # pix's own MIT terms (MIT s2) and the verbatim MPL-2.0 text for the
-            # go-plugin/yamux code linked into this binary (MPL-2.0 s3.1/3.2)
+            # third-party components (MPL-2.0 s3.1/3.2)
             # ship WITH the binary, not just in the repo.
             cp "$GITHUB_WORKSPACE/LICENSE" "$stage/LICENSE"
             mkdir -p "$stage/licenses"
             cp "$GITHUB_WORKSPACE/licenses/MPL-2.0.txt" "$stage/licenses/MPL-2.0.txt"
             chmod 0755 "$stage/pix"
-            tar -C "$stage" -czf "pix_${V}_darwin_${arch}.tar.gz" pix THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses
+            tar -C "$stage" -czf "pix_${V}_darwin_${arch}.tar.gz" pix release-manifest.json "pix-runtime-${V}.tar.gz" THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses
             rm -rf "$stage"
           done
           ls -la pix_*.tar.gz
@@ -713,7 +723,7 @@ jobs:
           set -euo pipefail
           for t in pix_*.tar.gz; do
             listing="$(tar -tzf "$t")"
-            for required in pix THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses/MPL-2.0.txt; do
+            for required in pix release-manifest.json "pix-runtime-${{ needs.version.outputs.version }}.tar.gz" THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses/MPL-2.0.txt; do
               printf '%s\n' "$listing" | grep -qx "$required" \
                 || { echo "::error::$t is missing $required"; exit 1; }
             done

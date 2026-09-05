@@ -61,7 +61,8 @@ docker restart pix-memory-<stack-id>    # 2. restart only this stack's container
 pix setup                               # 3. reconcile this stack from its manifest
 ```
 
-Memory data lives in `~/.pix/.state/memory`, never in the launcher's own
-state directory: restarting or reconciling the container never touches it.
+Memory data persists in `$PIX_HOME/.state/memory` (default
+`~/.pix/.state/memory`), mounted into the container at `/data`. Restarting
+the container preserves this store.
 `memory_snapshot`/`memory_restore` (called through MCP; see `docs/memory.md`)
 are the supported backup path if you need one before a risky operation.

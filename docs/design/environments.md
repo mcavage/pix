@@ -1,3 +1,5 @@
+> **Historical design record.** For the current product, read [the reference](../reference.md); for the accepted architecture, read [Pix v2 architecture](pix-v2-architecture.md). Commands and implementation status below describe an earlier stage.
+
 # Native sandbox environments
 
 Status: Story 0 proven on sbx v0.39.0. Implementation of Story 1 onward is in

@@ -243,7 +243,8 @@ test("install.sh and the Homebrew formula install exactly the pix binary, no pix
 	const formula = fs.readFileSync(path.join(repoRoot, "packaging/homebrew/pix.rb"), "utf8");
 	assert.match(installSh, /BINARIES="pix"/);
 	assert.doesNotMatch(installSh, /pix-host/);
-	assert.match(formula, /bin\.install "pix"/);
+	assert.match(formula, /libexec\.install "pix"/);
+	assert.match(formula, /bin\.install_symlink libexec\/"pix"/);
 	assert.doesNotMatch(formula, /pix-host/);
 });
 

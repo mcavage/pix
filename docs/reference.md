@@ -109,11 +109,10 @@ extension policy decide when to call them.
 explicit command asks for it. `pix.toml`'s `[memory]` section can opt an
 environment into an automatic watcher; see `docs/memory.md`.
 
-**Privacy.** Extraction and embedding run on the selected local backend
-(llmman or Ollama) and never leave the host, but recalled memory is not
-private from your model provider: once a row is recalled, its content enters
-the prompt sent to whichever model is active. Never store secrets, tokens, or
-credentials in memory.
+**Privacy.** Extraction and embedding use the memory service’s configured
+Ollama endpoint; remote endpoints or cloud models may process data off-host.
+Recalled content enters the active model’s prompt regardless of where embedding
+runs. Never store secrets, tokens, or credentials in memory.
 
 **Trust and scope.** Profiles are organizational scopes in this local
 personal service, not security tenants: the server enforces query/write scope

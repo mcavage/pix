@@ -1,82 +1,76 @@
-# Contributing to pix
+# Contributing to Pix
 
-Thanks for looking. pix is an opinionated distribution of the
-[pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) coding agent, so most contributions
-are skills, agents, extensions, docs, or host-service code, not changes to pi
-itself.
+Pix is a small launcher and agent distribution. Read [AGENTS.md](AGENTS.md) for
+the current architecture, invariants, and development workflow. The
+[README](README.md) is written for people using Pix, not building it.
 
-Read [AGENTS.md](AGENTS.md) before you start. It is the harness's own memory:
-repo layout, the build loop, extension and skill conventions, and the mistakes
-worth not repeating.
+## Where contributions belong
 
-## Ground rules
+- Launcher behavior belongs in the Go module under `services/host/`.
+- Memory is a separate Go MCP service under `services/memory/`.
+- Pi extensions and shared runtime helpers are TypeScript in `extensions/` and
+  `lib/`. Put ambient declarations in `types/`, never `extensions/`.
+- Skills and agent presets live under `skills/` and `agents/`. Keep them generic;
+  company-specific workflows and accounts belong in a separate environment repo.
+- Sandbox configuration belongs in native sbx environments and kits. Do not add
+  a second registry, plugin framework, daemon, or model-selection router.
 
-- **Two languages, one convention.** Everything that runs on the HOST is Go
-  (`services/host/`, compiled into `pix-host`). Everything that runs INSIDE
-  the sandbox is TypeScript (`extensions/`). Do not add a host-side Node or
-  Python service. See AGENTS.md for why.
-- **Keep the open-core boundary clean.** Nothing company-specific belongs in this
-  repo: no channel names, account emails, internal hostnames, connector-specific
-  env, or private skills. Those live in a private **pack** (git-backed, mounted at
-  runtime with `pix pack use`) and, for host-executing integrations, in a
-  separate container/host-daemon repo — never compiled into the public tree.
-  `scripts/check-open-core.sh` runs in CI and fails if a company-specific file or
-  an internal marker is ever tracked.
-- **A skill is pure mechanism.** Never bake one person's specifics (their
-  channels, accounts, thresholds) into a `SKILL.md`. Read those from memory or
-  a pack at runtime; the skill only knows the shape.
-- **Write like a human.** Direct, concrete, no em-dashes, no AI filler. See the
-  `anti-slop` and `writing-voice` skills.
+A skill describes a reusable process. An agent can inherit its model or name one
+explicitly; environment `[agents]` bindings supply defaults. There is no intent
+router or agent-management CLI. Consult
+`services/host/inference/catalog/models.json` for Pix's known model identities.
 
-## Setup
+## Local development
 
-You can develop the host binaries and skills from a normal checkout. Building
-the Docker image needs a DHI-entitled Docker account; the hosted `sbx run` path
-does not.
+Use the Go versions declared by the modules, the Node toolchain from
+`images/agent/Dockerfile`, and the pinned npm lockfile.
 
 ```bash
-git clone https://github.com/mcavage/pix
+git clone https://github.com/mcavage/pix.git
 cd pix
-cd services/host && go build ./... && go test ./...   # host code
+npm ci
+(cd services/host && go build ./... && go test ./...)
+(cd services/memory && go build ./... && go test ./...)
+npm test
+npx tsc --noEmit
 ```
 
-## Changing things
+Build and launch the complete local bundle on a host with Docker, sbx, and access
+to the pinned base images:
 
-- **Host code (Go):** edit under `services/host/`, then
-  `go build ./... && go test ./... && go vet ./...`. Add table-driven tests for
-  new logic.
-- **Skills:** edit `skills/<name>/SKILL.md`. In a dev sandbox (`make run`) skills
-  load live from the tree, so `/reload` picks up edits with no rebuild.
-- **Agents:** edit `agents/<name>.md`. Declare an `intent:`, not a pinned
-  `model:`; the router resolves it. If you must pin, use a fully-qualified id that
-  exists in `services/host/routing/defaults/models.json` (`pix agent ls`
-  flags an unknown pin).
-- **Extensions (TypeScript):** edit `extensions/*.ts`. An extension that throws
-  at load breaks pi startup, so guard defensively. Never put a `.d.ts` in
-  `extensions/`.
-- **Image / baked files:** need `make load` on a DHI host to take effect in a new
-  sandbox.
+```bash
+make load
+make run
+```
 
-## Before you open a PR
+Use a separate `PIX_HOME` for UAT. `make load` updates the launcher, runtime,
+images, and manifest together and loads the agent into sbx's separate image
+store. A running sandbox retains its old image. `make run` loads skills live;
+`/reload` picks up those skill edits. Image-baked edits need a new sandbox.
 
-1. `cd services/host && go build ./... && go test ./... && go vet ./...`
-2. If you touched the image or baked files, note that a maintainer must
-   `make load` to verify.
-3. Run the `code-review` skill (or ask a second model) over your diff.
-4. Fill in the PR template. Say what changed, why, and how you verified it.
+## Before opening a PR
 
-## License of contributions (inbound = outbound)
+1. Exercise the changed behavior through its real caller. A helper's unit test
+   alone does not prove the CLI, extension, or Gateway tool is wired correctly.
+2. Run appropriate tests and `bash scripts/gate.sh`. Documentation-only work
+   needs checked links, examples, and existing docs tests, not a new image build.
+3. For setup, lifecycle, authentication, or image changes, run isolated host UAT
+   and report what actually passed. If host access is unavailable, state the gap.
+4. Review the diff for unnecessary complexity, secret exposure, and stale docs.
+5. Sign commits, check the PR targets the intended branch, and describe the final
+   behavior, validation, and remaining limitations. Confirm CI after pushing.
 
-pix is a Docker, Inc. project distributed under the MIT license in
-[LICENSE](LICENSE), and contributions come in on those same terms: **by
-opening a pull request you license your contribution under the MIT license,
-and you represent that you have the right to do so** (that it is your own
-work, or that your employer has authorized it). There is no separate CLA and
-no copyright assignment — inbound license equals outbound license. See
-[NOTICE.md](NOTICE.md) and
-[docs/legal/AUTHORIZATIONS.md](docs/legal/AUTHORIZATIONS.md).
+Normal product copy should be direct and actionable. Keep implementation detail
+in maintainer docs or verbose output. Public commits and PRs must not include
+private integration details, credentials, or business data.
 
-## Reporting bugs and asking for features
+## Contribution license
 
-Use the issue templates. For anything security-sensitive, follow
-[SECURITY.md](SECURITY.md) instead of opening a public issue.
+Pix is a Docker, Inc. project distributed under the MIT license. By opening a PR,
+you license your contribution under the MIT license and represent that you have the
+right to do so, including any required employer authorization. There is no
+separate CLA and no copyright assignment: inbound license equals outbound license. See [LICENSE](LICENSE), [NOTICE.md](NOTICE.md),
+and [authorization notes](docs/legal/AUTHORIZATIONS.md).
+
+Use the issue templates for bugs and requests. Report vulnerabilities through
+[SECURITY.md](SECURITY.md), not a public issue.

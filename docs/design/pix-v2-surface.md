@@ -1,7 +1,7 @@
 # Make Pix a thin sbx environment launcher
 
-Status: **ACCEPTED FOR IMPLEMENTATION**. This document specifies the Pix v2
-product surface. It does not describe current behavior. The code target and
+Status: **ACCEPTED**. This document specifies the Pix v2 product contract.
+See [the reference](../reference.md) for the shipped commands. The code target and
 direct cutover are defined in `docs/design/pix-v2-architecture.md`.
 
 This proposal supersedes the product and CLI decisions in
@@ -670,8 +670,7 @@ Agent selection order is:
 
 1. an explicit model in a custom agent definition;
 2. selected environment `[agents].<name>`;
-3. selected main model;
-4. parent model inheritance.
+3. parent model inheritance (the main model for a direct child of the session).
 
 Local inference is an external host dependency. Pix supports llmman and Ollama,
 reached over their native (Ollama) or OpenAI-compatible (llmman, or any other
@@ -679,7 +678,7 @@ OpenAI-compatible endpoint) transport. llmman serves Ollama-, OpenAI-, and
 Anthropic-compatible APIs and loads models on demand. Ollama remains a
 supported backend. An environment author can declare a backend and its
 models directly in that environment's own
-`pix.toml` `[inference.*]` tables (docs/design/environments.md §5.2), and
+`pix.toml` `[inference.*]` tables (see [the reference](../reference.md)), and
 `pix run` merges that declaration over machine config for the session it
 launches. `pix setup --env NAME` and
 `pix doctor` validate what an environment declares; neither ever silently

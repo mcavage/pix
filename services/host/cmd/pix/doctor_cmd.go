@@ -24,7 +24,7 @@ import (
 func (c *doctorCmd) Help() string { return doctor.Description }
 
 type doctorCmd struct {
-	JSON      bool `help:"Emit the machine-readable snapshot (schema_version 5)."`
+	JSON      bool `help:"Emit the machine-readable health snapshot."`
 	Verbose   bool `help:"Show the evidence for every check, not only the ones that failed."`
 	Recreates bool `help:"Show every recorded environment recreate: timestamp, environment, and the drifted canonical key paths (docs/design/environments.md section 9.4)."`
 }

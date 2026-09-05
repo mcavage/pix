@@ -61,7 +61,7 @@ var DefaultLocator Locator = os.Executable
 // installation and needs to know precisely what to run (safety invariant 12
 // — a failure names one owner and one exact next action).
 const installRemedy = "Install a complete release (binary + release-manifest.json + runtime archive):\n" +
-	"  curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh\n" +
+	"  brew reinstall mcavage/tap/pix\n" +
 	"or, from a source checkout:  make install"
 
 // DiscoverBundle finds the release bundle adjacent to the RESOLVED

@@ -8,6 +8,17 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Fixed: complete release installation
+
+Published macOS tarballs now include the release manifest and runtime archive
+beside the launcher. Homebrew and the compatibility installer retain all three,
+so a fresh install can complete setup. Reinstalling repairs a missing bundle;
+uninstalling preserves environments, credentials and memory. The compatibility
+installer requires 1Password only when setup needs direct provider keys.
+
+The user guides, maintainer instructions, security and memory documentation now
+describe the v2 environment workflow. Historical designs are labeled separately.
+
 Pix v2 is a direct, breaking cutover, not an incremental release: the
 scored model router, `pix-host`, the pack system, and the custom memory RPC
 are deleted outright, not deprecated. There is no migration path and no

@@ -83,13 +83,12 @@ watcher-captured row is tagged with an `auto` annotation on
 `/recall`/`memory_recall`, visibly distinct from an explicit one, and
 `/forget <id>` is the feedback/undo mechanism for it, same as any other row.
 
-Extraction and embedding run on whichever local backend (llmman or Ollama,
-authored directly in that environment's own `pix.toml`; there is no setup
-interview that picks one for you) the environment declares, and never leave
-the host, but recalled memory is not private from
-your model provider: once a row is recalled, its content goes into the
-prompt sent to whichever model is active (Claude, OpenAI, Gemini, or a local
-model). Never store secrets, tokens, or credentials in memory.
+Extraction and embedding use the memory service's configured Ollama endpoint;
+setup detects Ollama and can offer to pull a missing embedding model on a local
+endpoint. This is independent of the model used for the conversation. A remote
+Ollama endpoint or cloud-hosted watcher can send that processing off the host.
+Recalled memory also enters the prompt sent to the active conversation model.
+Never store secrets, tokens, or credentials in memory.
 
 Example: you tell pi your staging DB is `postgres://staging.internal:5432`
 and say `/remember`. Next session, `/recall staging db` finds it, or it

@@ -20,9 +20,9 @@
 #   - resolves the latest release (or PIX_VERSION if you set one)
 #   - downloads pix_<ver>_<os>_<arch>.tar.gz and SHA256SUMS
 #   - verifies the tarball's sha256 against SHA256SUMS (aborts on mismatch)
-#   - installs pix to ~/.local/bin (chmod +x), and the notices
+#   - installs pix and its release bundle to ~/.local/bin, and the notices
 #     (THIRD_PARTY_NOTICES.md, NOTICE.md, LICENSE, licenses/) to
-#     ~/.local/share/pix. The licenses that must travel with the binaries
+#     ~/.local/bin/pix-notices (or $PIX_PREFIX/pix-notices). The licenses that must travel with the binaries
 #     (MIT s2, MPL-2.0 s3.1) are part of the artifact, not an optional extra.
 #     The loose pix-<os>-<arch> assets this script used to fetch are no longer
 #     published: they were the same binaries with none of those notices.
@@ -41,16 +41,15 @@ set -eu
 REPO="mcavage/pix"
 GH="https://github.com/${REPO}"
 PREFIX="${PIX_PREFIX:-${HOME}/.local/bin}"
-CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/pix"
+CONFIG_DIR="${PIX_HOME:-${HOME}/.pix}"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
-DOC_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/pix"
+DOC_DIR="${PREFIX}/pix-notices"
 SOURCE_URL="${GH}/blob/main/install.sh"
 
 BINARIES="pix"
 # Every path the release tarball must contain. Missing any one of them means
 # the artifact is not a complete distribution (pix's own MIT terms, the
-# third-party attributions, and the verbatim MPL-2.0 text for the go-plugin /
-# yamux code linked into pix), so we refuse to install it.
+# third-party attributions, and retained license texts), so we refuse to install it.
 NOTICES="THIRD_PARTY_NOTICES.md NOTICE.md LICENSE licenses/MPL-2.0.txt"
 
 log()  { printf '%s\n' "$*"; }
@@ -198,6 +197,7 @@ do_install() {
 	base="${GH}/releases/download/v${ver}"
 	sums_url="${base}/SHA256SUMS"
 	tarball="pix_${ver}_${os}_${arch}.tar.gz"
+	bundle="release-manifest.json pix-runtime-${ver}.tar.gz"
 
 	if [ "${PIX_DRYRUN:-}" = "1" ]; then
 		log "DRY RUN: nothing will be downloaded or written."
@@ -209,6 +209,7 @@ do_install() {
 		for b in $BINARIES; do
 			log "Install:   ${PREFIX}/${b}"
 		done
+		log "Bundle:    ${PREFIX}/ (${bundle})"
 		log "Notices:   ${DOC_DIR} (${NOTICES})"
 		log "Config:    ${CONFIG_FILE} (seeded by 'pix setup', left untouched here)"
 		return 0
@@ -249,9 +250,13 @@ do_install() {
 		[ -f "${stage}/${n}" ] || die "${tarball} does not contain ${n}; refusing to install a distribution with no notices"
 	done
 
+	for f in $bundle; do
+		[ -f "${stage}/${f}" ] || die "${tarball} does not contain ${f}; refusing an incomplete release bundle"
+	done
+
 	# Compare verified bytes, never execute an existing untrusted installation.
 	all_current=1
-	for b in $BINARIES; do
+	for b in $BINARIES $bundle; do
 		if [ ! -f "${PREFIX}/${b}" ] || [ "$(sha256_of "${PREFIX}/${b}")" != "$(sha256_of "${stage}/${b}")" ]; then
 			all_current=0
 		fi
@@ -266,7 +271,7 @@ do_install() {
 	# Everything verified: now install. These moves are the only writes to
 	# ${PREFIX}; they happen last so a failed/mismatched download never lands.
 	mkdir -p "$PREFIX"
-	for b in $BINARIES; do
+	for b in $bundle $BINARIES; do
 		mv -f "${stage}/${b}" "${PREFIX}/${b}"
 	done
 	install_notices "$stage"
@@ -354,11 +359,6 @@ assert_installed_resolution() {
 
 check_required_prereqs() {
 	missing=0
-	if ! have op; then
-		err "missing required dependency: op"
-		err "  fix: brew install 1password-cli"
-		missing=1
-	fi
 	if ! have sbx; then
 		err "missing required dependency: sbx"
 		err "  fix: brew install docker/tap/sbx"
@@ -384,24 +384,9 @@ do_uninstall() {
 		info "removed ${DOC_DIR}"
 	fi
 
-	if [ -e "$CONFIG_FILE" ] || [ -d "$CONFIG_DIR" ]; then
-		log ""
-		printf 'Also remove config at %s? [y/N] ' "$CONFIG_DIR"
-		# Prefer the controlling terminal (so a `curl | sh -s -- --uninstall` still
-		# prompts), but fall back to stdin, then to an empty (=keep) answer. The
-		# `|| :` chain keeps `set -e` from aborting when no tty/stdin is attached.
-		ans=""
-		{ read -r ans </dev/tty || read -r ans || ans=""; } 2>/dev/null
-		case "$ans" in
-			y | Y | yes | YES)
-				rm -rf "$CONFIG_DIR"
-				info "removed ${CONFIG_DIR}"
-				;;
-			*)
-				info "kept ${CONFIG_DIR}"
-				;;
-		esac
-	fi
+	# User environments, credentials and memory survive uninstall.
+	info "kept ${CONFIG_DIR}"
+	rm -f "${PREFIX}/release-manifest.json" "${PREFIX}"/pix-runtime-*.tar.gz
 	log "Done."
 }
 

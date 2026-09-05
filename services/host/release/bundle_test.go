@@ -178,7 +178,7 @@ func TestDiscoverBundleNamesTheExactInstallRemedy(t *testing.T) {
 	if err == nil {
 		t.Fatal("a bundle-less installation must fail")
 	}
-	for _, want := range []string{release.BundleManifestFile, "install.sh", "make install"} {
+	for _, want := range []string{release.BundleManifestFile, "brew reinstall mcavage/tap/pix", "make install"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error must name %q, got: %v", want, err)
 		}

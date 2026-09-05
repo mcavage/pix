@@ -1,6 +1,5 @@
 // Package envsetup runs an environment's own `[[setup]]` hooks — the v2
-// replacement for a v1 pack's authored install/auth hook, and the ONLY
-// place Pix executes environment-authored code on the host.
+// install/authentication commands, executed on the host after approval.
 //
 // What makes it safe is not the runner, it is the gate around it:
 //
@@ -11,16 +10,15 @@
 //  2. Its resolved executable's CONTENT HASH, both argv lists, its kind and
 //     its required bit are all part of the environment's trust bill of
 //     materials (workflow/env.SetupHookFact) — so they are rendered in the
-//     default consent screen and bound into the fingerprint a human
+//     verbose trust details and bound into the fingerprint a human
 //     accepts with a default-No prompt.
-//  3. It runs ONLY under an explicit `pix setup --env NAME`, after that
-//     acceptance. `pix run`, `pix doctor`, and every implicit launch reach
-//     none of this.
+//  3. Setup runs hooks after acceptance, including onboarding entered by
+//     a first interactive launch. Doctor never applies hooks.
 //  4. Immediately before each execution, Run re-proves the executable AND
 //     every declared companion input on disk still hash to the accepted
 //     snapshot's SHA, and copies those exact verified bytes — never a
 //     second, independent read of the same path — into a fresh, private
-//     0700 directory nothing else on this host can read. check/apply/
+//     0700 directory restricted to this host user. check/apply/
 //     postcheck then execute ONLY that snapshot's bytes, with the
 //     snapshot's own root as cwd. That is what actually closes the window
 //     between "a human said yes" and "we exec'd it" (TOCTOU): a plain
@@ -30,10 +28,9 @@
 //     failure.
 //
 // Execution itself is deliberately boring: os/exec with an explicit argv,
-// no shell, no interpolation, and no environment injection — the child
-// inherits this process's environment unchanged and Pix adds nothing to
-// it, so a hook can never be handed a credential it was not already going
-// to see. Because the snapshot is a fresh, minimal directory containing
+// no implicit shell or interpolation. The child inherits the host environment
+// and receives PIX_SETUP_VERBOSE. It runs with the host user's privileges;
+// the verified snapshot is a consistency check, not a sandbox. Because it contains
 // ONLY the reviewed executable and its declared `inputs`, an environment
 // sibling file the hook did not declare is simply not there: a hook must
 // name every companion script or data file it needs via `inputs`, using
