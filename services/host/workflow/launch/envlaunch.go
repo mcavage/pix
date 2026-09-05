@@ -29,7 +29,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -41,7 +40,6 @@ import (
 	"pix/host/hosttrust"
 	"pix/host/inference"
 	"pix/host/lease"
-	"pix/host/mcp"
 	"pix/host/pixhome"
 	"pix/host/recreatelog"
 	"pix/host/sandbox"
@@ -960,50 +958,6 @@ func EnvExtraKits(cfg *config.Config, o RunOpts, version string) []string {
 	return kits
 }
 
-// EnvMCPWrapperFacts composes §9.2's reviewed MCP facts for the SELECTED
-// environment's own `.sbxenv.yaml` servers: a local-command server whose
-// pix.toml `[host.mcp.<name>]` declares env_keys is wrapped through the ONE
-// op-run grammar this module has (package mcp's OpRunWrap — never a second
-// hand-built copy, arch_effective_test.go's
-// TestArchitecture_NoDuplicateOpRunGrammar), and every other server renders
-// its bare definition unchanged.
-//
-// It deliberately mirrors workflow/env's preview composition rather than
-// calling it: workflow/launch may not import a sibling workflow package
-// (F17), and the shared, non-duplicable part — the credential wrapper
-// grammar itself — is the mcp.OpRunWrap call both go through.
-func EnvMCPWrapperFacts(doc *envinfo.Document, sidecar *envinfo.Sidecar) []envinfo.MCPWrapperFact {
-	if doc == nil {
-		return nil
-	}
-	var hostMCP map[string]envinfo.HostMCPEntry
-	if sidecar != nil {
-		hostMCP = sidecar.Host.MCP
-	}
-	var out []envinfo.MCPWrapperFact
-	for _, srv := range doc.MCP.Servers {
-		fact := envinfo.MCPWrapperFact{Name: srv.Name, URL: srv.URL}
-		if srv.Command == "" {
-			out = append(out, fact)
-			continue
-		}
-		// `${PIX_HOME}` is resolved by PIX, here, before any wrapper argv is
-		// applied — the same expansion, in the same position, workflow/env's
-		// preview does. Static argv has no shell, and upstream's observed
-		// interpolation covers `env:` values only, so a container that keeps
-		// its state under this home has no other way to name the directory.
-		// Host variables are untouched: sbx resolves those.
-		argv := envinfo.ExpandPixManagedArgv(append([]string{srv.Command}, srv.Args...), pixManagedVars())
-		if entry, ok := hostMCP[srv.Name]; ok && len(entry.EnvKeys) > 0 {
-			argv = opRunWrapIfAvailable(argv)
-		}
-		fact.Command = argv[0]
-		fact.Args = argv[1:]
-		out = append(out, fact)
-	}
-	return out
-}
-
 // pixManagedVars resolves the Pix-defined interpolation variables for this
 // host's home (envinfo.PixManagedVars). An unresolvable home yields none,
 // so `${PIX_HOME}` stays undefined rather than becoming "" — the same
@@ -1014,22 +968,6 @@ func pixManagedVars() map[string]string {
 		return nil
 	}
 	return envinfo.PixManagedVars(home)
-}
-
-// opRunWrapIfAvailable wraps argv through mcp.OpRunWrap when this host has
-// both `op` and a refs file, and returns it unchanged otherwise (1Password
-// stays optional — OpRunWrap's own no-op contract, reused rather than
-// reimplemented).
-func opRunWrapIfAvailable(argv []string) []string {
-	opPath, err := exec.LookPath("op")
-	if err != nil {
-		return argv
-	}
-	refs := config.OpRefsPath()
-	if _, serr := os.Stat(refs); serr != nil {
-		return argv
-	}
-	return mcp.OpRunWrap(opPath, refs, argv)
 }
 
 // ComposeMCPServerFacts folds the host-global server names this create

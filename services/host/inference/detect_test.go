@@ -88,7 +88,7 @@ func TestDetectOllama_LocalReachable(t *testing.T) {
 func TestDetectOllama_RemoteNeverOffersPull(t *testing.T) {
 	fake := &systest.Fake{
 		LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil },
-		GetenvFn:   func(name string) string { return "team-ollama.internal:11434" },
+		GetenvFn:   func(name string) string { return "http://team-ollama.internal:11434" },
 	}
 	st := DetectOllama(hostenv.Env{System: fake})
 	if st.Mode != OllamaModeRemote {
@@ -159,11 +159,35 @@ func TestListOllamaModels_DropsUnsafeTagNames(t *testing.T) {
 
 func TestContainerOllamaHost(t *testing.T) {
 	local := OllamaStatus{Mode: OllamaModeLocal, Endpoint: OllamaEndpoint{Host: "127.0.0.1", Port: 11434}}
-	if got := ContainerOllamaHost(local); got != "host.docker.internal:11434" {
+	if got := ContainerOllamaHost(local); got != "http://host.docker.internal:11434" {
 		t.Errorf("local -> %q, want host.docker.internal:11434", got)
 	}
-	remote := OllamaStatus{Mode: OllamaModeRemote, Endpoint: OllamaEndpoint{Host: "team-ollama.internal", Port: 11434}}
-	if got := ContainerOllamaHost(remote); got != "team-ollama.internal:11434" {
+	remote := OllamaStatus{Mode: OllamaModeRemote, Endpoint: OllamaEndpoint{URL: "http://team-ollama.internal:11434", Host: "team-ollama.internal", Port: 11434}}
+	if got := ContainerOllamaHost(remote); got != "http://team-ollama.internal:11434" {
 		t.Errorf("remote -> %q, want the endpoint passed through unchanged", got)
+	}
+}
+
+// Exercise the exact URL handed to memory with its HTTP client's POST shape.
+func TestContainerOllamaHostAcceptsEmbeddingRequests(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/api/embed" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		fmt.Fprint(w, `{"embeddings":[[0.1,0.2]]}`)
+	}))
+	defer server.Close()
+	endpoint := ContainerOllamaHost(OllamaStatus{Mode: OllamaModeRemote, Endpoint: OllamaEndpoint{URL: server.URL}})
+	response, err := http.Post(endpoint+"/api/embed", "application/json", strings.NewReader(`{"model":"nomic-embed-text","input":"probe"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", response.StatusCode)
+	}
+	secure := ContainerOllamaHost(OllamaStatus{Mode: OllamaModeRemote, Endpoint: OllamaEndpoint{URL: "https://ollama.example:443/"}})
+	if secure != "https://ollama.example:443" {
+		t.Fatalf("lost HTTPS: %s", secure)
 	}
 }

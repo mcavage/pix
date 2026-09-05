@@ -131,6 +131,20 @@ func KeylessInference(cfg *config.Config) bool {
 	return Configured(cfg) && !InferenceNeedsOnePassword(cfg)
 }
 
+// KeylessModel checks the selected model rather than requiring credentials for
+// every other model a session might offer. Explicit backend declarations win.
+func KeylessModel(cfg *config.Config, model string) bool {
+	if cfg != nil {
+		for _, binding := range cfg.Inference.Models {
+			if binding.Model == model {
+				backend, ok := cfg.Inference.Backends[binding.Backend]
+				return ok && (backend.Auth == "none" || backend.Auth == "sbx-session")
+			}
+		}
+	}
+	return strings.HasPrefix(model, "ollama/")
+}
+
 // SynthesizeInferenceKit creates a create-time mixin containing only generated
 // public metadata. It carries no credential values. The extension reads the
 // manifest; there is no second generated file beside it to disagree with.
@@ -237,7 +251,13 @@ func RuntimeManifest(cfg *config.Config, roster RosterInput) (runtimeInferenceMa
 	// set this manifest ships — never a separate resolution path; a
 	// zero-value RosterInput (every caller not yet taught to resolve one)
 	// builds no roster at all, so the additive field stays fully absent.
-	r, err := buildRoster(roster, manifest.Models)
+	resolvedRoster := roster
+	resolvedRoster.Main = RuntimeModelID(cfg, roster.Main)
+	resolvedRoster.Agents = make(map[string]string, len(roster.Agents))
+	for name, model := range roster.Agents {
+		resolvedRoster.Agents[name] = RuntimeModelID(cfg, model)
+	}
+	r, err := buildRoster(resolvedRoster, manifest.Models)
 	if err != nil {
 		return runtimeInferenceManifest{}, err
 	}

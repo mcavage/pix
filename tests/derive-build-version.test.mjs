@@ -40,6 +40,8 @@ function makeTempRepo() {
 	run("git", ["init", "-q", "-b", "main"], dir);
 	run("git", ["config", "user.email", "test@example.com"], dir);
 	run("git", ["config", "user.name", "Test"], dir);
+	// Fixture commits must never invoke the developer's desktop signing agent.
+	run("git", ["config", "commit.gpgsign", "false"], dir);
 	return dir;
 }
 

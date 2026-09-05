@@ -5,6 +5,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { parseRoster, type Roster } from "../lib/inference-roster.ts";
 
@@ -25,8 +26,6 @@ type Model = {
 	max_tokens: number;
 	reasoning?: boolean;
 	adaptive_thinking?: boolean;
-	input_cost?: number;
-	output_cost?: number;
 };
 
 // `roster` is additive (docs/design/environments.md §7): a manifest an older
@@ -90,6 +89,19 @@ export function hasValidLimits(model: Model): boolean {
 	return Number.isSafeInteger(model.context_window) && model.context_window > 0
 		&& Number.isSafeInteger(model.max_tokens) && model.max_tokens > 0
 		&& model.max_tokens <= model.context_window;
+}
+
+// Reuse the pinned Pi catalog for accounting and transport capabilities. Gateway
+// aliases keep their canonical model's list prices, including cache and context
+// tiers; prices never participate in model selection. Ollama has no token bill.
+function builtinForModel(model: Model): any {
+	const slash = model.catalog_model.indexOf("/");
+	if (slash < 1) return undefined;
+	try {
+		return getBuiltinModel(model.catalog_model.slice(0, slash), model.catalog_model.slice(slash + 1));
+	} catch {
+		return undefined;
+	}
 }
 
 function readManifest(): Manifest | undefined {
@@ -158,21 +170,20 @@ export default function (pi: any): void {
 				baseUrl: baseURL,
 				api: backend.protocol ?? "openai-completions",
 				apiKey,
-				models: models.map((m) => ({
-					id: m.id.startsWith(`${name}/`) ? m.id.slice(name.length + 1) : m.id,
-					name: m.name || m.catalog_model,
-					reasoning: m.reasoning ?? true,
-					input: ["text"],
-					cost: {
-						input: m.input_cost ?? 0,
-						output: m.output_cost ?? 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-					},
-					contextWindow: m.context_window,
-					maxTokens: m.max_tokens,
-					compat: compatForModel(backend, m),
-				})),
+				models: models.map((m) => {
+					const builtin = builtinForModel(m);
+					return {
+						id: m.id.startsWith(`${name}/`) ? m.id.slice(name.length + 1) : m.id,
+						name: m.name || m.catalog_model,
+						reasoning: m.reasoning ?? true,
+						input: builtin?.input ?? ["text"],
+						cost: builtin?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						thinkingLevelMap: builtin?.thinkingLevelMap,
+						contextWindow: m.context_window,
+						maxTokens: m.max_tokens,
+						compat: compatForModel(backend, m),
+					};
+				}),
 			});
 		} catch {
 			/* best-effort; a generated backend must not break agent startup */

@@ -101,3 +101,38 @@ test("native runtime keeps its own proxy-managed credential sentinel", () => {
 		else process.env.OPENAI_API_KEY = saved;
 	}
 });
+
+test("gateway registration preserves canonical prices, cache tiers and thinking levels", async () => {
+	const fs = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	const { builtinModels } = await import("./stubs/pi-ai.mjs");
+	const cost = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5,
+		tiers: [{ inputTokensAbove: 272000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 }] };
+	const thinkingLevelMap = { off: null, minimal: null, high: "high", max: "max" };
+	builtinModels.set("openai/gpt-6-astra", { cost, thinkingLevelMap, input: ["text", "image"] });
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pix-pricing-"));
+	const previous = process.env.PI_TEST_AGENT_DIR;
+	try {
+		process.env.PI_TEST_AGENT_DIR = dir;
+		fs.writeFileSync(path.join(dir, "inference.json"), JSON.stringify({
+			version: 1,
+			backends: { work: { driver: "openai-compatible", protocol: "openai-responses", base_url: "https://gateway.example/v1", auth: "sbx-session" } },
+			models: [{ id: "work/gpt-6-astra", catalog_model: "openai/gpt-6-astra", backend: "work", context_window: 1050000, max_tokens: 128000 }],
+		}));
+		const registered = [];
+		const { default: inference } = await import("../extensions/inference.ts");
+		inference({ registerProvider: (name, config) => registered.push({ name, config }) });
+		assert.equal(registered.length, 1);
+		const model = registered[0].config.models[0];
+		assert.equal(model.id, "gpt-6-astra");
+		assert.deepEqual(model.cost, cost);
+		assert.deepEqual(model.thinkingLevelMap, thinkingLevelMap);
+		assert.deepEqual(model.input, ["text", "image"]);
+	} finally {
+		if (previous === undefined) delete process.env.PI_TEST_AGENT_DIR;
+		else process.env.PI_TEST_AGENT_DIR = previous;
+		builtinModels.delete("openai/gpt-6-astra");
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});

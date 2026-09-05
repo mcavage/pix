@@ -164,12 +164,12 @@ degraded: recall falls back to keyword search (no vector ranking).
 `/remember` is unaffected either way; it is an explicit store, not an
 extraction. Automatic capture is a separate, opt-in setting in an
 environment's `pix.toml` that pix does not turn on for you. Either backend,
-when you do want one, is authored directly in that same `pix.toml`; there
-is no setup interview and no machine-wide preference.
+can be declared in that same `pix.toml`. Setup offers supported installed
+Ollama models when the environment has no model selected.
 
 **Do I need a provider API key?** Only if your environment's inference is
-not already credentialed. `pix secret set` is the one place a 1Password
-reference is added for a direct key.
+not already credentialed. `pix setup` guides the missing connection; `pix secret set` also lets you
+record or replace its 1Password reference directly.
 
 ## Where to go next
 

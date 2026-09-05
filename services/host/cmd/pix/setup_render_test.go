@@ -57,12 +57,8 @@ func TestRenderSetupResult_QuietOnSuccess(t *testing.T) {
 			t.Errorf("quiet successful setup must not narrate artifacts or say ready, found %q:\n%s", forbidden, got)
 		}
 	}
-	if !strings.HasPrefix(got, "PIX_HOME already initialized") {
-		t.Errorf("want the unprefixed PIX_HOME line, got:\n%s", got)
-	}
-	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-	if len(lines) != 1 {
-		t.Errorf("want exactly 1 line on a quiet successful run, got %d:\n%s", len(lines), got)
+	if got != "" {
+		t.Errorf("successful machine setup should be quiet: %s", got)
 	}
 }
 

@@ -37,6 +37,8 @@ VERSION      ?= 0.1.71
 DERIVE_VERSION_SH ?= scripts/release/derive-build-version.sh
 launcher-version-or-die = $(if $(strip $(1)),$(1),$(error make: could not derive the local build version: $(DERIVE_VERSION_SH) failed (its own reason is on stderr above). Fix that, or build with an explicit identity: make $(MAKECMDGOALS) LAUNCHER_VERSION=X.Y.Z))
 LAUNCHER_VERSION ?= $(call launcher-version-or-die,$(shell $(DERIVE_VERSION_SH)))
+# Derive once per invocation: every artifact must keep the same identity.
+LAUNCHER_VERSION := $(LAUNCHER_VERSION)
 AGENT_DOCKERFILE  ?= images/agent/Dockerfile
 AGENT_IMAGE       ?= docker.io/$(DOCKER_USER)/pix-agent:$(VERSION)
 AGENT_LATEST      ?= docker.io/$(DOCKER_USER)/pix-agent:latest
@@ -136,9 +138,9 @@ build-memory: ## Build the pix-memory MCP service image from services/memory/Doc
 # OTHER checkouts on a multi-worktree machine, including ones a live sandbox
 # in another window was created from. A worktree only ever removes its own.
 # (These comments live ABOVE the recipe so make doesn't echo them to the terminal.)
-# load/run only ever concern pix-agent: pix-memory is a plain Docker container
-# (see docs/design/pix-v2-architecture.md §9), never an sbx sandbox template.
-load: build-agent ## Build + load the pix-agent image into sbx under a UNIQUE, WORKTREE-SCOPED tag, so `make run` uses this exact build
+# Only pix-agent is loaded into sbx. Build the complete bundle first so a fresh
+# home can resolve both release-pinned images after make load.
+load: bundle ## Build a matching launcher/runtime/image bundle + load the pix-agent image into sbx under a UNIQUE, WORKTREE-SCOPED tag, so `make run` uses this exact build
 	@set -e; TS="local-$(WORKTREE_HASH)-$$(date +%s)"; T="docker.io/$(DOCKER_USER)/pix-agent:$$TS"; \
 	docker tag $(LOCAL_AGENT_IMAGE) "$$T"; \
 	docker save "$$T" -o out/pix.tar; \
@@ -150,7 +152,7 @@ load: build-agent ## Build + load the pix-agent image into sbx under a UNIQUE, W
 	echo "Loaded image:  $$REF"; \
 	echo ""; \
 	echo "Run this exact build (recreates the sandbox so the new image takes effect):"; \
-	echo "  pix rm <name> && pix run --template $$REF     # from ANY directory (5-worktree friendly)"; \
+	echo "  pix run --dev                                  # from this checkout"; \
 	echo "  make run                                       # dev flow from this checkout (live skills + MCP)"
 
 publish: publish-agent publish-memory ## Push BOTH pix-agent and pix-memory to the registry

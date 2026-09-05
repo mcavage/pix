@@ -55,9 +55,7 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"strings"
 
 	"pix/host/cli"
 	"pix/host/pixhome"
@@ -105,7 +103,7 @@ func resolveEnvTrustSnapshot(home pixhome.Paths, sel nativeenv.Selected, loaded 
 // fingerprint no longer matches snap.fingerprint (identity/digest compare
 // against the snapshot), rather than trusting whatever the fresh read
 // happens to say about ITSELF.
-func gateEnvTrust(d *cli.Deps, snap envTrustSnapshot, checkDrift bool) error {
+func gateEnvTrust(d *cli.Deps, snap envTrustSnapshot, checkDrift bool, detail ...bool) error {
 	if snap.sel.Name == "" {
 		return nil
 	}
@@ -136,28 +134,14 @@ func gateEnvTrust(d *cli.Deps, snap envTrustSnapshot, checkDrift bool) error {
 			name, name)
 	}
 
-	fmt.Fprintln(d.Err, "pix run: this environment has not been reviewed.")
-	renderTrustReview(d.Err, name, snap.bom, priorAcceptance(snap.home, snap.sel), false)
-	fmt.Fprintf(d.Err, "  fingerprint: %s\n\n", snap.fingerprint)
-	fmt.Fprint(d.Err, "Accept this host-execution footprint? [y/N] ")
-	reader := bufio.NewReader(d.In)
-	line, _ := reader.ReadString('\n')
-	if !strings.EqualFold(strings.TrimSpace(line), "y") {
-		return fmt.Errorf("not accepted; run `pix env trust %s` when ready, or launch with a different --env", name)
-	}
-
-	if err := writeTrustRecord(snap.home, name, snap.sel.Root, snap.fingerprint, snap.bom); err != nil {
-		return err
-	}
-	fmt.Fprintf(d.Err, "pix run: environment %q trusted.\n", name)
-	return nil
+	return acceptEnvironment(d, d.Err, snap.home, snap.sel, snap.bom, snap.fingerprint, false, len(detail) > 0 && detail[0])
 }
 
 // runTrustGate wraps gateEnvTrust in run's own fail-closed exit shape: a
 // SilentError so the root exit-code mapper never re-prefixes or re-renders
 // an already-complete message.
-func runTrustGate(d *cli.Deps, snap envTrustSnapshot, checkDrift bool) error {
-	if terr := gateEnvTrust(d, snap, checkDrift); terr != nil {
+func runTrustGate(d *cli.Deps, snap envTrustSnapshot, checkDrift bool, detail ...bool) error {
+	if terr := gateEnvTrust(d, snap, checkDrift, detail...); terr != nil {
 		fmt.Fprintln(d.Err, "pix run: "+terr.Error())
 		return cli.SilentError{Code: 1}
 	}

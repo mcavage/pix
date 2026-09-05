@@ -54,7 +54,7 @@ func TestOfferDefaultEnvironment_AcceptedSelectsIt(t *testing.T) {
 
 	offerDefaultEnvironment(d, p, "work")
 
-	if !strings.Contains(out.String(), "Use work as the default environment") {
+	if !strings.Contains(out.String(), "Make work your default environment? [Y/n]") {
 		t.Fatalf("a successful named setup must offer the default; got:\n%s", out.String())
 	}
 	if got := recordedDefault(t, p.Home); got != "work" {
@@ -96,7 +96,7 @@ func TestOfferDefaultEnvironment_NonInteractiveNeverWrites(t *testing.T) {
 	if !strings.Contains(out.String(), "pix env default work") {
 		t.Fatalf("a non-interactive run must name the command instead of asking; got:\n%s", out.String())
 	}
-	if strings.Contains(out.String(), "Use work as the default environment") {
+	if strings.Contains(out.String(), "Make work your default environment? [Y/n]") {
 		t.Fatalf("a non-interactive run must not print a question nobody can answer; got:\n%s", out.String())
 	}
 }
@@ -117,7 +117,7 @@ func TestOfferDefaultEnvironment_AlreadyDefaultAsksNothing(t *testing.T) {
 	if stdin.reads > 0 {
 		t.Fatalf("an already-default environment must not read stdin (%d reads)", stdin.reads)
 	}
-	if !strings.Contains(out.String(), "already the default") {
+	if !strings.Contains(out.String(), "Run pix to start.") {
 		t.Fatalf("got:\n%s", out.String())
 	}
 }

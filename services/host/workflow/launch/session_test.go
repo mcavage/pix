@@ -444,7 +444,7 @@ exit 0
 	if strings.Contains(got, "exec") {
 		t.Fatalf("a stopped sandbox must never be exec'd, got argv %q", got)
 	}
-	if !strings.Contains(got, "--model anthropic/claude-sonnet-5") || !strings.Contains(got, "--resume sess-9") {
+	if !strings.Contains(got, "--model anthropic/claude-sonnet-5") || !strings.Contains(got, "--session sess-9") {
 		t.Fatalf("argv %q does not honor the current --model/--resume", got)
 	}
 }
@@ -487,5 +487,19 @@ exit 0
 	}
 	if !strings.HasPrefix(got, "exec ") {
 		t.Fatalf("a running sandbox must be exec'd, got argv %q", got)
+	}
+}
+
+func TestAttachWithoutImageOverrideKeepsRecordedTemplate(t *testing.T) {
+	t.Setenv("PIX_HOME", t.TempDir())
+	key := "pix-test"
+	if err := writeSessionState(key, sessionFingerprintFileName, sandbox.Fingerprint{"static_mcp": "", "template": "local-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if diff, found := CheckSessionFingerprint(key, sandbox.Fingerprint{"static_mcp": ""}); !found || len(diff) != 0 {
+		t.Fatalf("implicit attach: %v, %v", diff, found)
+	}
+	if diff, found := CheckSessionFingerprint(key, sandbox.Fingerprint{"static_mcp": "", "template": "local-2"}); !found || len(diff) != 1 {
+		t.Fatalf("explicit changed image: %v, %v", diff, found)
 	}
 }

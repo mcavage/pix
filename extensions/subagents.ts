@@ -588,6 +588,14 @@ function finalText(messages: any[]): string {
 	}
 	return "";
 }
+// Runtime message metadata is evidence; the child's prose and requested model are not.
+function modelEvidence(r: SingleResult): string {
+ const models = [...new Set(r.messages
+  .filter((m) => m?.role === "assistant" && m.provider && m.model)
+  .map((m) => `${m.provider}/${m.model}`))];
+ return `Agent: ${r.agent}; model observed: ${models.join(", ") || "unavailable (no response metadata)"}`;
+}
+
 function isFailed(r: SingleResult): boolean {
 	return (
 		r.exitCode !== 0 ||
@@ -645,7 +653,7 @@ function resultOutput(r: SingleResult): string {
 			return `Timed out: exceeded ${Math.round((r.wallMs ?? WALL_MS) / 1000)}s wall-clock (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
 		return r.errorMessage || r.stderr || finalText(r.messages) || "(no output)";
 	}
-	const text = finalText(r.messages) || "(no output)";
+	const text = `${modelEvidence(r)}\n\n${finalText(r.messages) || "(no output)"}`;
 	return r.fallbackFrom
 		? `Primary model ${r.fallbackFrom} returned a provider policy refusal; recovered with ${r.model}.\n\n${text}`
 		: text;
@@ -2164,7 +2172,7 @@ export default function (pi: ExtensionAPI) {
 							{
 								type: "text",
 								text:
-									finalText(results.at(-1)?.messages ?? []) || "(no output)",
+									results.map(modelEvidence).join("\n") + "\n\n" + (finalText(results.at(-1)?.messages ?? []) || "(no output)"),
 							},
 						],
 						details: md(results),
@@ -2296,7 +2304,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				return {
 					content: [
-						{ type: "text", text: finalText(r.messages) || "(no output)" },
+						{ type: "text", text: resultOutput(r) },
 					],
 					details: md([r]),
 					usage: aggregateSubagentUsage([r]),

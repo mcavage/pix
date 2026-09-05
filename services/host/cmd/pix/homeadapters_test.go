@@ -52,7 +52,7 @@ func memoryEmbedEnvAt(t *testing.T, body string) hostenv.Env {
 func TestMemoryContainerEnv_LocalOllamaTranslatesToHostDockerInternal(t *testing.T) {
 	env := memoryEmbedEnvAt(t, `{"models":[]}`)
 	envVars, hosts := memoryContainerEnv(&config.Config{MemoryEmbedModel: "nomic-embed-text"}, env)
-	if !strings.HasPrefix(envVars["OLLAMA_HOST"], "host.docker.internal:") {
+	if !strings.HasPrefix(envVars["OLLAMA_HOST"], "http://host.docker.internal:") {
 		t.Errorf("OLLAMA_HOST = %q, want a host.docker.internal translation", envVars["OLLAMA_HOST"])
 	}
 	if envVars["MEMORY_EMBED_MODEL"] != "nomic-embed-text" {
@@ -76,10 +76,10 @@ func TestMemoryContainerEnv_LocalOllamaTranslatesToHostDockerInternal(t *testing
 func TestMemoryContainerEnv_RemoteOllamaPassesThroughUnchanged(t *testing.T) {
 	fake := &systest.Fake{
 		LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil },
-		GetenvFn:   func(name string) string { return "team-ollama.internal:11434" },
+		GetenvFn:   func(name string) string { return "http://team-ollama.internal:11434" },
 	}
 	envVars, hosts := memoryContainerEnv(&config.Config{MemoryEmbedModel: "nomic-embed-text"}, hostenv.Env{System: fake})
-	if envVars["OLLAMA_HOST"] != "team-ollama.internal:11434" {
+	if envVars["OLLAMA_HOST"] != "http://team-ollama.internal:11434" {
 		t.Errorf("OLLAMA_HOST = %q, want the remote endpoint unchanged", envVars["OLLAMA_HOST"])
 	}
 	if len(hosts) != 0 {

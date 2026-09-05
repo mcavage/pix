@@ -249,14 +249,12 @@ against config state the way v1's config-backed `pix env add` did.
 The command does not run setup, reconcile MCP, start a service, or mutate a
 sandbox.
 
-`pix env trust` is the explicit approval command for host-executing
-configuration. It prints the full bill of materials and records approval outside
-the environment directory. `--yes` suppresses the prompt but not the bill. It
-approves only the displayed fingerprint.
-
-An interactive `pix run` may present the same complete trust operation on first
-use, defaulting to No. This is the same operation as `pix env trust`, not a
-second authority path. A non-interactive run never grants trust.
+`pix env trust` records approval for host access outside the environment directory.
+Normal review explains the actions and access in plain language and defaults to
+No. `--verbose` shows executable arguments, content digests and the detailed
+change receipt. `--yes` suppresses the prompt, never the fingerprint check.
+Interactive first use may offer this same approval; non-interactive launches
+never grant it. An environment without host access needs no approval screen.
 
 Beyond `add`'s narrow adopt-an-existing-source case, Pix does not provide
 general environment create, edit, forget, update, or delete commands. Users
@@ -305,11 +303,15 @@ It performs only these jobs:
    then check again; and
 9. probes the result before reporting it ready.
 
-There is no setup interview. Setup never asks which cloud provider, llmman, or
-Ollama to use: a provider key is added with `pix secret set`, and local
-inference is authored directly in an environment's `pix.toml` (§7). Setup only
-validates what an environment already declares; it never chooses on the
-user's behalf and never silently prefers or migrates between backends.
+Every environment gets the same guided onboarding. Existing declarations supply
+its model choice; when that choice is missing, setup offers the environment's
+models, or installed supported Ollama models and shipped provider defaults. The
+user chooses explicitly. Setup asks only for the selected model's missing
+credentials and the environment's declared connections. It preserves completed
+choices on rerun and keeps diagnostic details behind `--verbose`.
+
+Environment names are arbitrary. `default` is the initial environment; home and
+work are user conventions, never different product modes.
 
 `--env NAME` sets up one existing environment in addition to machine-level
 prerequisites. On success it OFFERS to make that environment the machine
@@ -650,7 +652,9 @@ modify the shared base kit.
 ## 7. Models and local inference
 
 Pix stores literal model choices. It has no scorecard, intent resolver, price
-table, benchmark policy, or automatic winner.
+table, benchmark policy, or automatic winner. Pi owns usage pricing; generated
+gateway aliases retain the canonical model’s prices (including cache and context
+tiers) from the pinned Pi catalog. These are list-price estimates, never routing inputs.
 
 Selection order is:
 
@@ -673,8 +677,8 @@ Local inference is an external host dependency. Pix supports llmman and Ollama,
 reached over their native (Ollama) or OpenAI-compatible (llmman, or any other
 OpenAI-compatible endpoint) transport. llmman serves Ollama-, OpenAI-, and
 Anthropic-compatible APIs and loads models on demand. Ollama remains a
-supported backend. There is no setup interview for either: the environment
-author declares a backend and its models directly in that environment's own
+supported backend. An environment author can declare a backend and its
+models directly in that environment's own
 `pix.toml` `[inference.*]` tables (docs/design/environments.md §5.2), and
 `pix run` merges that declaration over machine config for the session it
 launches. `pix setup --env NAME` and

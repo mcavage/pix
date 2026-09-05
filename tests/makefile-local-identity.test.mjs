@@ -72,3 +72,12 @@ test("make run WITH an explicit NAME still passes it through safely", () => {
 	assert.ok(run.includes('N="pix-explicit"'), "an explicit NAME must still reach the recipe");
 	assert.ok(run.includes('${N:+--name "$N"}'), "and still be passed through the same quoted expansion");
 });
+
+
+test("make load refreshes the matching release bundle before loading its image", () => {
+	const commands = dryRun("load");
+	const manifest = commands.indexOf("node scripts/release/emit-manifest.mjs");
+	assert.ok(manifest >= 0, "load must regenerate the release manifest");
+	assert.ok(commands.indexOf("go build") < manifest, "load must build the matching launcher");
+	assert.ok(commands.indexOf("sbx template load") > manifest, "load must use the completed bundle");
+});

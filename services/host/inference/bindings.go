@@ -122,6 +122,17 @@ func RuntimeID(b Binding) string {
 	return b.Backend + "/" + b.UpstreamID
 }
 
+// RuntimeModelID resolves an authored model name through its explicit binding.
+// Unbound names remain unchanged so the normal availability check can refuse them.
+func RuntimeModelID(cfg *config.Config, name string) string {
+	for _, b := range Bindings(cfg) {
+		if b.Model == name {
+			return RuntimeID(b)
+		}
+	}
+	return name
+}
+
 // CallableProviders returns the distinct providers this host has at least one
 // CALLABLE binding for, in first-seen config order, or nil when this host has
 // made no inference decision at all.

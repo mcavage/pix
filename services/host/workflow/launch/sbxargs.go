@@ -17,6 +17,7 @@ const kitRepo = "git+https://github.com/mcavage/pix.git"
 const DockerImageRepo = "docker.io/mcavage/pix-agent"
 
 type RunOpts struct {
+	Verbose       bool
 	Workspace     string   // positional DIR (default ".")
 	Dev           bool     // --dev: Mode B, skills load live from a repo checkout
 	DevRoot       string   // resolved repo root when Dev is set (caller resolves)
@@ -188,7 +189,7 @@ func MountDirs(cfg *config.Config, o RunOpts) []string {
 }
 
 func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
-	var piArgs []string
+	piArgs := []string{"--session-dir", ".pi-sessions"}
 	if o.Dev {
 		// Mode B: turn off baked skills and load the repo tree live.
 		piArgs = append(piArgs, "--no-skills", "--skill", filepath.Join(o.DevRoot, "skills"))
@@ -200,7 +201,7 @@ func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
 		piArgs = append(piArgs, "--model", o.Model)
 	}
 	if o.Resume != "" {
-		piArgs = append(piArgs, "--resume", o.Resume)
+		piArgs = append(piArgs, "--session", o.Resume)
 	}
 	if len(o.Models) > 0 {
 		piArgs = append(piArgs, "--models", strings.Join(o.Models, ","))
@@ -255,12 +256,12 @@ func WillCreate(state SbxState) bool { return state == SbxAbsent }
 // the session, exactly as on a fresh create.
 func BuildReattachArgs(o RunOpts) []string {
 	args := []string{"run", "--name", o.Name}
-	var piArgs []string
+	piArgs := []string{"--session-dir", ".pi-sessions"}
 	if o.Model != "" {
 		piArgs = append(piArgs, "--model", o.Model)
 	}
 	if o.Resume != "" {
-		piArgs = append(piArgs, "--resume", o.Resume)
+		piArgs = append(piArgs, "--session", o.Resume)
 	}
 	piArgs = append(piArgs, o.Passthrough...)
 	if len(piArgs) > 0 {
@@ -304,49 +305,4 @@ Options:
   - run a local build from your pix checkout:  pix run --dev
   - override the kit entirely:                 pix run --kit <path-or-git-url>
 See ` + "`pix help run`" + ` for the released-vs-local behavior.`
-}
-
-// PixEntrypoint is the in-sandbox program every attach execs: the Pix
-// build of Pi. It is the ONE entrypoint name this package composes, so a
-// create-time attach and a later re-attach can never disagree about what
-// runs inside the sandbox. It is a function returning a fresh slice, not a
-// package var: this package declares no mutable globals, and a shared
-// slice header is exactly the kind of global a caller could append into.
-func PixEntrypoint() []string { return []string{"pi"} }
-
-// EntrypointArgs composes the in-sandbox argv for one session: the Pix
-// entrypoint, then this session's `--model` and `--resume`.
-//
-// Both are PI arguments, not sbx flags (docs/design/pix-v2-architecture.md
-// §6.3), which is the whole reason launch does not use `sbx env run`: that
-// command cannot carry session-specific arguments to the custom agent.
-// Because they are composed here, on every attach, neither one is
-// creation-time state that a second `pix run --model other` would silently
-// ignore.
-func EntrypointArgs(entrypoint []string, model, resume string) []string {
-	argv := append([]string(nil), entrypoint...)
-	if len(argv) == 0 {
-		argv = append(argv, PixEntrypoint()...)
-	}
-	if m := strings.TrimSpace(model); m != "" {
-		argv = append(argv, "--model", m)
-	}
-	if s := strings.TrimSpace(resume); s != "" {
-		argv = append(argv, "--resume", s)
-	}
-	return argv
-}
-
-// BuildEntrypointAttachArgv is the v2 attach argv, used identically for the
-// first attach after `sbx env create` and for every later re-attach:
-//
-//	sbx exec -it <name> -- <entrypoint> [--model M] [--resume S]
-//
-// The `--` separator comes from sandbox.ExecArgv, which always emits it.
-func BuildEntrypointAttachArgv(name string, tty bool, entrypoint []string, model, resume string) ([]string, error) {
-	return sandbox.ExecArgv(sandbox.ExecOpts{
-		Name:    name,
-		TTY:     tty,
-		Command: EntrypointArgs(entrypoint, model, resume),
-	})
 }

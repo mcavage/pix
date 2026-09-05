@@ -377,7 +377,11 @@ func TestSetup_RegistersMemoryURLWithToken(t *testing.T) {
 	if terr != nil || tok == "" {
 		t.Fatalf("ReadMemoryAuthToken = (%q, %v), want a generated token", tok, terr)
 	}
-	want := "http://127.0.0.1:18080/mcp?token=" + tok
+	port, err := container.ReadMemoryPort(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("http://127.0.0.1:%d/mcp?token=%s", port, tok)
 	if got := mcp.registered[wantMemoryMCPName(t, home)]; got != want {
 		t.Fatalf("registered MCP URL = %q, want %q", got, want)
 	}

@@ -75,14 +75,14 @@
   "npmGlobal": [
     {
       "name": "@earendil-works/pi-coding-agent",
-      "version": "0.83.0",
+      "version": "0.85.1",
       "license": "MIT",
       "role": "npm install -g (Dockerfile ARG PI_PACKAGE) — the pi CLI itself",
       "verifiedVia": "package.json \"license\" field, installed image"
     },
     {
       "name": "@earendil-works/pi-tui",
-      "version": "0.83.0",
+      "version": "0.85.1",
       "license": "MIT",
       "author": "Mario Zechner",
       "role": "transitive dependency of pi-coding-agent; PATCHED at image build time by scripts/patches/apply-tui-bottom-pin.mjs (see docs/upstream/tui-bottom-pin.md). The patch is a narrow, reviewable, idempotent modification to the installed dist/tui.js, not a fork or redistribution of modified source under a different name.",

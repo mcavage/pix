@@ -51,6 +51,7 @@ skills/*
 !skills/guard
 !skills/gworkspace
 !skills/healthcheck
+!skills/repo-healthcheck
 !skills/ingest
 !skills/debug
 !skills/microcopy

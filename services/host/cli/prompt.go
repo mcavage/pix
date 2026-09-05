@@ -2,8 +2,12 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+
+	"golang.org/x/term"
 	"strings"
 )
 
@@ -96,14 +100,15 @@ func (d *Deps) Ask(q Question) (string, bool) {
 	if q.Detail != "" {
 		fmt.Fprintf(d.Out, "  %s\n", q.Detail)
 	}
-	reader := d.Line()
 	for attempt := 0; attempt < attempts; attempt++ {
+		prompt := "  " + q.Label
 		if q.Current != "" {
-			fmt.Fprintf(d.Out, "  %s [%s]: ", q.Label, q.Current)
-		} else {
-			fmt.Fprintf(d.Out, "  %s: ", q.Label)
+			prompt += " [" + q.Current + "]"
 		}
-		line, err := reader.ReadString('\n')
+		line, err := d.ReadLine(d.Out, prompt+": ")
+		if err != nil && line == "" {
+			return "", false
+		}
 		answer := strings.TrimSpace(line)
 		if answer == "" && q.Current != "" {
 			answer = q.Current
@@ -138,11 +143,51 @@ func (d *Deps) AskYN(prompt string, def bool) bool {
 	if !d.Interactive || d.In == nil {
 		return def
 	}
-	fmt.Fprint(d.Out, prompt)
-	line, _ := d.Line().ReadString('\n')
+	return d.Confirm(d.Out, prompt, def)
+}
+
+func (d *Deps) Confirm(out io.Writer, prompt string, def bool) bool {
+	line, err := d.ReadLine(out, prompt)
+	if err != nil {
+		return false
+	}
 	ans := strings.ToLower(strings.TrimSpace(line))
 	if ans == "" {
 		return def
 	}
 	return ans == "y" || ans == "yes"
+}
+
+// ReadLine uses a real line editor on terminals and one shared buffer on pipes.
+// Restore cooked mode before handing the terminal to an authentication process.
+func (d *Deps) ReadLine(out io.Writer, prompt string) (string, error) {
+	if f, ok := d.In.(*os.File); ok && d.Interactive && term.IsTerminal(int(f.Fd())) {
+		state, err := term.MakeRaw(int(f.Fd()))
+		if err != nil {
+			return "", err
+		}
+		defer term.Restore(int(f.Fd()), state)
+		if d.terminal == nil {
+			d.terminal = term.NewTerminal(struct {
+				io.Reader
+				io.Writer
+			}{f, out}, prompt)
+		} else {
+			d.terminal.SetPrompt(prompt)
+		}
+		if width, height, err := term.GetSize(int(f.Fd())); err == nil && width > 0 && height > 0 {
+			d.terminal.SetSize(width, height)
+		}
+		line, err := d.terminal.ReadLine()
+		if errors.Is(err, io.EOF) {
+			fmt.Fprint(out, "\r\n")
+			panic(errPromptCanceled)
+		}
+		if errors.Is(err, term.ErrPasteIndicator) {
+			err = nil
+		}
+		return line, err
+	}
+	fmt.Fprint(out, prompt)
+	return d.Line().ReadString('\n')
 }

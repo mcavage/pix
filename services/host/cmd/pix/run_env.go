@@ -89,6 +89,10 @@ func resolveRunEnvironment(explicit string) (launch.EnvSelection, envTrustSnapsh
 // `--dev`'s checkout kit with its live skill arguments. Every value is one
 // this launch already decided; nothing is re-derived here.
 func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelection, version string) (launch.EffectiveInput, error) {
+	home, err := pixhome.Dir()
+	if err != nil {
+		return launch.EffectiveInput{}, err
+	}
 	template := o.Template
 	if template == "" {
 		if o.LocalImageTag != "" {
@@ -145,7 +149,10 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 	}
 	// The environment's OWN declared servers (with their reviewed pix.toml
 	// credential wrappers) plus the host-global names this create preloads.
-	in.EnvMCPServers = launch.EnvMCPWrapperFacts(sel.Document, sel.Sidecar)
+	in.EnvMCPServers, err = nativeenv.EnvironmentFacts(sel.Document, sel.Sidecar, home)
+	if err != nil {
+		return launch.EffectiveInput{}, err
+	}
 	in.MCPServers = envinfo.WithBuiltinMCPServers(
 		launch.ComposeMCPServerFacts(in.EnvMCPServers, o.StaticMCP),
 		builtinMCPFacts(),

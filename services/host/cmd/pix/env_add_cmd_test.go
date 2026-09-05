@@ -40,10 +40,8 @@ func TestEnvAddCmd_LocalDirectory_SymlinksAndPrintsNextSteps(t *testing.T) {
 	if !strings.Contains(got, `"myproj"`) {
 		t.Fatalf("output missing derived name: %q", got)
 	}
-	if !strings.Contains(got, "pix env show myproj") ||
-		!strings.Contains(got, "pix env trust myproj") ||
-		!strings.Contains(got, "pix env default myproj") {
-		t.Fatalf("output missing the exact next-step commands: %q", got)
+	if !strings.Contains(got, "Next: pix setup --env myproj") {
+		t.Fatalf("missing setup next step: %s", got)
 	}
 
 	target := filepath.Join(home, "envs", "myproj")
@@ -144,7 +142,7 @@ func TestEnvAddCmd_GitURL_ClonesViaGitClone(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("dispatch exit = %d, stderr=%s", code, errb.String())
 	}
-	if !strings.Contains(out.String(), "cloned") {
+	if !strings.Contains(out.String(), "Added environment") {
 		t.Fatalf("output = %q, want 'cloned'", out.String())
 	}
 	if _, err := os.Stat(filepath.Join(home, "envs", "somerepo", ".sbxenv.yaml")); err != nil {

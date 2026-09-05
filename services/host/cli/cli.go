@@ -63,7 +63,8 @@ type Deps struct {
 	// line is this command's one buffered stdin reader (see Deps.Line in
 	// prompt.go). It is memoized because a second reader over the same
 	// stdin silently eats whatever the first one buffered.
-	line *bufio.Reader
+	line     *bufio.Reader
+	terminal *term.Terminal
 }
 
 // Config loads config.toml once per command. The error is returned rather than
@@ -158,7 +159,15 @@ func ExitCode(err error) int {
 //
 // kong's default exits the process on --help and on a parse error. Both are
 // errors here instead: this package owns no exit.
-func RunRoot[T any](name, description, rootHelp string, argv []string, d *Deps) error {
+func RunRoot[T any](name, description, rootHelp string, argv []string, d *Deps) (runErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if r != errPromptCanceled {
+				panic(r)
+			}
+			runErr = SilentError{Code: 130}
+		}
+	}()
 	var cmd T
 	parser, err := kong.New(&cmd,
 		kong.Name(name),
@@ -188,6 +197,10 @@ func RunRoot[T any](name, description, rootHelp string, argv []string, d *Deps) 
 // its terminal paths, and confining the ugliness to this one function is better
 // than letting every verb inherit an os.Exit it cannot test.
 var errHelpRequested = errors.New("help requested")
+
+// Terminal cancellation unwinds the whole command, including held locks and
+// raw-mode restoration; a boolean prompt result must not advance to another step.
+var errPromptCanceled = errors.New("prompt canceled")
 
 func parse(parser *kong.Kong, argv []string) (ctx *kong.Context, err error) {
 	defer func() {

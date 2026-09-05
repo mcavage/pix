@@ -44,8 +44,8 @@ from the source of truth.
 
 | Package | Version | License |
 | --- | --- | --- |
-| @earendil-works/pi-coding-agent | 0.83.0 | MIT |
-| @earendil-works/pi-tui | 0.83.0 | MIT |
+| @earendil-works/pi-coding-agent | 0.85.1 | MIT |
+| @earendil-works/pi-tui | 0.85.1 | MIT |
 | @juanibiapina/pi-extension-settings | 0.9.1 | MIT |
 | pi-manage-todo-list | 0.4.0 | MIT |
 | pi-mcp-adapter | 2.13.0 | MIT |
@@ -57,7 +57,7 @@ from the source of truth.
 
 ### Patched at build time
 
-- **@earendil-works/pi-tui@0.83.0** (MIT) — transitive dependency of pi-coding-agent; PATCHED at image build time by scripts/patches/apply-tui-bottom-pin.mjs (see docs/upstream/tui-bottom-pin.md). The patch is a narrow, reviewable, idempotent modification to the installed dist/tui.js, not a fork or redistribution of modified source under a different name.
+- **@earendil-works/pi-tui@0.85.1** (MIT) — transitive dependency of pi-coding-agent; PATCHED at image build time by scripts/patches/apply-tui-bottom-pin.mjs (see docs/upstream/tui-bottom-pin.md). The patch is a narrow, reviewable, idempotent modification to the installed dist/tui.js, not a fork or redistribution of modified source under a different name.
 - **pi-manage-todo-list@0.4.0** (MIT) — pinned pi extension (Dockerfile); PATCHED by scripts/patches/apply-todo-durable-clear.mjs
 - **pi-web-access@0.13.0** (MIT) — pinned pi extension (Dockerfile); PATCHED by scripts/patches/apply-web-access-gateway.mjs
 

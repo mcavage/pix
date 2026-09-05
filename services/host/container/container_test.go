@@ -77,6 +77,11 @@ func (s *stubProber) Probe(baseURL string) error {
 
 func TestReconcile_CreatesWhenAbsent(t *testing.T) {
 	spec := testSpec()
+	var allocErr error
+	spec.HostPort, allocErr = freeLoopbackPort()
+	if allocErr != nil {
+		t.Fatal(allocErr)
+	}
 	r := &fakeRunner{}
 	r.script("inspect", "Error: No such object: test-pix-memory", errors.New("exit status 1"))
 	r.script("create", "newid123", nil)
@@ -96,7 +101,7 @@ func TestReconcile_CreatesWhenAbsent(t *testing.T) {
 	if !res.Ready() {
 		t.Fatalf("Ready() = false, want true (ProbeErr=%v)", res.ProbeErr)
 	}
-	if len(prober.calls) != 1 || prober.calls[0] != "http://127.0.0.1:18080" {
+	if len(prober.calls) != 1 || prober.calls[0] != fmt.Sprintf("http://127.0.0.1:%d", spec.HostPort) {
 		t.Fatalf("prober calls = %v", prober.calls)
 	}
 	// Verify the create argv actually carries the fingerprint + restart policy.
@@ -110,7 +115,7 @@ func TestReconcile_CreatesWhenAbsent(t *testing.T) {
 		t.Fatal("docker create was never invoked")
 	}
 	joined := strings.Join(createArgs, " ")
-	for _, want := range []string{"--restart unless-stopped", "pix.managed=true", "pix.fingerprint=" + spec.Fingerprint(), "127.0.0.1:18080:8080", spec.DataDir + ":/data"} {
+	for _, want := range []string{"--restart unless-stopped", "pix.managed=true", "pix.fingerprint=" + spec.Fingerprint(), fmt.Sprintf("127.0.0.1:%d:8080", spec.HostPort), spec.DataDir + ":/data"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("create argv %q missing %q", joined, want)
 		}
@@ -168,6 +173,11 @@ func TestReconcile_StartsStoppedMatch(t *testing.T) {
 
 func TestReconcile_ReplacesMismatchAfterConfirm(t *testing.T) {
 	spec := testSpec()
+	var allocErr error
+	spec.HostPort, allocErr = freeLoopbackPort()
+	if allocErr != nil {
+		t.Fatal(allocErr)
+	}
 	r := &fakeRunner{}
 	r.script("inspect", inspectJSON("old1", "example.com/pix-memory@sha256:"+strings.Repeat("b", 64), true, map[string]string{
 		ManagedLabel: "true", FingerprintLabel: "sha256:stale",
@@ -627,11 +637,16 @@ func TestFingerprint_ChangesWithAuthTokenFilePathButNeverLeaksItsContent(t *test
 // adopts, that orphan.
 func TestReconcile_StartPortConflict_ClassifiesAndRemovesFailedCreate(t *testing.T) {
 	spec := testSpec()
+	var allocErr error
+	spec.HostPort, allocErr = freeLoopbackPort()
+	if allocErr != nil {
+		t.Fatal(allocErr)
+	}
 	r := &fakeRunner{}
 	r.script("inspect", "Error: No such object: test-pix-memory", errors.New("exit status 1"))
 	r.script("create", "created-container-id", nil)
 	r.script("start", "Error response from daemon: driver failed programming external connectivity "+
-		"on endpoint test-pix-memory: Bind for 0.0.0.0:18080 failed: port is already allocated",
+		fmt.Sprintf("on endpoint test-pix-memory: Bind for 0.0.0.0:%d failed: port is already allocated", spec.HostPort),
 		errors.New("exit status 1"))
 	r.script("rm", "created-container-id", nil)
 

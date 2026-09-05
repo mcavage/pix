@@ -126,7 +126,7 @@ func TestEnvironmentAuthoredLlmmanOpenAICompatibleInference_WorksAndCarriesEgres
 	stateHome(t)
 	cfg := &config.Config{}
 	sc := &envinfo.Sidecar{
-		Models: envinfo.ModelsSection{Main: "llmman/local-coder"},
+		Models: envinfo.ModelsSection{Main: "my-coder"},
 		Inference: envinfo.InferenceSection{
 			Backends: map[string]envinfo.InferenceBackend{
 				"llmman": {
@@ -136,7 +136,7 @@ func TestEnvironmentAuthoredLlmmanOpenAICompatibleInference_WorksAndCarriesEgres
 				},
 			},
 			Models: []envinfo.InferenceModel{
-				{ID: "llmman/local-coder", Backend: "llmman", UpstreamID: "local-coder"},
+				{ID: "my-coder", Backend: "llmman", UpstreamID: "local-coder"},
 			},
 		},
 	}
@@ -152,6 +152,9 @@ func TestEnvironmentAuthoredLlmmanOpenAICompatibleInference_WorksAndCarriesEgres
 	if got := eff.Inference.Backends["llmman"].CredentialService; got != "llmman" {
 		t.Fatalf("credential_service = %q, want it carried through from pix.toml", got)
 	}
+	if got := inference.RuntimeModelID(eff, sc.Models.Main); got != "llmman/local-coder" {
+		t.Fatalf("session model = %q, want the explicitly bound runtime model", got)
+	}
 
 	roster := RosterInputFor(sc, nil)
 	kitDir, err := inference.SynthesizeInferenceKit(eff, roster)
@@ -166,6 +169,9 @@ func TestEnvironmentAuthoredLlmmanOpenAICompatibleInference_WorksAndCarriesEgres
 	manifest := generatedInferenceManifest(t, kitDir)
 	if ids := modelIDs(t, manifest); len(ids) != 1 || ids[0] != "llmman/local-coder" {
 		t.Fatalf("model ids = %v, want [llmman/local-coder]", ids)
+	}
+	if got := manifest["roster"].(map[string]any)["main"]; got != "llmman/local-coder" {
+		t.Fatalf("roster main = %v, want the same runtime model as the session", got)
 	}
 	spec, err := os.ReadFile(filepath.Join(kitDir, "spec.yaml"))
 	if err != nil {

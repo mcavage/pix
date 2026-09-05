@@ -108,7 +108,7 @@ func TestRunEnvGatewayInference_SkipsTheBaseProviderKeyGate(t *testing.T) {
 	out.Reset()
 	errb.Reset()
 
-	dispatch([]string{"run", t.TempDir(), "--env", "work"}, d)
+	dispatch([]string{"run", t.TempDir(), "--env", "work", "--verbose"}, d)
 
 	combined := out.String() + errb.String()
 	if strings.Contains(combined, providerInterviewText) {
@@ -135,5 +135,15 @@ func TestRunEnvWithoutOwnInference_StillRefusesWithNoProviderKey(t *testing.T) {
 	combined := out.String() + errb.String()
 	if !strings.Contains(combined, providerInterviewText) {
 		t.Fatalf("an environment with no inference of its own still needs a provider key; got:\n%s", combined)
+	}
+}
+
+func TestRunEnvSelectedOllamaDoesNotRequireACloudKey(t *testing.T) {
+	home := keylessEnvHome(t, "research", "schema = 1\n[models]\nmain = \"ollama/qwen3.5:9b\"\n")
+	d, out, errb := keylessRunDeps(t, home)
+	dispatch([]string{"run", t.TempDir(), "--env", "research", "--verbose"}, d)
+	got := out.String() + errb.String()
+	if strings.Contains(got, providerInterviewText) || !strings.Contains(got, `model ollama/qwen3.5:9b`) {
+		t.Fatalf("selected local model reached provider gate: %s", got)
 	}
 }

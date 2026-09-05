@@ -9,6 +9,12 @@ the work is protected by Git, and the goal is the fastest low-cost cutover to a
 smaller system. There is one implementation path, no feature flags, no dual
 runtime, and no compatibility adapters.
 
+Product clarification (2026-09-05): arbitrary named environments share one guided
+onboarding flow. Setup fills a missing model choice with explicit user input,
+collects the relevant connections, and preserves completed work on rerun. Normal
+consent explains host access in plain language; `--verbose` exposes technical
+receipts and logs. `pix env add` adopts an existing directory or repository.
+
 ## 1. Architectural rules
 
 1. `pix` is the only host binary and the only user-facing CLI.

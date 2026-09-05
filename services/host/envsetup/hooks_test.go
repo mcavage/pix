@@ -48,7 +48,7 @@ func hook(id, path, sha string, required bool, kind string) Hook {
 }
 
 func opts(out, errb *bytes.Buffer, interactive bool) Options {
-	return Options{EnvName: "work", Out: out, Err: errb, In: strings.NewReader(""), Interactive: interactive}
+	return Options{Verbose: true, EnvName: "work", Out: out, Err: errb, In: strings.NewReader(""), Interactive: interactive}
 }
 
 // ── check passes: nothing is mutated at all ───────────────────────────────
@@ -475,5 +475,34 @@ func TestRealExecutor_Check_ConcurrentStdoutStderrIsRaceFree(t *testing.T) {
 	}
 	if _, _, err := (realExecutor{}).Check(dir, path, nil); err != nil {
 		t.Fatalf("Check: %v", err)
+	}
+}
+
+func TestRun_PassesVerbosityToRealHook(t *testing.T) {
+	for _, verbose := range []bool{false, true} {
+		t.Run(fmt.Sprint(verbose), func(t *testing.T) {
+			t.Setenv("PIX_SETUP_VERBOSE", "inherited-must-not-win")
+			dir := t.TempDir()
+			marker := filepath.Join(dir, "applied")
+			path, sha := script(t, dir, "setup-tool", fmt.Sprintf(`
+case "$1" in
+  check) test -f %q ;;
+  install) printf 'hook-verbosity=%%s\n' "$PIX_SETUP_VERBOSE"; touch %q ;;
+esac
+`, marker, marker))
+			var out, errb bytes.Buffer
+			o := opts(&out, &errb, true)
+			o.Verbose = verbose
+			if _, err := Run(dir, []Hook{hook("tool", path, sha, true, "")}, o); err != nil {
+				t.Fatal(err)
+			}
+			want := "hook-verbosity=0"
+			if verbose {
+				want = "hook-verbosity=1"
+			}
+			if !strings.Contains(out.String(), want) {
+				t.Fatalf("output %q lacks %q", out.String(), want)
+			}
+		})
 	}
 }

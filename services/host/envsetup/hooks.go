@@ -212,6 +212,7 @@ type Options struct {
 	Err         io.Writer
 	In          io.Reader
 	Interactive bool
+	Verbose     bool
 
 	// Exec is the process seam. Nil means the real one (os/exec). A test
 	// substitutes it to prove sequencing without spawning anything; the
@@ -287,7 +288,7 @@ func Run(dir string, hooks []Hook, opts Options) (Result, error) {
 	var res Result
 	ex := opts.Exec
 	if ex == nil {
-		ex = realExecutor{}
+		ex = realExecutor{verbose: opts.Verbose}
 	}
 	for _, h := range hooks {
 		outcome, err := runOne(dir, h, opts, ex)
@@ -328,10 +329,16 @@ func runOne(root string, h Hook, opts Options, ex Executor) (Outcome, error) {
 		return soft(h, opts, label, fmt.Sprintf("check could not run: %v", err))
 	}
 	if code == 0 {
-		fmt.Fprintf(opts.Out, "pix setup: %s: already ready (check passed; nothing changed)\n", label)
+		if opts.Verbose {
+			fmt.Fprintf(opts.Out, "pix setup: %s: already ready (check passed; nothing changed)\n", label)
+		}
 		return Outcome{ID: h.ID, State: StateAlreadyReady}, nil
 	}
-	fmt.Fprintf(opts.Out, "pix setup: %s: check exited %d; applying\n", label, code)
+	if opts.Verbose {
+		fmt.Fprintf(opts.Out, "pix setup: %s: check exited %d; applying\n", label, code)
+	} else {
+		fmt.Fprintf(opts.Out, "Connecting %s…\n", sys.TerminalSafe(h.ID))
+	}
 
 	// An auth hook talks to a HUMAN. Without a terminal it would either
 	// hang on a prompt nobody can answer or silently fail half way, so it
@@ -356,7 +363,9 @@ func runOne(root string, h Hook, opts Options, ex Executor) (Outcome, error) {
 		return soft(h, opts, label, fmt.Sprintf("post-check could not run: %v", perr))
 	}
 	if pcode == 0 {
-		fmt.Fprintf(opts.Out, "pix setup: %s: ready (apply ran, post-check passed)\n", label)
+		if opts.Verbose {
+			fmt.Fprintf(opts.Out, "pix setup: %s: ready (apply ran, post-check passed)\n", label)
+		}
 		return Outcome{ID: h.ID, State: StateApplied}, nil
 	}
 	return soft(h, opts, label, fmt.Sprintf("apply exited %d, post-check still exited %d%s", acode, pcode, firstLineSuffix(pout, out)))
@@ -500,7 +509,7 @@ func firstLineSuffix(outs ...string) string {
 }
 
 // realExecutor is the production seam: os/exec, argv only.
-type realExecutor struct{}
+type realExecutor struct{ verbose bool }
 
 // Check runs the readiness argv with a BOUNDED capture of its combined
 // output. cmd.Env is left nil, which means "inherit this process's
@@ -522,9 +531,14 @@ func (realExecutor) Check(dir, exe string, args []string) (int, string, error) {
 // Apply runs the mutating argv with stdio inherited from the caller's
 // streams: an install's progress and an auth hook's prompt both belong on
 // the human's terminal, not in a buffer nobody sees until it is over.
-func (realExecutor) Apply(dir, exe string, args []string, in io.Reader, out, errw io.Writer) (int, error) {
+func (ex realExecutor) Apply(dir, exe string, args []string, in io.Reader, out, errw io.Writer) (int, error) {
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = dir
+	verbosity := "0"
+	if ex.verbose {
+		verbosity = "1"
+	}
+	cmd.Env = append(os.Environ(), "PIX_SETUP_VERBOSE="+verbosity)
 	cmd.Stdin = in
 	cmd.Stdout = out
 	cmd.Stderr = errw

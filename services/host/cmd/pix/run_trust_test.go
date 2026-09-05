@@ -105,7 +105,7 @@ func TestRunTrustGate_Interactive_DefaultNoRefusesAndRecordsNothing(t *testing.T
 	if code == 0 {
 		t.Fatalf("dispatch exit = 0, want nonzero (stdout=%q stderr=%q)", out.String(), errb.String())
 	}
-	if !strings.Contains(errb.String(), "not accepted") {
+	if !strings.Contains(errb.String(), "setup paused") {
 		t.Fatalf("stderr = %q, want the explicit not-accepted refusal", errb.String())
 	}
 	if _, err := os.Stat(trustRecordFile(home, "work")); err == nil {
@@ -129,7 +129,7 @@ func TestRunTrustGate_Interactive_PrintsExactBOMBeforePrompting(t *testing.T) {
 	_ = dispatch([]string{"run", dir, "--env", "work"}, d)
 
 	got := errb.String()
-	for _, want := range []string{"pix env trust work", "host command(s)", "host service(s)", "credential target(s)", "fingerprint:"} {
+	for _, want := range []string{"pix env trust work --verbose", "additional folders", "Continue?"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("interactive trust prompt did not print %q; got:\n%s", want, got)
 		}
@@ -152,12 +152,10 @@ func TestRunTrustGate_Interactive_AcceptRecordsTrustAndTheSecondRunSkipsThePromp
 	d.In = strings.NewReader("y\n")
 	_ = dispatch([]string{"run", dir, "--env", "work"}, d)
 
-	if strings.Contains(errb.String(), "not accepted") {
+	if strings.Contains(errb.String(), "setup paused") {
 		t.Fatalf("an explicit \"y\" was treated as a decline; stderr = %s", errb.String())
 	}
-	if !strings.Contains(errb.String(), `environment "work" trusted`) {
-		t.Fatalf("accepting did not confirm trust; stderr = %s", errb.String())
-	}
+
 	if _, err := os.Stat(trustRecordFile(home, "work")); err != nil {
 		t.Fatalf("accepting must durably record trust: %v", err)
 	}
@@ -173,7 +171,7 @@ func TestRunTrustGate_Interactive_AcceptRecordsTrustAndTheSecondRunSkipsThePromp
 	d2.In = strings.NewReader("")
 	_ = dispatch([]string{"run", dir, "--env", "work"}, d2)
 
-	if strings.Contains(errb2.String(), "unreviewed environment") || strings.Contains(errb2.String(), "not accepted") {
+	if strings.Contains(errb2.String(), "unreviewed environment") || strings.Contains(errb2.String(), "setup paused") {
 		t.Fatalf("a previously-trusted, unchanged environment re-prompted on a later run; stderr = %s", errb2.String())
 	}
 }

@@ -163,7 +163,7 @@ func TestSetupInstallsTheReleaseBundleAndRecordsANonzeroManifest(t *testing.T) {
 	// Verbose: true — this run's own assertion below is on the per-artifact
 	// narration, which a quiet default run intentionally suppresses (see
 	// setup_render_test.go for the default-quiet contract).
-	if err := (&setupCmd{Verbose: true}).run(d, setupSeamsFor(t, dir, docker, mcp)); err != nil {
+	if err := (&setupCmd{Verbose: true}).run(d, setupSeamsFor(t, dir, docker, mcp)); err == nil || !strings.Contains(err.Error(), "choose a model") {
 		t.Fatalf("pix setup: %v\n%s%s", err, out.String(), errb.String())
 	}
 
@@ -310,7 +310,7 @@ func TestSetupNeverOverwritesAnExistingEnvironment(t *testing.T) {
 	dir, _ := fakeInstallDir(t, "2.0.0")
 
 	var out, errb bytes.Buffer
-	if err := (&setupCmd{}).run(&cli.Deps{Out: &out, Err: &errb}, setupSeamsFor(t, dir, &setupFakeDocker{}, &setupFakeMCP{})); err != nil {
+	if err := (&setupCmd{}).run(&cli.Deps{Out: &out, Err: &errb}, setupSeamsFor(t, dir, &setupFakeDocker{}, &setupFakeMCP{})); err == nil || !strings.Contains(err.Error(), "add an environment") {
 		t.Fatalf("pix setup: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "envs", "default")); !os.IsNotExist(err) {
@@ -330,7 +330,7 @@ func TestDefaultEnvironmentParses(t *testing.T) {
 	t.Setenv("PIX_HOME", home)
 	dir, _ := fakeInstallDir(t, "2.0.0")
 	var out, errb bytes.Buffer
-	if err := (&setupCmd{}).run(&cli.Deps{Out: &out, Err: &errb}, setupSeamsFor(t, dir, &setupFakeDocker{}, &setupFakeMCP{})); err != nil {
+	if err := (&setupCmd{}).run(&cli.Deps{Out: &out, Err: &errb}, setupSeamsFor(t, dir, &setupFakeDocker{}, &setupFakeMCP{})); err == nil || !strings.Contains(err.Error(), "choose a model") {
 		t.Fatalf("pix setup: %v", err)
 	}
 	root := filepath.Join(home, "envs", "default")

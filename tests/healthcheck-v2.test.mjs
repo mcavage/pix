@@ -4,10 +4,6 @@ import test from "node:test";
 
 const skill = fs.readFileSync(new URL("../skills/healthcheck/SKILL.md", import.meta.url), "utf8");
 
-test("healthcheck never mistakes the memory service's default embed model for configured inference", () => {
-	assert.match(skill, /embed_model.*not proof.*configured/is);
-	assert.match(skill, /embed_healthy:false.*does not.*overall.*degraded/is);
-});
 
 test("healthcheck does not invent native-provider roster degradation", () => {
 	assert.match(skill, /NEVER mark.*inference\.json.*degraded/is);

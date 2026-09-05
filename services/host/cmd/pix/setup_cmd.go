@@ -70,8 +70,8 @@ func (c *setupCmd) Help() string { return provision.Description }
 // setupCmd provisions PIX_HOME. It takes no workspace argument and performs
 // no agent handoff: `pix run` is the only thing that starts a sandbox.
 type setupCmd struct {
-	Verbose bool   `help:"Show the pix-memory container and MCP registration detail, not just the summary."`
-	Env     string `help:"Also set up one existing environment: validate its declared requirements (docs/design/pix-v2-surface.md §3.6 step 7) and, if untrusted, run the same trust review pix env trust NAME does. On success it OFFERS (never assumes) to make it the machine default, so a bare pix launches it."`
+	Verbose bool   `help:"Show technical details and diagnostic output."`
+	Env     string `help:"Set up a named environment and its connections."`
 }
 
 func (c *setupCmd) Run(d *cli.Deps) error { return c.run(d, productionSetupSeams()) }
@@ -132,6 +132,12 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 		return err
 	}
 
+	if c.Env != "" {
+		if _, err := nativeenv.ResolveIn(home, c.Env); err != nil {
+			return err
+		}
+	}
+
 	// The release bundle is resolved FIRST, from beside the resolved
 	// executable (symlinks followed, so the `make install` shape
 	// ~/.local/bin/pix -> out/pix finds out/'s manifest and archive). A
@@ -145,7 +151,11 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 	}
 	if p, ok := s.Prober.(startupProber); ok {
 		p.OnRetry = func(timeout time.Duration) {
-			fmt.Fprintf(d.Out, "pix setup: waiting for the memory service to become ready (up to %s)...\n", timeout)
+			if c.Verbose {
+				fmt.Fprintf(d.Out, "Waiting for memory (up to %s)...\n", timeout)
+			} else {
+				fmt.Fprintln(d.Out, "Preparing memory…")
+			}
 		}
 		s.Prober = p
 	}
@@ -168,34 +178,39 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 	// after the reconcile and a model pulled in this run lands in the NEXT
 	// run's container, which is how a freshly pulled embedding model still
 	// produced keyword-only recall until the user ran `pix setup` twice.
-	setupMemoryEmbeddings(d, s.Env)
+	setupMemoryEmbeddings(d, s.Env, c.Verbose)
 
 	res, err := machineSetup(home, s, *bundle, confirmContainerReplace(d, c.Verbose))
 	if err != nil {
 		return err
 	}
 	renderSetupResult(d, home, res, c.Verbose)
-	// A named --env setup is not a base-install interview: the environment
-	// declares its own roster ([models].main, [agents]) and often its own
-	// authenticated backends, so EVERY base personal-provider step (the
-	// 1Password offer, the provider-key report, the default-model picker,
-	// the Parallel offer) is noise here; what it still asks for is that
-	// environment's own declared values. All of it stays in full for a bare
-	// `pix setup` (baseSetup == true).
-	baseSetup := c.Env == ""
-	setupCredentials(d, baseSetup)
-	if baseSetup {
-		setupModelSelection(d, home, defaultShellEnv(), res.DefaultEnvCreated)
-	}
-	if c.Env != "" {
-		if eerr := setupSelectedEnvironment(d, home, c.Env); eerr != nil {
-			return eerr
-		}
-		offerDefaultEnvironment(d, home, c.Env)
-	}
 	if !res.Ready() {
 		return cli.SilentError{Code: 1}
 	}
+	if _, _, err := config.SeedOpRefs(); err != nil {
+		return err
+	}
+	name := c.Env
+	if name == "" {
+		cfg, err := config.LoadFrom(config.PathAt(home.Home))
+		if err != nil {
+			return err
+		}
+		name = cfg.DefaultEnvironment
+	}
+	if name == "" {
+		return fmt.Errorf("add an environment with pix env add, then run pix setup --env NAME")
+	}
+	if err := setupModelSelection(d, home, defaultShellEnv(), name); err != nil {
+		return err
+	}
+	if err := setupSelectedEnvironment(d, home, name, c.Verbose); err != nil {
+		return err
+	}
+	fmt.Fprintf(d.Out, "\nEnvironment %q is set up.\n", sys.TerminalSafe(name))
+	offerDefaultEnvironment(d, home, name)
+
 	return nil
 }
 
@@ -208,7 +223,8 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 // endpoint missing the embedding model gets an interactive, default-No
 // offer to pull it; a REMOTE endpoint (a shared team daemon, or a proxied
 // Ollama Cloud account) only ever gets reported, never offered a pull.
-func setupMemoryEmbeddings(d *cli.Deps, env hostenv.Env) {
+func setupMemoryEmbeddings(d *cli.Deps, env hostenv.Env, detail ...bool) {
+	verbose := len(detail) > 0 && detail[0]
 	if env.System == nil {
 		return
 	}
@@ -220,10 +236,14 @@ func setupMemoryEmbeddings(d *cli.Deps, env hostenv.Env) {
 	st := inference.DetectOllama(env)
 	switch {
 	case !st.CLIPresent && !st.Reachable:
-		fmt.Fprintln(d.Out, "pix setup: ollama: not installed; memory embeddings degrade to keyword recall (optional).")
+		if verbose {
+			fmt.Fprintln(d.Out, "pix setup: ollama: not installed; memory embeddings degrade to keyword recall (optional).")
+		}
 		return
 	case !st.Reachable:
-		fmt.Fprintf(d.Out, "pix setup: ollama: endpoint %s did not answer; memory embeddings degrade to keyword recall.\n", st.Endpoint.String())
+		if verbose {
+			fmt.Fprintf(d.Out, "pix setup: ollama: endpoint %s did not answer; memory embeddings degrade to keyword recall.\n", st.Endpoint.String())
+		}
 		return
 	}
 	modeWord := "local"
@@ -231,21 +251,27 @@ func setupMemoryEmbeddings(d *cli.Deps, env hostenv.Env) {
 		modeWord = "remote"
 	}
 	if st.HasModel(embed) {
-		fmt.Fprintf(d.Out, "pix setup: ollama: %s endpoint %s, embedding model %q present.\n", modeWord, st.Endpoint.String(), embed)
+		if verbose {
+			fmt.Fprintf(d.Out, "pix setup: ollama: %s endpoint %s, embedding model %q present.\n", modeWord, st.Endpoint.String(), embed)
+		}
 		return
 	}
 	if !st.CanPull() {
 		// Remote/cloud: report only, never pull — this is not this host's disk.
-		fmt.Fprintf(d.Out, "pix setup: ollama: %s endpoint %s reachable, %d model(s) listed, embedding model %q not listed; memory embeddings degrade to keyword recall.\n", modeWord, st.Endpoint.String(), len(st.Models), embed)
+		if verbose {
+			fmt.Fprintf(d.Out, "pix setup: ollama: %s endpoint %s reachable, %d model(s) listed, embedding model %q not listed; memory embeddings degrade to keyword recall.\n", modeWord, st.Endpoint.String(), len(st.Models), embed)
+		}
 		return
 	}
 	if !d.Interactive {
-		fmt.Fprintf(d.Out, "pix setup: ollama: local endpoint %s, embedding model %q not pulled. Pull it yourself: ollama pull %s\n", st.Endpoint.String(), embed, embed)
+		if verbose {
+			fmt.Fprintf(d.Out, "pix setup: ollama: local endpoint %s, embedding model %q not pulled. Pull it yourself: ollama pull %s\n", st.Endpoint.String(), embed, embed)
+		}
 		return
 	}
-	fmt.Fprintf(d.Out, "pix setup: ollama: local endpoint %s is missing the embedding model %q; semantic memory recall degrades to keyword search without it.\n", st.Endpoint.String(), embed)
-	if !d.AskYN(fmt.Sprintf("Pull %s now? Downloading it can take a few minutes and several hundred MB of disk. [y/N] ", embed), false) {
-		fmt.Fprintf(d.Out, "skipping; pull it yourself later: ollama pull %s\n", embed)
+	fmt.Fprintln(d.Out, "Memory can find related ideas as well as exact words with a small local download.")
+	if !d.AskYN("Add semantic search to memory? Downloads a few hundred MB. [y/N] ", false) {
+		fmt.Fprintln(d.Out, "You can add it later by running pix setup again.")
 		return
 	}
 	if err := env.RunInteractive("ollama", "pull", embed); err != nil {
@@ -262,68 +288,7 @@ func setupMemoryEmbeddings(d *cli.Deps, env hostenv.Env) {
 		fmt.Fprintf(d.Err, "pix setup: ollama pull %s reported success, but %s still does not list it; memory embeddings stay on keyword recall.\n", embed, after.Endpoint.String())
 		return
 	}
-	listed, _ := after.ResolveModel(embed)
-	fmt.Fprintf(d.Out, "pix setup: ollama: pulled %s; %s now lists it. Semantic memory recall is wired.\n", listed, after.Endpoint.String())
-}
-
-// setupCredentials is setup's credential step, and it is deliberately small:
-// establish THIS PIX_HOME's refs file, and — on a BASE install only — offer
-// to fill it with personal provider keys when there is someone to ask. It
-// never inspects, writes or repairs a host-global sbx secret — a global
-// belongs to whoever pushed it, Pix reads only its own refs, and the values
-// themselves are resolved per sandbox at launch. So a host covered in globals
-// still gets its own refs file and still gets offered the 1Password prompt:
-// inheriting another stack's credentials is not setup finishing early, it is
-// setup never having run.
-//
-// It claims nothing about a model being ready. Nothing here resolved a ref,
-// so the honest close is the command that configures one.
-func setupCredentials(d *cli.Deps, baseSetup bool) {
-	path, _, err := config.SeedOpRefs()
-	if err != nil {
-		fmt.Fprintf(d.Err, "pix setup: could not create the secrets file (%s): %v\n", path, err)
-		return
-	}
-	// A named `--env NAME` run stops here: the refs file had to exist (its
-	// own declared values land in it moments later), but everything below is
-	// the base personal-provider interview, and an environment with its own
-	// authenticated backends can neither use a public-vendor key nor be told
-	// it has none.
-	if !baseSetup {
-		return
-	}
-	env := defaultShellEnv()
-	if d.Interactive {
-		// Fires only when op is installed AND no provider ref is configured
-		// yet (OfferOnePasswordKeys' own gate) — never a nag, never a claim.
-		secret.OfferOnePasswordKeys(env, d.Line(), d.Out, true)
-	}
-	if secret.ProviderKeyRefsPresent(env) {
-		fmt.Fprintln(d.Out, "model keys are configured as 1Password refs; each run resolves them into that run's own sandbox.")
-	} else {
-		fmt.Fprintln(d.Out, "no model provider key is configured yet. Next:")
-		fmt.Fprintln(d.Out, "  pix secret set ANTHROPIC_API_KEY op://vault/item/field   (repeat per provider)")
-		fmt.Fprintln(d.Out, "  pix secret check                                          (resolve every ref through op; no values printed)")
-	}
-	setupParallelSearch(d, env)
-}
-
-// setupParallelSearch is setup's explain step for the OPTIONAL Parallel
-// web-search tool key: it never blocks a launch and it is never required,
-// so this only ever offers (TTY, default-No) and reports, matching
-// ToolKeyRefOrder's own contract (secret/sync.go). The offer runs BEFORE
-// the report so a ref entered just now is reflected accurately, exactly
-// like the model-key block above. Base install only: setupCredentials
-// returns before this on a named `--env NAME` run.
-func setupParallelSearch(d *cli.Deps, env hostenv.Env) {
-	if d.Interactive {
-		secret.OfferParallelSearchKey(env, d.Line(), d.Out, true)
-	}
-	if secret.ConfiguredParallelSearchRef(env) {
-		fmt.Fprintln(d.Out, "Parallel web search is configured (PARALLEL_API_KEY ref present); pi-web-access uses it for that backend.")
-		return
-	}
-	fmt.Fprintln(d.Out, "Parallel web search is optional and not configured; search falls back to other backends. To enable: pix secret set PARALLEL_API_KEY op://vault/item/field")
+	fmt.Fprintln(d.Out, "Memory search model downloaded.")
 }
 
 // setupSelectedEnvironment is `--env NAME`'s whole job (surface §3.6): sets
@@ -340,12 +305,13 @@ func setupParallelSearch(d *cli.Deps, env hostenv.Env) {
 // actually defines. Nothing here mutates config.toml or installs anything;
 // a real reachability probe of a declared backend is `pix doctor`'s job
 // (its own read-only probe set), not setup's.
-func setupSelectedEnvironment(d *cli.Deps, home pixhome.Paths, name string) error {
+func setupSelectedEnvironment(d *cli.Deps, home pixhome.Paths, name string, detail ...bool) error {
+	verbose := len(detail) > 0 && detail[0]
 	sel, err := nativeenv.ResolveIn(home, name)
 	if err != nil {
 		return envRun(d, err)
 	}
-	if terr := runEnvTrust(d, home, name, false, false); terr != nil {
+	if terr := runEnvTrust(d, home, name, false, verbose); terr != nil {
 		return terr
 	}
 	// ONE snapshot from here on. Everything below — the requirements check
@@ -380,8 +346,10 @@ func setupSelectedEnvironment(d *cli.Deps, home pixhome.Paths, name string) erro
 	if verr := validateDeclaredEnvironmentValues(d, home, bom); verr != nil {
 		return fmt.Errorf("pix setup --env %s: %w", name, verr)
 	}
-	fmt.Fprintf(d.Out, "environment %q declared requirements check passed.\n", name)
-	return runSetupHooks(d, name, loaded.Root, bom)
+	if verbose {
+		fmt.Fprintf(d.Out, "environment %q declared requirements check passed.\n", name)
+	}
+	return runSetupHooks(d, name, loaded.Root, bom, verbose)
 }
 
 // offerDefaultEnvironment closes a SUCCESSFUL `pix setup --env NAME` with
@@ -413,7 +381,7 @@ func offerDefaultEnvironment(d *cli.Deps, home pixhome.Paths, name string) {
 		return
 	}
 	if strings.TrimSpace(cfg.DefaultEnvironment) == name {
-		fmt.Fprintf(d.Out, "environment %q is already the default; run pix to start.\n", name)
+		fmt.Fprintln(d.Out, "Run pix to start.")
 		return
 	}
 	if !d.Interactive {
@@ -421,7 +389,7 @@ func offerDefaultEnvironment(d *cli.Deps, home pixhome.Paths, name string) {
 			name, defaultEnvironmentWord(cfg.DefaultEnvironment), sys.ShellQuote(name))
 		return
 	}
-	if !d.AskYN(fmt.Sprintf("Use %s as the default environment for future pix runs? [Y/n] ", name), true) {
+	if !d.AskYN(fmt.Sprintf("Make %s your default environment? [Y/n] ", name), true) {
 		fmt.Fprintf(d.Out, "keeping %s as the default; launch this one explicitly: pix run --env %s\n",
 			defaultEnvironmentWord(cfg.DefaultEnvironment), sys.ShellQuote(name))
 		return
@@ -498,7 +466,7 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 	// well-authored environment asks for "Google Workspace account email"
 	// instead of a bare "GOG_ACCOUNT".
 	if d.Interactive && (len(missingSecrets)+len(missingPlain)) > 0 {
-		fmt.Fprintf(d.Out, "this environment declares %d value(s) not yet recorded. Enter each now (blank to skip and record it later):\n", len(missingSecrets)+len(missingPlain))
+		fmt.Fprintln(d.Out, "Let's connect your accounts. Leave an answer blank to finish it later.")
 
 		var stillMissingSecrets []string
 		for _, k := range missingSecrets {
@@ -517,7 +485,6 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 					if serr := secret.SetRef(home, k, v); serr != nil {
 						return fmt.Errorf("could not record %s: %v", k, serr)
 					}
-					fmt.Fprintf(d.Out, "    recorded %s in %s\n", k, home.SecretsEnv)
 					return nil
 				},
 			}); !ok {
@@ -536,7 +503,6 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 					if serr := secret.SetPlainValue(home, k, v); serr != nil {
 						return fmt.Errorf("could not record %s: %v", k, serr)
 					}
-					fmt.Fprintf(d.Out, "    recorded %s in %s\n", k, home.SecretsEnv)
 					return nil
 				},
 			}); !ok {
@@ -606,7 +572,7 @@ func valueRequired(bom nativeenv.BillOfMaterials, key string) bool {
 // when the environment declared no friendlier one.
 func valueLabel(bom nativeenv.BillOfMaterials, key string) string {
 	if meta, ok := bom.ValueMeta(key); ok && meta.Label != "" {
-		return fmt.Sprintf("%s (%s)", meta.Label, key)
+		return meta.Label
 	}
 	return key
 }
@@ -673,12 +639,14 @@ func describeDeclaredValue(bom nativeenv.BillOfMaterials, key string, isSecret b
 // required bits it is about to run. `pix run` and `pix doctor` never reach
 // it, and nothing outside this environment's own directory can contribute
 // a hook.
-func runSetupHooks(d *cli.Deps, name, root string, bom nativeenv.BillOfMaterials) error {
+func runSetupHooks(d *cli.Deps, name, root string, bom nativeenv.BillOfMaterials, detail ...bool) error {
+	verbose := len(detail) > 0 && detail[0]
 	if len(bom.SetupHooks) == 0 {
 		return nil
 	}
 	res, err := envsetup.Run(root, bom.SetupHooks, envsetup.Options{
 		EnvName:     name,
+		Verbose:     verbose,
 		Out:         d.Out,
 		Err:         d.Err,
 		In:          d.In,
@@ -692,7 +660,9 @@ func runSetupHooks(d *cli.Deps, name, root string, bom nativeenv.BillOfMaterials
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(d.Out, "environment %q setup hooks: %d checked, all required hooks ready.\n", name, len(res.Outcomes))
+	if verbose {
+		fmt.Fprintf(d.Out, "environment %q setup hooks: %d checked, all required hooks ready.\n", name, len(res.Outcomes))
+	}
 	return nil
 }
 
@@ -707,12 +677,6 @@ func runSetupHooks(d *cli.Deps, name, root string, bom nativeenv.BillOfMaterials
 // prints the real container/MCP reason and the exact remedy, not a bare
 // "run pix doctor" deflection.
 func renderSetupResult(d *cli.Deps, home pixhome.Paths, res provision.Result, verbose bool) {
-	switch {
-	case res.Init.CreatedHome:
-		fmt.Fprintf(d.Out, "initialized PIX_HOME at %s\n", home.Home)
-	default:
-		fmt.Fprintf(d.Out, "PIX_HOME already initialized at %s\n", home.Home)
-	}
 	if verbose {
 		renderSetupArtifactDetail(d, home, res)
 	}
@@ -804,7 +768,7 @@ func renderSetupNotReady(d *cli.Deps, res provision.Result) {
 // counts-by-default/--verbose-for-detail split.
 func confirmContainerReplace(d *cli.Deps, verbose bool) func(current container.Info, want container.Spec) bool {
 	return func(current container.Info, want container.Spec) bool {
-		fmt.Fprintln(d.Err, "pix setup: the pix-memory service has changed and needs to be replaced. Its /data volume is preserved either way.")
+		fmt.Fprintln(d.Err, "Pix’s memory service has changed. Your saved memories will be preserved.")
 		if verbose {
 			fmt.Fprintf(d.Err, "  running: %s (fingerprint %s)\n", current.Image, current.Fingerprint())
 			fmt.Fprintf(d.Err, "  wanted:  %s (fingerprint %s)\n", want.Image, want.Fingerprint())
@@ -813,6 +777,6 @@ func confirmContainerReplace(d *cli.Deps, verbose bool) func(current container.I
 			fmt.Fprintf(d.Err, "pix setup: refusing to replace it on a non-interactive terminal; rerun interactively or remove it yourself: docker rm -f %s\n", want.ContainerName)
 			return false
 		}
-		return d.AskYN("Replace it? [y/N] ", false)
+		return d.Confirm(d.Err, "Update it? [y/N] ", false)
 	}
 }

@@ -142,6 +142,7 @@ exit 1
 	// too: a re-attach must load the same skill layer the original launch did,
 	// or a resumed session quietly loses the user's own skills.
 	argvEqual(t, execArgs, []string{"exec", "-it", "pix-legacy", "--", "pi",
+		"--session-dir", ".pi-sessions",
 		"--skill", PersonalSkillsDir(), "--model", "anthropic/claude-sonnet-5"})
 }
 

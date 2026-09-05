@@ -48,6 +48,7 @@ type createCapture struct {
 	mu       sync.Mutex
 	buf      []byte
 	overflow bool
+	child    *exec.Cmd
 }
 
 func (c *createCapture) Write(p []byte) (int, error) {
@@ -81,8 +82,14 @@ func quietCreateSpawn(bin string, cap *createCapture) func(argv []string) *exec.
 		cmd.Stdin = nil
 		cmd.Stdout, cmd.Stderr = cap, cap
 		cmd.Env = os.Environ()
+		cap.child = cmd
 		return cmd
 	}
+}
+
+// A later credential or session failure must not print a successful create's plan.
+func (c *createCapture) failed() bool {
+	return c.child != nil && (c.child.ProcessState == nil || !c.child.ProcessState.Success())
 }
 
 // createFailureDiagnostic renders what a FAILED create printed: redacted,
@@ -103,6 +110,18 @@ func createFailureDiagnostic(cap *createCapture, secrets []string) string {
 		b.WriteString("  (output truncated)\n")
 	}
 	return b.String()
+}
+
+func createFailureSummary(cap *createCapture, secrets []string) string {
+	raw, _ := cap.text()
+	lines := strings.Split(redactCreateOutput(raw, secrets), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(strings.ToLower(line), "error:") {
+			return "pix: " + sys.TerminalSafe(strings.TrimSpace(line[len("error:"):])) + "\nRun again with --verbose for details.\n"
+		}
+	}
+	return "pix: sandbox creation failed. Run again with --verbose for details.\n"
 }
 
 // redactCreateOutput removes every credential shape this text can carry:

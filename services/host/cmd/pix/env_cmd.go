@@ -18,7 +18,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -160,15 +159,8 @@ func (c *envAddCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return envRun(d, err)
 	}
-	verb := "cloned"
-	if res.Kind == "local" {
-		verb = "linked"
-	}
-	fmt.Fprintf(d.Out, "pix: %s %q -> %s\n", verb, res.Name, res.Root)
-	fmt.Fprintln(d.Out, "next:")
-	fmt.Fprintf(d.Out, "  pix env show %s\n", sys.ShellQuote(res.Name))
-	fmt.Fprintf(d.Out, "  pix env trust %s\n", sys.ShellQuote(res.Name))
-	fmt.Fprintf(d.Out, "  pix env default %s\n", sys.ShellQuote(res.Name))
+	fmt.Fprintf(d.Out, "Added environment %q.\n", sys.TerminalSafe(res.Name))
+	fmt.Fprintf(d.Out, "Next: pix setup --env %s\n", sys.ShellQuote(res.Name))
 	return nil
 }
 
@@ -693,33 +685,30 @@ func runEnvTrust(d *cli.Deps, home pixhome.Paths, name string, yes, verbose bool
 		return envRun(d, err)
 	}
 	if trustSatisfied(home, sel, bom, fp) {
-		if !bom.Tier1() {
+		if verbose && !bom.Tier1() {
 			fmt.Fprintf(d.Out, "pix: environment %q runs nothing on this host, hands out no credential, and mounts nothing extra; there is nothing to accept.\n", sel.Name)
 		}
 		return nil
 	}
-	renderTrustReview(d.Out, sel.Name, bom, priorAcceptance(home, sel), verbose)
-	fmt.Fprintf(d.Out, "  fingerprint: %s\n\n", fp)
+	return acceptEnvironment(d, d.Out, home, sel, bom, fp, yes, verbose)
+}
 
-	accept := yes
+// acceptEnvironment is the shared consent operation for setup, launch and trust.
+// The displayed summary and the persisted approval describe the same snapshot.
+func acceptEnvironment(d *cli.Deps, out io.Writer, home pixhome.Paths, sel nativeenv.Selected, bom nativeenv.BillOfMaterials, fp string, yes, verbose bool) error {
+	renderTrustReview(out, sel.Name, bom, priorAcceptance(home, sel), verbose)
+	if verbose {
+		fmt.Fprintf(out, "  fingerprint: %s\n\n", fp)
+	}
 	if !yes {
 		if !d.Interactive {
-			return envRun(d, fmt.Errorf("env trust: refusing to accept on a non-interactive terminal without --yes"))
+			return fmt.Errorf("review this environment in a terminal: pix env trust %s", sys.ShellQuote(sel.Name))
 		}
-		fmt.Fprint(d.Out, "Accept this host-execution footprint? [y/N] ")
-		reader := bufio.NewReader(d.In)
-		line, _ := reader.ReadString('\n')
-		accept = strings.EqualFold(strings.TrimSpace(line), "y")
+		if !d.Confirm(out, "Continue? [y/N] ", false) {
+			return fmt.Errorf("setup paused; continue with pix setup --env %s", sys.ShellQuote(sel.Name))
+		}
 	}
-	if !accept {
-		fmt.Fprintln(d.Out, "pix: not accepted.")
-		return cli.SilentError{Code: 1}
-	}
-	if err := writeTrustRecord(home, sel.Name, sel.Root, fp, bom); err != nil {
-		return err
-	}
-	fmt.Fprintf(d.Out, "pix: environment %q trusted.\n", sel.Name)
-	return nil
+	return writeTrustRecord(home, sel.Name, sel.Root, fp, bom)
 }
 
 // safeArgv renders argv the way a human must review it before answering
@@ -795,6 +784,10 @@ func safeArgv(argv []string) string {
 // environment name is a new subject, not an edit of the old one) — and says
 // which case it is rather than implying it made a comparison.
 func renderTrustReview(out io.Writer, name string, b nativeenv.BillOfMaterials, prev envTrustRecord, verbose bool) {
+	if !verbose {
+		renderEnvironmentConsent(out, name, b, prev.Fingerprint != "")
+		return
+	}
 	cur, err := nativeenv.Receipt(b)
 	switch {
 	case prev.Fingerprint == "":
@@ -836,6 +829,32 @@ func priorAcceptance(home pixhome.Paths, sel nativeenv.Selected) envTrustRecord 
 		return envTrustRecord{}
 	}
 	return rec
+}
+
+// Keep consent about actions people understand; technical inventories are verbose.
+func renderEnvironmentConsent(out io.Writer, name string, b nativeenv.BillOfMaterials, changed bool) {
+	if changed {
+		fmt.Fprintf(out, "Environment %q has changed.\n", sys.TerminalSafe(name))
+	} else {
+		fmt.Fprintf(out, "Set up %q\n", sys.TerminalSafe(name))
+	}
+	if len(b.HostCommands)+len(b.HostServices)+len(b.SetupHooks) > 0 {
+		fmt.Fprintln(out, "This environment can install and run tools on your computer.")
+	}
+	if len(b.CredentialTargets) > 0 {
+		fmt.Fprintln(out, "Its connections will use the accounts you authorize.")
+	}
+	if len(b.EffectiveMounts) > 0 {
+		fmt.Fprintln(out, "It gives the assistant access to additional folders:")
+		for _, m := range b.EffectiveMounts {
+			access := "read and write"
+			if m.ReadOnly {
+				access = "read only"
+			}
+			fmt.Fprintf(out, "  %s (%s)\n", sys.TerminalSafe(m.Path), access)
+		}
+	}
+	fmt.Fprintf(out, "Details: pix env trust %s --verbose\n\n", sys.ShellQuote(name))
 }
 
 func renderTrustBill(out io.Writer, name string, b nativeenv.BillOfMaterials, verbose bool) {

@@ -131,6 +131,9 @@ func TestQuietCreate_NoPromptPlanOrTokenReachesUserOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSession: %v (user output %q, captured %q)", err, userOut.String(), firstOf(capture))
 	}
+	if capture.failed() {
+		t.Fatal("successful create must not supply diagnostics for a later session failure")
+	}
 
 	seen := userOut.String()
 	for _, forbidden := range []string{"Approve this plan?", "Plan: create", fakeCreateToken, "token="} {
@@ -177,7 +180,14 @@ func TestCreateFailureDiagnostic_RedactsTokenAndSecretValues(t *testing.T) {
 	if err := cmd.Run(); err == nil {
 		t.Fatal("the failing fixture must exit nonzero")
 	}
+	if !capture.failed() {
+		t.Fatal("failed create must retain its diagnostic")
+	}
 	diag := createFailureDiagnostic(capture, []string{fakeCreateToken})
+	summary := createFailureSummary(capture, []string{fakeCreateToken})
+	if !strings.Contains(summary, "kit revision not found") || strings.Contains(summary, "Plan:") || strings.Contains(summary, fakeCreateToken) {
+		t.Fatalf("normal failure output should name the error without the internal plan: %q", summary)
+	}
 
 	if diag == "" || !strings.Contains(diag, "kit revision not found") {
 		t.Fatalf("diagnostic = %q, want the real failure reason", diag)

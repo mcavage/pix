@@ -40,47 +40,19 @@ func knownVerb(v string) bool { return knownVerbs()[v] }
 
 // runDescription is run's long help: the lifecycle and released-vs-local rules
 // generated usage cannot infer. The flag list is NOT here — the fields are.
-const runDescription = `Everything after -- is passed to pi. Set PIX_DEBUG=1 to print the composed sbx
-command.
+const runDescription = `Start Pi in the current directory, using your default environment.
+Use --env NAME for a different environment on this run.
 
-lifecycle (matches sbx's own re-attach model):
-  no sandbox named N          -> create it (the flags below apply).
-  a sandbox named N exists    -> ATTACH to it as-is (running or stopped); sbx
-                                 reads the agent from its own spec, so
-                                 --kit/--mcp/--template and create-only skill
-                                 flags are NOT re-sent. --dev attaches only when
-                                 the sandbox has its create-time session UAT
-                                 record; otherwise it refuses with the recreate
-                                 command, because static MCP cannot be added
-                                 later. --model is NOT create-only: it is a pi
-                                 runtime arg, so it still reaches the pi
-                                 session on an attach too.
-                                 An attach whose create-time declaration no
-                                 longer matches is REFUSED, not silently
-                                 attached; to recreate, remove it first:
-                                 pix rm <box> && pix run. The ONE exception is
-                                 a drift that is only Pix's own pinned build
-                                 (image, pull policy, kits) — an ordinary Pix
-                                 upgrade — which is removed and recreated
-                                 automatically when the sandbox is provably
-                                 idle: fresh listing, zero holders, no keep,
-                                 the recorded instance, a direct host mount,
-                                 and a still-reviewed environment. Any missing
-                                 proof refuses and names it.
+Conversations are saved in the workspace. --resume SESSION restores one even
+when its original sandbox has been removed. --model changes the current model.
+Everything after -- is passed to Pi.
 
-  the last shell to leave a sandbox tears it down (pix run -k keeps it).
+Pix reuses a matching sandbox and removes it after the final session exits.
+Use --keep to retain it. Changes that require recreation include a suggested
+command; ordinary Pix upgrades recreate an idle, disposable sandbox automatically.
 
-released vs local:
-  A RELEASED launcher (a clean version like 0.0.16) tracks the LATEST STABLE
-  release: it resolves the newest published tag (cached 24h) and pins that, so
-  a launcher installed months ago still boots today's kit + image. If that
-  lookup cannot run — offline, GitHub unreachable — it falls back to this
-  build's own version; a run is never blocked by it. Precedence: --kit-ref,
-  version_pin in config.toml, latest stable, this build's version.
-
-  An UNRELEASED/local build never pins a nonexistent v<version> tag: it uses
-  your local checkout kit when one is resolvable (pinning the locally loaded
-  image via --template), else falls back to #ref=main with a warning.`
+Use --dev from a Pix checkout to use its locally loaded image and live skills.
+Use --verbose for launch diagnostics.`
 
 func (c *runCmd) Help() string { return runDescription }
 
@@ -88,17 +60,18 @@ func (c *runCmd) Help() string { return runDescription }
 type runCmd struct {
 	Dir string `arg:"" optional:"" default:"." help:"Workspace to launch in (default: the current directory)."`
 
-	Dev    bool   `help:"Mode B: use the local checkout kit + load skills live from it (needs a checkout)."`
-	Name   string `help:"Sandbox name." placeholder:"N"`
-	Env    string `help:"Launch under a named environment (an exact ~/.pix/envs/<name> directory, never a prefix); overrides the machine default for this run only." placeholder:"NAME"`
-	Model  string `help:"Active pi model (passed through to pi)." placeholder:"M"`
-	Resume string `help:"Resume this pi session (passed through to pi on every attach or create)." placeholder:"SESSION"`
-	Task   string `help:"Launch an existing task's sandbox." placeholder:"NAME"`
-	Keep   bool   `short:"k" help:"Keep the sandbox when the last shell exits: a sticky, identity-bound marker the teardown/orphan reaper refuses on (an explicit 'pix rm' still removes it)."`
+	Verbose bool   `help:"Show technical details and diagnostic output."`
+	Dev     bool   `help:"Use the local Pix checkout and live skills."`
+	Name    string `help:"Sandbox name." placeholder:"N"`
+	Env     string `help:"Use this environment for this run." placeholder:"NAME"`
+	Model   string `help:"Active pi model (passed through to pi)." placeholder:"M"`
+	Resume  string `help:"Resume this pi session (passed through to pi on every attach or create)." placeholder:"SESSION"`
+	Task    string `help:"Launch an existing task's sandbox." placeholder:"NAME"`
+	Keep    bool   `short:"k" help:"Keep the sandbox after the session ends."`
 
 	// PiArg is the `--` tail, rewritten by rewriteRunPassthrough. Hidden because a
 	// user never types it: they type `-- <pi args>`, documented above.
-	PiArg []string `name:"pi-arg" hidden:""`
+	PiArg []string `name:"pi-arg" hidden:"" sep:"none"`
 }
 
 // rewriteRunPassthrough turns `run ... -- a b` into `run ... --pi-arg=a
@@ -122,6 +95,7 @@ func rewriteRunPassthrough(argv []string) []string {
 // inputs that are not literal flag values: `--task NAME` and the workspace.
 func (c *runCmd) opts() (launch.RunOpts, error) {
 	o := launch.RunOpts{
+		Verbose:     c.Verbose,
 		Workspace:   c.Dir,
 		Dev:         c.Dev,
 		Name:        c.Name,
@@ -357,7 +331,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// bind to trustSnap, the ONE in-memory snapshot resolveRunEnvironment
 	// resolved above (M1, security re-review: trust TOCTOU) — never a
 	// fresh, independent re-read of the environment by name.
-	if terr := runTrustGate(d, trustSnap, false); terr != nil {
+	if terr := runTrustGate(d, trustSnap, false, o.Verbose); terr != nil {
 		return terr
 	}
 
@@ -404,7 +378,8 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// API key. It gates both the bootstrap below and the per-sandbox secret
 	// preparation further down, so the two can never disagree about whether a
 	// provider key was ever needed.
-	keyless := inference.KeylessInference(cfg)
+	selectedModel, _ := launch.SelectSessionModel(o.Model, selection.Sidecar)
+	keyless := inference.KeylessModel(cfg, selectedModel) || (selectedModel == "" && inference.KeylessInference(cfg))
 
 	// A pi session needs at least one provider key, and the evidence is THIS
 	// PIX_HOME's configured op:// refs — never `sbx secret ls`, whose global
@@ -434,7 +409,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	o.Model = model
 	switch modelSource {
 	case "[models].main":
-		if !o.Recreated {
+		if !o.Recreated && o.Verbose {
 			fmt.Fprintf(d.Err, "pix: environment %q -> model %s\n", selection.Name, model)
 		}
 	case "configured provider default":
@@ -455,6 +430,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	if hint := nativeenv.RunHint(cfg, o.Workspace); hint != "" {
 		fmt.Fprint(d.Err, hint)
 	}
+	o.Model = inference.RuntimeModelID(cfg, o.Model)
 	if !inference.AllowsModel(cfg, o.Model) {
 		return runFail(d, 2, "model %q is not available through the configured inference backends", o.Model)
 	}
@@ -711,7 +687,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		return runFail(d, 1, "could not build trusted host state: %v", perr)
 	}
 
-	if os.Getenv("PIX_DEBUG") != "" {
+	if o.Verbose || os.Getenv("PIX_DEBUG") != "" {
 		fmt.Fprintln(d.Err, "+ sbx "+strings.Join(plan.Args, " "))
 	}
 
@@ -831,19 +807,21 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// edit) is refused outright, regardless of whether the new content
 	// would itself be independently trusted (M1, security re-review: trust
 	// TOCTOU).
-	if terr := runTrustGate(d, trustSnap, true); terr != nil {
+	if terr := runTrustGate(d, trustSnap, true, o.Verbose); terr != nil {
 		releaseRoot(true)
 		return terr
 	}
 	xerr := launch.RunSession(spec, deps)
-	if xerr != nil {
+	if xerr != nil && createOut.failed() {
 		// The captured create output is the best diagnostic there is for a
 		// failed create, and the only place it is ever shown. Redacted
 		// (memory token, bearer values, configured secret assignments),
 		// terminal-safe, and bounded; the raw plan is never displayed.
-		if diag := createFailureDiagnostic(createOut, createSecretValues()); diag != "" {
-			fmt.Fprint(d.Err, diag)
+		diag := createFailureSummary(createOut, createSecretValues())
+		if o.Verbose {
+			diag = createFailureDiagnostic(createOut, createSecretValues())
 		}
+		fmt.Fprint(d.Err, diag)
 	}
 	// The create-path Hold, awaited only now: RunSession has returned (created
 	// and run to completion, or refused before anything started), so the

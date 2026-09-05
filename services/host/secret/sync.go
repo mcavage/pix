@@ -47,6 +47,8 @@ var ProviderKeyRefOrder = []ProviderKeyRef{
 // PARALLEL_API_KEY and sends it as the x-api-key header). The kit must carry a
 // matching credentials[] entry plus an egress allowlist entry for the API host,
 // or the sentinel reaches the VM with nowhere to be swapped.
+var ParallelSearchKeyRef = ProviderKeyRef{EnvVar: "PARALLEL_API_KEY", Name: "parallel"}
+
 var ToolKeyRefOrder = []ProviderKeyRef{
 	ParallelSearchKeyRef,
 }

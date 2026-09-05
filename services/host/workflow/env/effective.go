@@ -24,14 +24,12 @@ package env
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"pix/host/config"
 	"pix/host/container"
 	"pix/host/envinfo"
-	"pix/host/mcp"
 	"pix/host/pixhome"
 	"pix/host/sandbox"
 	"pix/host/stack"
@@ -137,6 +135,10 @@ func ComputeEffective(home pixhome.Paths, explicit, launcherVersion string) (env
 		return envinfo.RuntimeFacts{}, err
 	}
 
+	servers, err := EnvironmentFacts(doc, sidecar, home.Home)
+	if err != nil {
+		return envinfo.RuntimeFacts{}, err
+	}
 	facts := envinfo.RuntimeFacts{
 		Document:    doc,
 		Sidecar:     sidecar,
@@ -160,7 +162,7 @@ func ComputeEffective(home pixhome.Paths, explicit, launcherVersion string) (env
 		// producer, envinfo.PixManagedEnvVars, so `--effective` never shows an
 		// env block a real create would then silently add to.
 		PixEnvVars: envinfo.PixManagedEnvVars(launcherVersion, previewStackID(home)),
-		MCPServers: envinfo.WithBuiltinMCPServers(mcpWrapperFacts(doc, sidecar), builtinMCPFacts(home)),
+		MCPServers: envinfo.WithBuiltinMCPServers(servers, builtinMCPFacts(home)),
 	}
 	return facts, nil
 }
@@ -252,59 +254,4 @@ func builtinMCPFacts(home pixhome.Paths) envinfo.BuiltinMCPFacts {
 		facts.SessionArgs = []string{effectiveSessionSubcommandArg}
 	}
 	return facts
-}
-
-// mcpWrapperFacts composes the already-reviewed MCP wrapper facts §9.2
-// describes: a local-command server whose pix.toml [host.mcp.<name>]
-// declares env_keys is wrapped with the ONE existing op-run grammar this
-// module has, package mcp's OpRunWrap — never a second, hand-built copy of
-// it (arch_effective_test.go's TestArchitecture_NoDuplicateOpRunGrammar).
-// A server with no declared env_keys, or when `op` / the refs file are not
-// present on this host, renders its bare argv unchanged — OpRunWrap's own
-// no-op behavior for that case, reused rather than reimplemented here.
-func mcpWrapperFacts(doc *envinfo.Document, sidecar *envinfo.Sidecar) []envinfo.MCPWrapperFact {
-	if doc == nil {
-		return nil
-	}
-	var hostMCP map[string]envinfo.HostMCPEntry
-	if sidecar != nil {
-		hostMCP = sidecar.Host.MCP
-	}
-	var out []envinfo.MCPWrapperFact
-	for _, srv := range doc.MCP.Servers {
-		fact := envinfo.MCPWrapperFact{Name: srv.Name, URL: srv.URL}
-		if srv.Command == "" {
-			out = append(out, fact)
-			continue
-		}
-		// Pix's own `${PIX_HOME}` is resolved HERE, before the wrapper, so
-		// the preview shows the same final argv a real launch composes
-		// (workflow/launch's EnvMCPWrapperFacts does the identical thing in
-		// the identical order). Every other `${VAR}` stays authored: sbx
-		// resolves host variables, Pix resolves only its own.
-		argv := envinfo.ExpandPixManagedArgv(append([]string{srv.Command}, srv.Args...), pixManagedVars())
-		if entry, ok := hostMCP[srv.Name]; ok && len(entry.EnvKeys) > 0 {
-			argv = opRunWrapIfAvailable(argv)
-		}
-		fact.Command = argv[0]
-		fact.Args = argv[1:]
-		out = append(out, fact)
-	}
-	return out
-}
-
-// opRunWrapIfAvailable calls mcp.OpRunWrap with this host's own resolved
-// `op` binary path and op-refs.env location, or returns argv unchanged
-// when either is absent (1Password remains optional — mcp.OpRunWrap's own
-// no-op behavior for opPath == "" || opRefs == "").
-func opRunWrapIfAvailable(argv []string) []string {
-	opPath, err := exec.LookPath("op")
-	if err != nil {
-		return argv
-	}
-	refs := config.OpRefsPath()
-	if _, err := os.Stat(refs); err != nil {
-		return argv
-	}
-	return mcp.OpRunWrap(opPath, refs, argv)
 }

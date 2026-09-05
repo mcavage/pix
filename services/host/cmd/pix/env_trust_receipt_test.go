@@ -62,7 +62,7 @@ func TestEnvTrust_AcceptanceRecordsAReceipt(t *testing.T) {
 	home := mountEnvHome(t, "work", mount)
 	d, out, _ := trustGateDeps(t, home)
 
-	if code := dispatch([]string{"env", "trust", "work", "--yes"}, d); code != 0 {
+	if code := dispatch([]string{"env", "trust", "work", "--yes", "--verbose"}, d); code != 0 {
 		t.Fatalf("exit = %d (stdout=%q)", code, out.String())
 	}
 	rec := readTrustRecordFile(t, home, "work")
@@ -89,14 +89,14 @@ func TestEnvTrust_ReReviewShowsTheChangeNotTheWholeBill(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 	home := mountEnvHome(t, "work", first)
 	d, out, _ := trustGateDeps(t, home)
-	if code := dispatch([]string{"env", "trust", "work", "--yes"}, d); code != 0 {
+	if code := dispatch([]string{"env", "trust", "work", "--yes", "--verbose"}, d); code != 0 {
 		t.Fatalf("first accept exit = %d (stdout=%q)", code, out.String())
 	}
 
 	// One mount added. The fingerprint moves, so the gate re-opens.
 	writeMountEnv(t, home, "work", first, second)
 	d2, out2, _ := trustGateDeps(t, home)
-	if code := dispatch([]string{"env", "trust", "work", "--yes"}, d2); code != 0 {
+	if code := dispatch([]string{"env", "trust", "work", "--yes", "--verbose"}, d2); code != 0 {
 		t.Fatalf("second accept exit = %d (stdout=%q)", code, out2.String())
 	}
 	got := out2.String()
@@ -117,7 +117,7 @@ func TestEnvTrust_ReReviewShowsTheChangeNotTheWholeBill(t *testing.T) {
 	if !strings.Contains(got, "1 reviewed fact(s) changed since, ") {
 		t.Fatalf("re-review did not report the size of the change:\n%s", got)
 	}
-	if !strings.Contains(got, "full bill: pix env trust work --verbose") {
+	if !strings.Contains(got, "fingerprint:") {
 		t.Fatalf("re-review did not offer the full bill:\n%s", got)
 	}
 	// And the second acceptance replaces the receipt, so a THIRD review
@@ -140,7 +140,7 @@ func TestEnvTrust_FirstReviewIsStillTheFullBill(t *testing.T) {
 	home := mountEnvHome(t, "work", t.TempDir())
 	d, out, _ := trustGateDeps(t, home)
 
-	if code := dispatch([]string{"env", "trust", "work", "--yes"}, d); code != 0 {
+	if code := dispatch([]string{"env", "trust", "work", "--yes", "--verbose"}, d); code != 0 {
 		t.Fatalf("exit = %d (stdout=%q)", code, out.String())
 	}
 	got := out.String()
@@ -160,7 +160,7 @@ func TestEnvTrust_RecordWithoutAReceiptFallsBackHonestly(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 	home := mountEnvHome(t, "work", first)
 	d, out, _ := trustGateDeps(t, home)
-	if code := dispatch([]string{"env", "trust", "work", "--yes"}, d); code != 0 {
+	if code := dispatch([]string{"env", "trust", "work", "--yes", "--verbose"}, d); code != 0 {
 		t.Fatalf("first accept exit = %d (stdout=%q)", code, out.String())
 	}
 	// Strip the receipt, exactly as an older pix would have left it.
@@ -173,7 +173,7 @@ func TestEnvTrust_RecordWithoutAReceiptFallsBackHonestly(t *testing.T) {
 
 	writeMountEnv(t, home, "work", first, second)
 	d2, out2, _ := trustGateDeps(t, home)
-	if code := dispatch([]string{"env", "trust", "work", "--yes"}, d2); code != 0 {
+	if code := dispatch([]string{"env", "trust", "work", "--yes", "--verbose"}, d2); code != 0 {
 		t.Fatalf("second accept exit = %d (stdout=%q)", code, out2.String())
 	}
 	got := out2.String()
@@ -196,7 +196,7 @@ func TestRunTrustGate_ReReviewShowsTheChange(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 	home := mountEnvHome(t, "work", first)
 	d, out, _ := trustGateDeps(t, home)
-	if code := dispatch([]string{"env", "trust", "work", "--yes"}, d); code != 0 {
+	if code := dispatch([]string{"env", "trust", "work", "--yes", "--verbose"}, d); code != 0 {
 		t.Fatalf("seed accept exit = %d (stdout=%q)", code, out.String())
 	}
 
@@ -208,7 +208,7 @@ func TestRunTrustGate_ReReviewShowsTheChange(t *testing.T) {
 		t.Fatal("declining the re-review must stop the launch")
 	}
 	got := errb.String()
-	if !strings.Contains(got, "you accepted this environment on ") || !strings.Contains(got, "added    mount") {
+	if !strings.Contains(got, `Environment "work" has changed.`) || strings.Contains(got, "fingerprint:") {
 		t.Fatalf("run's inline gate did not show the change list:\n%s", got)
 	}
 	if !strings.Contains(got, second) {

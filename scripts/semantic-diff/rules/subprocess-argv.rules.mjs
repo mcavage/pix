@@ -7,12 +7,12 @@
 export default [
 	{
 		id: "argv.op-run-wrapper.exact-grammar",
-		description: 'mcp.OpRunWrap is the ONE op-run wrapper grammar the launcher ever generates: `<op> run --no-masking --env-file=<refs> --`. Widening this (extra flags, different ordering, a different env-file form) changes what credentials the sbx gateway resolves at spawn, so it must stay exactly this shape. The second caller this pin used to require — workflow/doctor/mcp.go\'s pack-declared-MCP-server health probe wrapping its own exec through the SAME grammar — was deleted with the pack system in the Pix v2 cutover (docs/design/pix-v2-architecture.md §14, AC-16): there is no more pack-declared MCP classification for doctor to probe. The pack-manifest registration admin (mcp.RegisterServers, McpRegistrar, cmd/pix registerServers) was deleted in the round-4 config collapse: the environment document plus reserved built-ins are the ONE MCP declaration channel, so workflow/launch/envlaunch.go\'s opRunWrapIfAvailable is now the wrapper\'s only caller.',
+		description: 'Pin the single op-run credential wrapper. Preview and launch both use workflow/env.EnvironmentFacts; the end anchor follows the next surviving function after deletion of unused MCP administration code.',
 		checks: [
 			{
 				file: "services/host/mcp/mcp.go",
 				kind: "contains",
-				region: { start: "func OpRunWrap(opPath, opRefs string, argv []string) []string {", end: "\n// remoteMCPRegistrationCurrent" },
+				region: { start: "func OpRunWrap(opPath, opRefs string, argv []string) []string {", end: "\n// outputContainsCanonicalEndpoint" },
 				values: ['return append([]string{opPath, "run", "--no-masking", "--env-file=" + opRefs, "--"}, argv...)'],
 			},
 		],

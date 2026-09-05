@@ -13,6 +13,24 @@ it does not replace them.
 
 ## What pix is, in one paragraph
 
+### Product direction reaffirmed 2026-09-05
+
+Optimize for a small, maintainable launcher and a polished product experience
+for nontechnical users, including sales users. Every environment gets guided
+onboarding. "Home" and "work" are user conventions, never built-in modes or
+special cases; names, connections and model choices come from the environment.
+Normal output explains useful choices, connections, progress and
+recovery in plain language; it does not expose trust footprints, fingerprints,
+hook hashes, container argv or infrastructure inventories. Put technical review
+details and redacted diagnostic logs behind `--verbose`. Preserve enforcement
+internally; any required consent must describe the concrete access or action in
+language the user can understand. These decisions supersede older statements
+that prohibit onboarding interviews or require technical trust bills by default.
+
+Keep `pix env add SOURCE [NAME]` as convenient adoption of a local directory or
+repository, without a separate environment registry. Remove obsolete plugin,
+supervisor and duplicate sbx machinery rather than rebuilding it under new names.
+
 `pix` is the only host binary and the only user-facing CLI. It resolves a
 named environment (a directory under `~/.pix/envs`, PIX_HOME's default),
 compiles it into one effective native sbx document, and runs `sbx env create`
@@ -83,7 +101,10 @@ fallback:
 derived from it; a malformed id is an error there, never a bare
 `pix-memory`/`pix-session`/`pix-<basename>`. The **MCP registry stays
 host-global** (it is the sbx Gateway's, not Pix's): the built-ins simply
-register under namespaced names, so two homes coexist in one registry.
+register under namespaced names, so two homes coexist in one registry. Local
+environment MCP servers are registered as `<authored-name>-<stack-id>` by the
+shared preview/launch compiler; their state and credentials belong to that home.
+Remote MCP names remain shared.
 
 Stack scoping prevents accidental collisions between two homes; it is not a
 confidentiality boundary. The Gateway registration's URL carries that stack's
@@ -92,8 +113,8 @@ registry is a host-global, same-user store, so another process running as the
 same user can read it. Say that plainly in docs; never imply scoping isolates
 one home's memory from another process under the same login.
 
-Each home allocates its **own loopback memory port** (`memory_port` in that
-home's `config.toml`, written by `pix setup`); every reader takes it from
+Each home allocates its **own loopback memory port** (recorded in that
+home's `.state/memory/port` by `pix setup`); every reader takes it from
 there. Cleanup (`pix rm --all`, `pix rm --orphans`, `pix reset`) discovers
 only sandboxes carrying the current stack's id.
 
@@ -128,9 +149,11 @@ users to keep a migration path for. There is no `mcp`, `models`, `config`,
 those names route anywhere.
 
 An environment is a plain directory (`.sbxenv.yaml` + optional `pix.toml`);
-there is no registration database and no `add`/`edit`/`use`/`forget`
-mutation path. Create, clone, move, and remove one with ordinary filesystem
-and Git tools. `pix env trust NAME` is the explicit host-execution approval
+there is no registration database. `pix env add SOURCE [NAME]` adopts an
+existing local directory or clones a repository and points to setup. There is
+no `edit`/`use`/`forget` mutation path. Users can also create, clone, move, and
+remove environments with ordinary filesystem and Git tools.
+`pix env trust NAME` is the explicit host-execution approval
 gate; `pix env default NAME` is the one writer of the machine default.
 
 ## Native sbx environments and the Gateway
@@ -149,6 +172,20 @@ processes itself. A same-name registration at a different endpoint/kind
 refuses launch rather than being silently overwritten. Memory is registered
 this way too: `pix-memory` is a regular remote MCP server from the Gateway's
 point of view, reached over loopback, never dialed directly by the sandbox.
+
+## Host UAT findings (2026-09-05)
+
+- Pi's `--resume` opens its picker; Pix's `--resume SESSION` must translate to
+  `pi --session SESSION`. Every create and attach invocation also carries
+  `--session-dir .pi-sessions` so removal preserves the conversation in the
+  mounted workspace. Real create → remove → resume UAT proved both together.
+- Preview and launch use `workflow/env.EnvironmentFacts` for the same MCP argv.
+  Do not reintroduce separate preview/launch wrappers or retired MCP administration.
+- Onboarding uses one shared terminal reader. Real PTY arrow/backspace editing,
+  cancellation tests, selected Ollama launch, Gateway memory remember/recall,
+  two-home memory separation, and quiet repeat setup have been exercised.
+- Integration fixture tests must stub browser openers even when testing their
+  absence: `/usr/bin/open` on macOS otherwise opens fake Slack/Okta auth URLs.
 
 ## Build, load, run
 
@@ -235,8 +272,9 @@ you touch the surface it names.
     Pix already composed, fingerprinted, and put through its own trust
     gate, and that text carries the token-bearing `pix-memory` URL. Pix
     answers that duplicate prompt internally, after its own gate, captures
-    the create child's output, and shows it only on failure, bounded and
-    with every credential redacted. The interactive `sbx exec` session
+    the create child's output, and shows a concise error on create failure.
+    `--verbose` shows the captured diagnostic, bounded and credential-redacted.
+    A later session or credential failure never prints a successful create plan. The interactive `sbx exec` session
     keeps ordinary stdio; the two children are told apart by their
     `SessionDeps` seam, never by sniffing argv.
 13. **An environment with no host footprint is not gated.**
@@ -324,3 +362,7 @@ match `services/host/go.mod`, `GOTOOLCHAIN=local`), chromium + agent-browser,
 python3, build-essential. Go is baked so you can build/test the launcher
 (`services/host`) and the memory service (`services/memory`) from inside a
 sandbox when hacking on pix itself.
+
+Usage accounting for gateway aliases reuses the pinned Pi catalog’s canonical
+model prices, including cache and context tiers. Rates are provider list-price
+estimates, not gateway invoices, and never influence model selection.

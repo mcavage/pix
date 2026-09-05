@@ -10,7 +10,7 @@ import (
 // run_trust_zerofootprint_test.go is the user-reported launch bug, at the
 // real command boundary: the environment `pix setup` generates has a bill
 // of materials with ZERO host-execution counts, and `pix run` still stopped
-// to ask "Accept this host-execution footprint?" — a consent screen with
+// to ask "Continue?" — a consent screen with
 // nothing on it, which on a non-interactive terminal was an outright
 // refusal nobody could satisfy except by accepting an empty bill.
 //
@@ -52,7 +52,7 @@ func TestRunTrustGate_ZeroFootprintEnvironmentNeitherPromptsNorRefuses(t *testin
 
 	combined := out.String() + errb.String()
 	if strings.Contains(combined, "has not been reviewed") ||
-		strings.Contains(combined, "Accept this host-execution footprint?") ||
+		strings.Contains(combined, "Continue?") ||
 		strings.Contains(combined, "unreviewed environment") {
 		t.Fatalf("a zero-footprint environment must neither prompt nor refuse; got %q", combined)
 	}
@@ -77,7 +77,7 @@ func TestRunTrustGate_ZeroFootprintInteractiveDoesNotPrompt(t *testing.T) {
 		t.Fatalf("the gate read stdin for a zero-footprint environment (%d reads); it must not prompt", stdin.reads)
 	}
 	combined := out.String() + errb.String()
-	if strings.Contains(combined, "Accept this host-execution footprint?") {
+	if strings.Contains(combined, "Continue?") {
 		t.Fatalf("interactive run prompted for a zero-footprint environment: %q", combined)
 	}
 }
@@ -115,7 +115,7 @@ func TestRunTrustGate_Tier1StillPromptsInteractive(t *testing.T) {
 	if code == 0 {
 		t.Fatal("declining the prompt must stop the launch")
 	}
-	if !strings.Contains(errb.String(), "Accept this host-execution footprint?") {
+	if !strings.Contains(errb.String(), "Continue?") {
 		t.Fatalf("stderr = %q, want the default-No prompt for a Tier1 environment", errb.String())
 	}
 	if _, err := os.Stat(trustRecordFile(home, "work")); err == nil {
@@ -131,7 +131,7 @@ func TestEnvTrust_ZeroFootprintWritesNothing(t *testing.T) {
 	d, out, _ := trustGateDeps(t, home)
 	d.Interactive = false
 
-	if code := dispatch([]string{"env", "trust", "default"}, d); code != 0 {
+	if code := dispatch([]string{"env", "trust", "default", "--verbose"}, d); code != 0 {
 		t.Fatalf("exit = %d, want 0 (stdout=%q)", code, out.String())
 	}
 	if !strings.Contains(out.String(), "nothing to accept") {

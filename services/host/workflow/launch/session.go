@@ -181,6 +181,12 @@ func CheckSessionFingerprint(sessionKey string, current sandbox.Fingerprint) (di
 	if !readSessionState(sessionKey, sessionFingerprintFileName, &stored) {
 		return nil, false
 	}
+	// An attach does not resolve a create-time image. An omitted override
+	// keeps the existing image; it is not a request to remove that image.
+	// The environment creation fingerprint separately checks authored drift.
+	if current["template"] == "" {
+		delete(stored, "template")
+	}
 	return sandbox.Diff(stored, current), true
 }
 
@@ -585,6 +591,8 @@ func reportTeardown(warn io.Writer, res TeardownResult, _ string) {
 	switch res.Verdict {
 	case TeardownKeptUnowned, TeardownRemoved, TeardownAlreadyAbsent:
 		return
+	case TeardownKeptKeep:
+		fmt.Fprintf(warn, "Kept sandbox %s.\n", res.Sandbox)
 	default:
 		fmt.Fprintf(warn, "pix: kept %s: %s\n", res.Sandbox, res.Detail)
 	}

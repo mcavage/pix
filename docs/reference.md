@@ -17,7 +17,7 @@ for `AGENTS.md`, which deliberately carries no CLI reference of its own.
 | `ls` | list your `pix-*` sandboxes: environment, project, holder count, task | §9 |
 | `rm` | remove positively identified `pix-*` sandboxes: names, `--all`, `--orphans` | §9 |
 | `task` | isolated Git checkouts plus a recorded environment: `new`/`ls`/`path`/`rm` | §8, `docs/design/worktree-tasks.md` |
-| `env` | a directory under `~/.pix/envs`: `list`/`show`/`default`/`trust`, no add/edit/use/forget | §5 |
+| `env` | a directory under `~/.pix/envs`: `list`/`show`/`add`/`default`/`trust` | §5 |
 | `secret` | manage `op://` references, never values: `list`/`set`/`rm`/`check` | §10 |
 | `setup` | the guided path from an installed binary to a working first session | §6 |
 | `doctor` | read-only probes with one exact corrective action each | §7 |
@@ -147,7 +147,8 @@ description. The spine you will use most:
 | `tdd` | failing test first, watch it fail, minimal code to pass, refactor |
 | `verify` | prove a claim by running the command before you say "done" |
 | `qa` | drive a running app in the browser, report bugs with screenshots |
-| `healthcheck` | is the harness working (keys, memory, MCP, skills) and is the code healthy (tests, lint, dead code) |
+| `healthcheck` | is Pix working (inference, memory, MCP, skills, agent routing) |
+| `repo-healthcheck` | is the repository healthy (tests, types, lint, dead code, ranked fixes) |
 | `enrich` | write a durable fact into a shared knowledge bundle, gated by PR |
 | `promote` | review what the memory watcher keeps repeating and graduate it into a skill or convention |
 
@@ -202,7 +203,7 @@ elsewhere is represented by a symlink under `~/.pix/envs`.
 pix env [NAME] [--path|--effective|--json]     # detail includes resolved model + agent overrides
 pix env add SOURCE [NAME]                      # adopt an existing local dir or git URL as a new one
 pix env default [NAME]                          # print, or set, the machine default
-pix env trust NAME [--yes]                      # read and accept what NAME runs on your host
+pix env trust NAME [--yes] [--verbose]                      # read and accept what NAME runs on your host
 ```
 
 **There is no `edit`/`use`/`forget`, and `add` never overwrites.** `pix env
@@ -217,8 +218,7 @@ anything; those stay separate commands. Beyond `add`, create, clone, edit,
 move, and remove an environment with ordinary filesystem and Git tools
 under `~/.pix/envs`. An environment whose bill of materials is empty (it runs
 nothing on this host, hands out no credential, and expands no mount) needs
-no acceptance at all: it is never prompted for, `pix env trust NAME` says
-there is nothing to accept and writes no record, and `pix env list`/`show`
+no acceptance at all: it is never prompted for, `pix env trust NAME` writes no record, and `pix env list`/`show`
 report it as trusted. Only a host-affecting fact (a host command or
 service, a setup hook, a credential destination, an unverified registry, a
 mount expansion) creates something to review. `pix setup` may scaffold a
@@ -307,20 +307,9 @@ fingerprint is HMAC-bound and stored under `~/.pix/.state/trust`, outside the
 environment directory itself, and recomputed before every use: a changed
 fact (kit, workspace mounts, MCP command or URL, secret destinations,
 network expansion) refuses launch and re-opens the review. Trust review
-defaults to No; `--yes` removes the prompt, not the printed bill or the
-fingerprint check.
-
-A **first** review prints the whole bill of materials. A **re-review** does
-not: an acceptance also records a *receipt*, the itemized bill it approved
-(section, key, and a digest per fact, and no fact's detail), so the next
-review names what was **added, removed, or changed** since, counts what was
-not, and offers `--verbose` for the full bill underneath. Re-printing an
-unchanged 60-line audit dump for a one-line kit bump is how a consent screen
-becomes scenery and `--yes` becomes reflex. The diff is computed from the
-same canonical document the fingerprint hashes, so it can never report
-"nothing changed" while the gate is refusing entry; a record written before
-receipts existed falls back to the full bill and says that it could not
-compare, rather than showing an empty diff.
+defaults to No; `--yes` suppresses the prompt, never the fingerprint check.
+Normal review explains the requested actions and access in plain language.
+`--verbose` prints the detailed bill and changes since the previous approval.
 
 ## 6. Setup
 
@@ -346,15 +335,8 @@ run` remains the setup opt-out; non-interactive bare `pix` stays read-only. It:
 4. verifies the `pix-agent` image and strict kit;
 5. creates a default environment only when none exists, and selects it as
    the machine default in the same atomic step;
-6. always seeds a refs-only `secrets.env` (no-op if one already exists) and,
-   on a BARE `pix setup` with a TTY, `op` installed and no refs configured
-   yet, offers to add one per model provider interactively. A named `pix
-   setup --env NAME` run skips every base personal-provider step (that
-   offer, the provider-key report, the default-model picker and the optional
-   Parallel web-search key): an environment that declares its own roster and
-   its own authenticated backends can neither use a public-vendor key nor be
-   told it has none, so the only values such a run asks for are the ones
-   that environment itself declares (step 8);
+6. seeds a refs-only `secrets.env`, preserving an existing file, and guides the
+   selected environment's model choice and missing account connections;
 7. creates or reconciles this stack's own `pix-memory` container;
 8. checks requirements declared by the selected environment (`--env NAME`),
    including validating any local inference backend (llmman or Ollama, over
@@ -364,17 +346,15 @@ run` remains the setup opt-out; non-interactive bare `pix` stays read-only. It:
    environment; and
 10. probes the complete result before reporting it ready.
 
-There is no setup interview: setup never asks which cloud provider, llmman, or
-Ollama to use. A provider key is added with `pix secret set`, or through
-setup's own interactive 1Password offer above; local inference is authored
-directly in an environment's own `pix.toml`, and `pix run` merges that
-declaration over machine config for the session it launches. Setup and
-doctor only validate what an environment already declares: neither chooses
-on the user's behalf, and neither silently prefers or migrates one backend
-over another.
+All environment names use the same onboarding flow. Setup keeps an existing
+model choice; otherwise it offers that environment's declared models, or supported
+installed Ollama models and the shipped cloud defaults. It asks only for the
+chosen model's missing credential and the environment's declared connections.
+Rerunning setup keeps existing choices and checks completed steps before applying
+them again. Use `--verbose` for technical diagnostics.
 
-Setup only writes `secrets.env`. It never resolves a ref into a credential
-and never writes an sbx secret, host-global or scoped: every `pix run`
+Model credential setup records references in `secrets.env`; it does not write
+an sbx secret, host-global or scoped: every `pix run`
 create and every attach does that itself, re-resolving THIS `PIX_HOME`'s
 configured refs (model provider keys, tool keys, `GITHUB_TOKEN`) and writing
 each one as `sbx secret set -f --sandbox <name> <service>`, with the resolved
@@ -687,3 +667,36 @@ pix reset
    first to see what memory already captured, then `/remember` the rest.
 
 That is the whole loop: run, work, let the parts introduce themselves.
+
+### Local integration names and model bindings
+
+Local MCP registrations use `<name>-<stack-id>` so separate Pix homes can use
+the same environment without competing for one Gateway process. The authored
+name remains the key for `pix.toml` annotations. Remote endpoints keep their
+shared names. Preview and launch use the same registration compiler.
+
+An authored model name resolves through its explicit `[[inference.models]]`
+binding to the provider and upstream model used by Pi. The main session and
+subagent roster use the same mapping. There is no scoring or fallback to a
+different provider.
+
+Pix never requires or creates host-global sbx secrets. It records 1Password
+references and writes scoped credentials on each launch. Globals configured
+outside Pix remain the user's responsibility; Pix does not remove them or
+attempt to disable sbx's own fallback behavior.
+
+### Usage cost estimates
+
+Pi tracks token costs using its pinned provider catalog. Work gateway aliases
+inherit the same input, output, cache-read, cache-write, and long-context rates
+as their canonical models. These are USD list-price estimates, not invoices or
+routing criteria; gateway contracts and subscription charges may differ.
+Ollama has no per-token charge in this accounting.
+
+Pi 0.85.1 includes [GPT-6 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
+($10 input / $50 output per million tokens, with higher rates above 272K input)
+and [Gemini 3.8 Flash pricing](https://ai.google.dev/gemini-api/docs/pricing)
+($0.75 input / $3.75 output per million tokens). Gemini's introductory rates
+expire December 31, 2026; update the pinned Pi catalog before that expiry to
+keep estimates current. Cache rates and Astra's context tiers are preserved,
+not flattened into the base rate.

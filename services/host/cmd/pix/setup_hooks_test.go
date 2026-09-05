@@ -58,7 +58,7 @@ exit 2
 
 	var out, errb bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &errb}
-	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+	if err := setupSelectedEnvironment(d, p, "work", true); err != nil {
 		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
 	}
 	if _, err := os.Stat(marker); err != nil {
@@ -70,7 +70,7 @@ exit 2
 
 	// Rerun: converged, so nothing is applied again and setup still passes.
 	out.Reset()
-	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+	if err := setupSelectedEnvironment(d, p, "work", true); err != nil {
 		t.Fatalf("rerun: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "already ready") {
@@ -92,7 +92,7 @@ exit 2
 
 	var out, errb bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &errb}
-	err := setupSelectedEnvironment(d, p, "work")
+	err := setupSelectedEnvironment(d, p, "work", true)
 	if err == nil {
 		t.Fatalf("a required hook that is not ready must fail setup:\n%s", out.String())
 	}
@@ -153,7 +153,7 @@ exit 2
 
 	var out, errb bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &errb}
-	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+	if err := setupSelectedEnvironment(d, p, "work", true); err != nil {
 		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
 	}
 
@@ -208,7 +208,7 @@ exit 0
 `)
 	var out, errb bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false}
-	if err := setupSelectedEnvironment(d, p, "work"); err == nil {
+	if err := setupSelectedEnvironment(d, p, "work", true); err == nil {
 		t.Fatal("an untrusted environment must refuse on a non-interactive terminal")
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -239,7 +239,7 @@ exit 0
 
 	var out, errb bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false}
-	if err := setupSelectedEnvironment(d, p, "work"); err == nil {
+	if err := setupSelectedEnvironment(d, p, "work", true); err == nil {
 		t.Fatal("a hook whose executable changed after acceptance must refuse")
 	}
 	if _, statErr := os.Stat(marker); statErr == nil {
@@ -294,7 +294,7 @@ exit 2
 
 	var out, errb bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &errb}
-	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
+	if err := setupSelectedEnvironment(d, p, "work", true); err != nil {
 		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
 	}
 	if _, err := os.Stat(marker); err != nil {
@@ -326,7 +326,7 @@ exit 2
 
 	var out, errb bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &errb}
-	err := setupSelectedEnvironment(d, p, "work")
+	err := setupSelectedEnvironment(d, p, "work", true)
 	if err == nil {
 		t.Fatal("a hook that depends on an undeclared sibling must not become ready")
 	}
@@ -365,7 +365,7 @@ exit 2
 
 	var out, errb bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader(""), Interactive: false}
-	if err := setupSelectedEnvironment(d, p, "work"); err == nil {
+	if err := setupSelectedEnvironment(d, p, "work", true); err == nil {
 		t.Fatal("a mutated declared input must refuse setup, not silently run with new content")
 	}
 	if _, statErr := os.Stat(marker); statErr == nil {

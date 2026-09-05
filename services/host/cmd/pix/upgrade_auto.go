@@ -98,7 +98,7 @@ func autoReconcileRelease(d *cli.Deps, s setupSeams) error {
 		return fmt.Errorf("pix: automatic upgrade to %s did not reach a verified state (pix-memory container %s)\npix: run `pix doctor` for the exact gap; the next run retries the upgrade",
 			bundle.Manifest.Version, res.Container.Action)
 	}
-	fmt.Fprintf(d.Err, "pix: upgraded to %s (kit %s, pix-memory %s)\n", bundle.Manifest.Version, res.KitRevision, res.Container.Action)
+	fmt.Fprintf(d.Err, "pix: upgraded to %s\n", bundle.Manifest.Version)
 	return nil
 }
 

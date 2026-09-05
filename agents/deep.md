@@ -1,5 +1,5 @@
 ---
-description: Top general reasoner (Opus 5) for one genuinely hard sub-problem, a thorny bug, a tricky implementation, a subtle root cause. Use sparingly; it is the expensive one. (Fable 5 is reserved for security red-team, not general hard work.)
+description: Deep reasoning for one hard sub-problem, a thorny bug, a tricky implementation, or a subtle root cause. Use sparingly for work that warrants the extra time and cost.
 tools: read, write, edit, bash, grep, find, ls
 thinking: high
 max_turns: 40

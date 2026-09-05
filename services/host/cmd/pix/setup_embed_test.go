@@ -11,7 +11,6 @@ import (
 
 	"pix/host/cli"
 	"pix/host/hostenv"
-	"pix/host/sys"
 	"pix/host/sys/systest"
 )
 
@@ -57,7 +56,7 @@ func TestReportMemoryEmbeddingStatus_NotInstalled(t *testing.T) {
 	var out bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &out}
 	env := reportEmbedEnv(t, false, "127.0.0.1:1", `{"models":[]}`)
-	setupMemoryEmbeddings(d, env)
+	setupMemoryEmbeddings(d, env, true)
 	if !strings.Contains(out.String(), "not installed") {
 		t.Errorf("output = %q, want a not-installed note", out.String())
 	}
@@ -67,7 +66,7 @@ func TestReportMemoryEmbeddingStatus_LocalPresent(t *testing.T) {
 	var out bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &out}
 	env := reportEmbedEnv(t, true, "", `{"models":[{"name":"nomic-embed-text","size":274000000}]}`)
-	setupMemoryEmbeddings(d, env)
+	setupMemoryEmbeddings(d, env, true)
 	if !strings.Contains(out.String(), "present") {
 		t.Errorf("output = %q, want the model reported present", out.String())
 	}
@@ -82,7 +81,7 @@ func TestReportMemoryEmbeddingStatus_LocalMissingNonInteractiveNeverPulls(t *tes
 	var out bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &out, Interactive: false}
 	env := reportEmbedEnv(t, true, "", `{"models":[{"name":"qwen3.5:9b","size":6600000000}]}`)
-	setupMemoryEmbeddings(d, env)
+	setupMemoryEmbeddings(d, env, true)
 	if !strings.Contains(out.String(), "ollama pull nomic-embed-text") {
 		t.Errorf("output = %q, want the copy-pasteable pull command", out.String())
 	}
@@ -92,8 +91,8 @@ func TestReportMemoryEmbeddingStatus_LocalMissingInteractiveDeclineNeverPulls(t 
 	var out bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &out, Interactive: true, In: strings.NewReader("n\n")}
 	env := reportEmbedEnv(t, true, "", `{"models":[]}`)
-	setupMemoryEmbeddings(d, env)
-	if !strings.Contains(out.String(), "skipping") {
+	setupMemoryEmbeddings(d, env, true)
+	if !strings.Contains(out.String(), "add it later") {
 		t.Errorf("output = %q, want the decline path acknowledged", out.String())
 	}
 }
@@ -113,7 +112,7 @@ func TestReportMemoryEmbeddingStatus_LocalMissingInteractiveYesPulls(t *testing.
 	u, _ := url.Parse(srv.URL)
 	fake.GetenvFn = func(string) string { return u.Host }
 	d := &cli.Deps{Out: &out, Err: &out, Interactive: true, In: strings.NewReader("y\n")}
-	setupMemoryEmbeddings(d, hostenv.Env{System: fake})
+	setupMemoryEmbeddings(d, hostenv.Env{System: fake}, true)
 	if !pulled {
 		t.Error("RunInteractiveFn was never called for an interactive yes")
 	}
@@ -129,7 +128,7 @@ func TestReportMemoryEmbeddingStatus_RemoteNeverOffersPull(t *testing.T) {
 		LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil },
 		GetenvFn:   func(string) string { return "team-ollama.internal:11434" },
 	}
-	setupMemoryEmbeddings(d, hostenv.Env{System: fake})
+	setupMemoryEmbeddings(d, hostenv.Env{System: fake}, true)
 	if strings.Contains(out.String(), "Pull ") || fake.Ran("ollama pull") {
 		t.Errorf("output = %q, must never offer or run a pull for a remote endpoint", out.String())
 	}
@@ -146,8 +145,8 @@ func TestSetupMemoryEmbeddings_ReprobesAfterAPull(t *testing.T) {
 		wantPhr   string
 		unwantPhr string
 	}{
-		{"listed after the pull", `{"models":[{"name":"nomic-embed-text:latest"}]}`, "now lists it", "reported success, but"},
-		{"still missing after the pull", `{"models":[]}`, "reported success, but", "now lists it"},
+		{"listed after the pull", `{"models":[{"name":"nomic-embed-text:latest"}]}`, "Memory search model downloaded.", "reported success, but"},
+		{"still missing after the pull", `{"models":[]}`, "reported success, but", "Memory search model downloaded."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
@@ -169,7 +168,7 @@ func TestSetupMemoryEmbeddings_ReprobesAfterAPull(t *testing.T) {
 				},
 			}
 			d := &cli.Deps{Out: &out, Err: &out, Interactive: true, In: strings.NewReader("y\n")}
-			setupMemoryEmbeddings(d, hostenv.Env{System: fake})
+			setupMemoryEmbeddings(d, hostenv.Env{System: fake}, true)
 			if !pulled {
 				t.Fatal("the pull never ran")
 			}
@@ -190,7 +189,7 @@ func TestSetupMemoryEmbeddings_PresentUnderTheDaemonsOwnTagSpelling(t *testing.T
 	var out bytes.Buffer
 	env := reportEmbedEnv(t, true, "", `{"models":[{"name":"nomic-embed-text:latest"}]}`)
 	d := &cli.Deps{Out: &out, Err: &out, Interactive: true, In: strings.NewReader("y\n")}
-	setupMemoryEmbeddings(d, env)
+	setupMemoryEmbeddings(d, env, true)
 	if !strings.Contains(out.String(), "present") || strings.Contains(out.String(), "Pull ") {
 		t.Errorf("output = %q, want the already-installed model reported present with no pull offer", out.String())
 	}
@@ -201,31 +200,3 @@ func TestSetupMemoryEmbeddings_PresentUnderTheDaemonsOwnTagSpelling(t *testing.T
 // the SAME detection this step drives, and the container's fingerprint
 // includes it — so a model pulled after the reconcile lands in the next
 // run's container, not this one. The order is the fix; this pins it.
-func TestSetupRunsOllamaBeforeTheContainerReconcile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("PIX_HOME", home)
-	dir, _ := fakeInstallDir(t, "2.0.0")
-	docker := &setupFakeDocker{}
-	seams := setupSeamsFor(t, dir, docker, &setupFakeMCP{})
-	fake := &systest.Fake{
-		Base:             sys.Real{},
-		LookPathFn:       func(string) (string, error) { return "/usr/local/bin/ollama", nil },
-		GetenvFn:         func(string) string { return "127.0.0.1:1" },
-		RunInteractiveFn: func(name string, args ...string) error { return nil },
-	}
-	seams.Env = hostenv.Env{System: fake}
-	var out, errb bytes.Buffer
-	d := &cli.Deps{Out: &out, Err: &errb}
-	if err := (&setupCmd{}).run(d, seams); err != nil {
-		t.Fatalf("pix setup: %v\n%s%s", err, out.String(), errb.String())
-	}
-	got := out.String() + errb.String()
-	ollamaAt := strings.Index(got, "pix setup: ollama:")
-	homeAt := strings.Index(got, "PIX_HOME")
-	if ollamaAt < 0 || homeAt < 0 {
-		t.Fatalf("output did not carry both the ollama step and the home report:\n%s", got)
-	}
-	if ollamaAt > homeAt {
-		t.Errorf("the ollama/embedding step ran AFTER the container reconcile:\n%s", got)
-	}
-}

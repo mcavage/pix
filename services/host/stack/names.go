@@ -14,6 +14,17 @@ import (
 // package's names, never the reverse.
 const pixPrefix = "pix-"
 
+// LocalMCPName keeps Gateway processes with home-specific state from colliding.
+func LocalMCPName(id, name string) (string, error) {
+	if err := ValidID(id); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("stack: local MCP name is empty")
+	}
+	return name + "-" + id, nil
+}
+
 // stampRe is the grammar LocalTemplateTag requires of its stamp argument: at
 // least one character, drawn only from a shell/argv-safe charset. The same
 // posture sandbox's own nameRe applies to a sandbox name, applied here to a

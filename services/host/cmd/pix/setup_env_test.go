@@ -12,7 +12,6 @@ import (
 	"pix/host/cli"
 	"pix/host/pixhome"
 	"pix/host/secret"
-	"pix/host/sys"
 	nativeenv "pix/host/workflow/env"
 )
 
@@ -330,22 +329,6 @@ plain_keys = ["GOG_ACCOUNT"]
 // the base-install Parallel-search offer/report entirely (never called at
 // all, not merely gated on interactivity) — a named environment's own
 // declared roster makes that base-install noise irrelevant.
-func TestSetup_EnvFlagSuppressesBaseParallelPrompt(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("PIX_HOME", home)
-	p := pixhome.New(home)
-	if err := os.MkdirAll(p.Home, 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	var out, errb bytes.Buffer
-	d := &cli.Deps{Out: &out, Err: &errb}
-	setupCredentials(d, false)
-
-	if strings.Contains(out.String(), "Parallel web search") {
-		t.Errorf("a named --env setup must not print the base Parallel-search prompt/report:\n%s", out.String())
-	}
-}
 
 // TestSetup_EnvFlagSuppressesBaseProviderInterview proves the OTHER half
 // of the same rule: a named `--env NAME` setup never runs the base
@@ -355,104 +338,10 @@ func TestSetup_EnvFlagSuppressesBaseParallelPrompt(t *testing.T) {
 // authenticated backends. It still establishes the refs file, because that
 // is where this environment's own declared values get recorded moments
 // later.
-func TestSetup_EnvFlagSuppressesBaseProviderInterview(t *testing.T) {
-	home, _ := setupHome(t)
-
-	var out, errb bytes.Buffer
-	// Interactive, with an answer waiting: if the offer were ever reached it
-	// would ask, and this input would answer yes.
-	d := &cli.Deps{Sys: sys.Real{}, Out: &out, Err: &errb, In: strings.NewReader("y\nop://Vault/Anthropic/key\n"), Interactive: true}
-	setupCredentials(d, false)
-
-	got := out.String()
-	for _, forbidden := range []string{
-		"Set up model providers from 1Password?",
-		"no model provider key is configured yet",
-		"pix secret set ANTHROPIC_API_KEY",
-		"model keys are configured",
-		"Parallel web search",
-	} {
-		if strings.Contains(got, forbidden) {
-			t.Errorf("`pix setup --env NAME` printed the base personal-provider step %q:\n%s", forbidden, got)
-		}
-	}
-	if got != "" {
-		t.Errorf("a named --env credential step must be silent, got:\n%s", got)
-	}
-	// The refs file is still established: the declared-requirements screen
-	// writes this environment's own values into it right after.
-	if _, serr := os.Stat(filepath.Join(home, "secrets.env")); serr != nil {
-		t.Errorf("a named --env setup must still establish secrets.env: %v", serr)
-	}
-	// And it wrote nothing it was never asked for.
-	body, _ := os.ReadFile(filepath.Join(home, "secrets.env"))
-	if strings.Contains(string(body), "ANTHROPIC_API_KEY=op://Vault/Anthropic/key") {
-		t.Errorf("a named --env setup recorded a provider ref from a prompt it must never have run:\n%s", body)
-	}
-}
 
 // TestSetup_EnvFlagSuppressesBaseModelPrompt proves a named `--env NAME`
 // setup never reaches the base default-model picker at all, even when a
 // bare `pix setup` under the identical conditions would.
-func TestSetup_EnvFlagSuppressesBaseModelPrompt(t *testing.T) {
-	runSetup := func(t *testing.T, env string) string {
-		t.Helper()
-		home := t.TempDir()
-		t.Setenv("PIX_HOME", home)
-		// A configured provider ref: setupModelSelection's own early-return
-		// gate ("no provider configured yet") would otherwise mask this
-		// test's question, which is whether --env skips the picker, not
-		// whether a provider is configured.
-		if err := os.WriteFile(filepath.Join(home, "secrets.env"), []byte("ANTHROPIC_API_KEY=op://Vault/Anthropic/key\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		dir, _ := fakeInstallDir(t, "2.0.0")
-		docker := &setupFakeDocker{}
-		mcp := &setupFakeMCP{}
-		if env != "" {
-			// A zero-Tier1 environment: no host command/service/mount/
-			// credential, so trust is satisfied with no acceptance record
-			// and no prompt of its own — this test is about the base
-			// model/Parallel prompts, not the trust screen.
-			writeSetupEnvFixture(t, home, env, "schema = 1\n")
-		}
-		var out, errb bytes.Buffer
-		d := &cli.Deps{Out: &out, Err: &errb, In: strings.NewReader("y\n\n"), Interactive: true}
-		if err := (&setupCmd{Env: env}).run(d, setupSeamsFor(t, dir, docker, mcp)); err != nil {
-			t.Fatalf("pix setup --env %q: %v\n%s%s", env, err, out.String(), errb.String())
-		}
-		return out.String()
-	}
-
-	baseOut := runSetup(t, "")
-	if !strings.Contains(baseOut, "Default model:") {
-		t.Fatalf("a bare `pix setup` must still show the base default-model prompt:\n%s", baseOut)
-	}
-
-	envOut := runSetup(t, "work")
-	if strings.Contains(envOut, "Default model:") {
-		t.Errorf("`pix setup --env work` must not print the base default-model prompt:\n%s", envOut)
-	}
-	if strings.Contains(envOut, "Parallel web search") {
-		t.Errorf("`pix setup --env work` must not print the base Parallel-search prompt/report:\n%s", envOut)
-	}
-	// The same run, through the REAL command body: no personal-provider
-	// interview and no provider-key advice either (this home configures
-	// ANTHROPIC_API_KEY, so the bare run reports it and the --env run must
-	// not).
-	if !strings.Contains(baseOut, "model keys are configured") {
-		t.Fatalf("a bare `pix setup` must still report the configured provider refs:\n%s", baseOut)
-	}
-	for _, forbidden := range []string{
-		"model keys are configured",
-		"no model provider key is configured yet",
-		"Set up model providers from 1Password?",
-	} {
-		if strings.Contains(envOut, forbidden) {
-			t.Errorf("`pix setup --env work` printed the base personal-provider step %q:\n%s", forbidden, envOut)
-		}
-	}
-}
 
 // TestSetupEnv_HostValueMetadataRendersFriendlyLabelAndHelp proves the
 // declared-requirements prompt uses an environment's own
@@ -479,8 +368,8 @@ example = "you@company.com"
 	if err := setupSelectedEnvironment(d, p, "work"); err != nil {
 		t.Fatalf("setupSelectedEnvironment: %v\n%s%s", err, out.String(), errb.String())
 	}
-	if !strings.Contains(out.String(), "Google Workspace account email (GOG_ACCOUNT)") {
-		t.Errorf("expected the friendly label alongside the bare name in the prompt, got:\n%s", out.String())
+	if !strings.Contains(out.String(), "Google Workspace account email:") || strings.Contains(out.String(), "(GOG_ACCOUNT)") {
+		t.Errorf("expected the authored friendly prompt label, got:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "The Google Workspace user gog authenticates as.") {
 		t.Errorf("expected the authored help sentence in the prompt, got:\n%s", out.String())

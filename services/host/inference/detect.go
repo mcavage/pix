@@ -207,9 +207,9 @@ func DetectOllama(env hostenv.Env) OllamaStatus {
 // address reachable from anywhere on the network, container or not.
 func ContainerOllamaHost(s OllamaStatus) string {
 	if s.Mode == OllamaModeRemote {
-		return fmt.Sprintf("%s:%d", s.Endpoint.Host, s.Endpoint.Port)
+		return strings.TrimRight(s.Endpoint.String(), "/")
 	}
-	return fmt.Sprintf("host.docker.internal:%d", s.Endpoint.Port)
+	return fmt.Sprintf("http://host.docker.internal:%d", s.Endpoint.Port)
 }
 
 // ollamaDetectTimeout bounds the /api/tags request so a wedged or absent

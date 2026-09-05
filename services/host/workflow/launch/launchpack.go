@@ -10,6 +10,7 @@ package launch
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"pix/host/config"
 	"pix/host/workspace"
@@ -23,6 +24,10 @@ func WriteWorkspaceContextFiles(cfg *config.Config, o RunOpts, warn io.Writer) {
 	if _, err := workspace.EnsureGitExclude(o.Workspace); err != nil {
 		fmt.Fprintf(warn, "pix: could not add .pix ws state to git excludes: %v\n", err)
 	}
-	WriteOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
+	model := cfg.OllamaBridgeModel
+	if strings.HasPrefix(o.Model, "ollama/") {
+		model = strings.TrimPrefix(o.Model, "ollama/")
+	}
+	WriteOllamaBridgeFile(o.Workspace, model)
 	WriteMemoryCaptureFile(o.Workspace, cfg.MemoryCapture)
 }
