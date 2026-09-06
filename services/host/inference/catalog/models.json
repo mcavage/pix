@@ -15,6 +15,18 @@
       "notes": "Anthropic flagship (shipped 2026-07-24)."
     },
     {
+      "id": "anthropic/claude-fable-5-1",
+      "provider": "anthropic",
+      "family": "claude",
+      "label": "Claude Fable 5.1",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "local": false,
+      "available": true,
+      "adaptive_thinking": true,
+      "notes": "Current model verified against provider documentation on 2026-09-06. Anthropic frontier tier."
+    },
+    {
       "id": "anthropic/claude-fable-5",
       "provider": "anthropic",
       "family": "claude",
@@ -204,6 +216,17 @@
       "local": true,
       "available": true,
       "notes": "Top local rung Pix offers (Apache 2.0). context_window is the DECLARED RAM-budgeted context; RAM/download facts live in inference/hardware.go's rung table. The 122b rung is deliberately not carried: no consumer machine holds it."
+    },
+    {
+      "id": "ollama/glm-5.3:cloud",
+      "provider": "ollama",
+      "family": "glm",
+      "label": "GLM 5.3 (Ollama Cloud)",
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "local": false,
+      "available": true,
+      "notes": "Current model verified against provider documentation on 2026-09-06. Ollama Cloud long-horizon coding model. Access is owned by the local Ollama login and proxied through the local Ollama API; Pix stores no Ollama credential."
     },
     {
       "id": "ollama/glm-5.2:cloud",

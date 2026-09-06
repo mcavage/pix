@@ -11,6 +11,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -126,6 +127,24 @@ func machineSetup(home pixhome.Paths, s setupSeams, bundle release.Bundle, confi
 	})
 }
 
+// setupDownloadProgress reports slow image pulls before Docker starts them.
+// Raw Docker output stays captured by the underlying runner.
+type setupDownloadProgress struct {
+	container.Runner
+	out io.Writer
+}
+
+func (r setupDownloadProgress) Run(args ...string) (string, error) {
+	if len(args) == 2 && args[0] == "pull" {
+		label := "runtime"
+		if strings.HasPrefix(args[1], provision.MemoryImageRepo+"@") {
+			label = "memory"
+		}
+		fmt.Fprintf(r.out, "Downloading %s image; the first download may take several minutes…\n", label)
+	}
+	return r.Runner.Run(args...)
+}
+
 func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 	home, err := pixhome.Resolve()
 	if err != nil {
@@ -180,6 +199,11 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 	// produced keyword-only recall until the user ran `pix setup` twice.
 	setupMemoryEmbeddings(d, s.Env, c.Verbose)
 
+	runner := s.ContainerRunner
+	if runner == nil {
+		runner = container.DefaultRunner
+	}
+	s.ContainerRunner = setupDownloadProgress{Runner: runner, out: d.Out}
 	res, err := machineSetup(home, s, *bundle, confirmContainerReplace(d, c.Verbose))
 	if err != nil {
 		return err
@@ -202,7 +226,10 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 	if name == "" {
 		return fmt.Errorf("add an environment with pix env add, then run pix setup --env NAME")
 	}
-	if err := setupModelSelection(d, home, defaultShellEnv(), name); err != nil {
+	if err := setupOptionalConnections(d, home, s.Env, name); err != nil {
+		return err
+	}
+	if err := setupModelSelection(d, home, s.Env, name); err != nil {
 		return err
 	}
 	if err := setupSelectedEnvironment(d, home, name, c.Verbose); err != nil {
