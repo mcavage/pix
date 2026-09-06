@@ -1,6 +1,6 @@
 # AC-REL-01..04 — legal/release safeguards.
 #
-# This is BOTH a standalone workflow (PRs and pushes to main) AND the
+# This is BOTH a standalone workflow (PRs and manual runs) AND the
 # pre-publish gate: `workflow_call` makes it reusable, and publish.yml calls it
 # as the `legal-gate` job that `build` and `merge` both `needs`. That wiring is
 # the point. When this only ran as a SEPARATE workflow it raced publish.yml:
@@ -12,10 +12,9 @@
 # See docs/legal/RELEASE-SAFEGUARDS.md for what each job proves and why, and
 # docs/legal/FINDINGS.md for the open items that need a human, not an agent.
 name: legal
+run-name: Legal — ${{ github.event.pull_request.title || github.ref_name }}
 
 on:
-  push:
-    branches: ["main"]
   pull_request:
   workflow_call: {}
   workflow_dispatch: {}

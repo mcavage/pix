@@ -1,5 +1,5 @@
-# Always-on checks for PRs and main. Feature-branch pushes are covered by the
-# pull_request event, so they do not launch an identical second workflow.
+# Checks run standalone for PRs and inside publish for main. No standalone
+# push trigger: publish already requires this workflow before releasing.
 #
 # TWO JOBS, TWO DIFFERENT DEALS — the split is explicit on purpose:
 #
@@ -42,10 +42,9 @@
 # finding. If CI is red on `race`, something is actually broken. If CI is red
 # on `macos`, the host build/test broke on the one platform launchd targets.
 name: test
+run-name: Test — ${{ github.event.pull_request.title || github.ref_name }}
 
 on:
-  push:
-    branches: ["main"]
   pull_request:
   # Reusable, so publish.yml can call this as a job IN ITS OWN GRAPH rather
   # than hoping GitHub orders two independent workflows. Same one-definition,

@@ -89,7 +89,7 @@ test("legal.yml is callable as a reusable workflow AND still runs on PRs", () =>
 	const on = legalWorkflow.slice(legalWorkflow.indexOf("\non:"), legalWorkflow.indexOf("\njobs:"));
 	assert.match(on, /workflow_call:/);
 	assert.match(on, /pull_request:/);
-	assert.match(on, /push:/);
+	assert.doesNotMatch(on, /^  push:/m, "main pushes run legal only through publish");
 });
 
 test("publish.yml calls legal.yml as an in-graph job (not a workflow racing it)", () => {
@@ -136,6 +136,7 @@ test("the legal gate itself waits on nothing in publish (it cannot be gated by t
 // dropping one `needs:` entry would otherwise restore the exact 0.1.27 shape
 // with nothing complaining.
 test("test.yml is callable as a reusable workflow AND still runs on PRs", () => {
+	assert.doesNotMatch(testWorkflow, /^  push:/m, "main pushes run tests only through publish");
 	assert.match(testWorkflow, /^\s*workflow_call:/m, "test.yml must declare `on: workflow_call` or publish.yml cannot call it in-graph");
 	assert.match(testWorkflow, /^\s*pull_request:/m, "test.yml must still run on PRs in its own right");
 });

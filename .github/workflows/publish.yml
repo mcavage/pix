@@ -1,4 +1,5 @@
 name: publish
+run-name: Publish — ${{ github.event.pull_request.title || github.ref_name }}
 
 # Every push to main auto-publishes a NEW immutable version. CI starts with the
 # version committed in package.json (0.1.0 for the first Pix release), then
