@@ -12,6 +12,16 @@ Pix v2 is a breaking cutover to native Docker Sandbox environments. Existing
 v1 configuration and removed commands are not translated automatically. See
 [getting started](docs/getting-started.md) for the current setup flow.
 
+### Credential isolation and release recovery
+
+- Google setup and each Gateway integration resolve only their declared keys.
+  An invalid personal model reference cannot block an unrelated account connection.
+- Setup names the environment and identifies models supplied by its AI gateway.
+  A failed keyring lookup gives a targeted reference check instead of assuming
+  1Password is locked.
+- The memory-image release job authenticates before probing Docker Hub tags and
+  before pulling its DHI bases.
+
 ### Environments and onboarding
 
 - One host command, `pix`, launches the pinned agent image through native sbx

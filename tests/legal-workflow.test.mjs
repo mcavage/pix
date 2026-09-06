@@ -188,3 +188,24 @@ test("legal.yml's jobs are defined once, in legal.yml (publish reuses, never dup
 		assert.ok(!publishJobs.has(name), `${name} unexpectedly redefined in publish.yml`);
 	}
 });
+
+// Registry probes must use the same identity as publication. Anonymous Hub
+// requests can report insufficient_scope even when the authenticated job can
+// prove a version is unused. Every job has a separate Docker credential store.
+test("release jobs authenticate before probing or publishing registry images", () => {
+	for (const [id, job] of publishJobs) {
+		const steps = job.body.split(/^ {6}- /m).slice(1);
+		const hubLogin = steps.findIndex(s => /uses: docker\/login-action@/.test(s) && !/registry:/.test(s));
+		for (const [i, step] of steps.entries()) {
+			if (/tag-availability\.sh|uses: docker\/build-push-action@/.test(step)) {
+				assert.ok(hubLogin >= 0 && hubLogin < i, `${id} must log into Hub before ${step.split("\n")[0]}`);
+			}
+		}
+	}
+	for (const id of ["build", "build-memory"]) {
+		const steps = publishJobs.get(id).body.split(/^ {6}- /m).slice(1);
+		const dhiLogin = steps.findIndex(s => /uses: docker\/login-action@/.test(s) && /registry: dhi\.io/.test(s));
+		const build = steps.findIndex(s => /uses: docker\/build-push-action@/.test(s));
+		assert.ok(dhiLogin >= 0 && dhiLogin < build, `${id} must authenticate to pull its DHI bases`);
+	}
+});

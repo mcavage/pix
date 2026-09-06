@@ -12,8 +12,8 @@ export default [
 			{
 				file: "services/host/mcp/mcp.go",
 				kind: "contains",
-				region: { start: "func OpRunWrap(opPath, opRefs string, argv []string) []string {", end: "\n// outputContainsCanonicalEndpoint" },
-				values: ['return append([]string{opPath, "run", "--no-masking", "--env-file=" + opRefs, "--"}, argv...)'],
+				region: { start: "func OpRunWrap(opPath, opRefs string, keys, argv []string) []string {", end: "\n// outputContainsCanonicalEndpoint" },
+				values: ['return append([]string{"/bin/bash", "-c", scopedOpRun, "pix-mcp", opPath, opRefs, strings.Join(keys, ",")}, argv...)'],
 			},
 		],
 	},
