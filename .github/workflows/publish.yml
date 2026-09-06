@@ -574,6 +574,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Queued runs retain their triggering SHA even after the preceding
+          # publish commits its version bump. Stamp current main so that old
+          # version-only diff cannot conflict with the previous release.
+          ref: main
+          fetch-depth: 0
       - name: Bump version files and commit back
         run: |
           V="${{ needs.version.outputs.version }}"
