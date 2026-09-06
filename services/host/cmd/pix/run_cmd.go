@@ -51,7 +51,7 @@ Pix reuses a matching sandbox and removes it after the final session exits.
 Use --keep to retain it. Changes that require recreation include a suggested
 command; ordinary Pix upgrades recreate an idle, disposable sandbox automatically.
 
-Use --dev from a Pix checkout to use its locally loaded image and live skills.
+Use --dev to allow host commands. In a Pix checkout it also uses the local image and live skills.
 Use --verbose for launch diagnostics.`
 
 func (c *runCmd) Help() string { return runDescription }
@@ -61,7 +61,7 @@ type runCmd struct {
 	Dir string `arg:"" optional:"" default:"." help:"Workspace to launch in (default: the current directory)."`
 
 	Verbose bool   `help:"Show technical details and diagnostic output."`
-	Dev     bool   `help:"Use the local Pix checkout and live skills."`
+	Dev     bool   `help:"Allow host commands; use local image and live skills when in a Pix checkout."`
 	Name    string `help:"Sandbox name." placeholder:"N"`
 	Env     string `help:"Use this environment for this run." placeholder:"NAME"`
 	Model   string `help:"Active pi model (passed through to pi)." placeholder:"M"`
@@ -460,7 +460,7 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 
 		// Released launchers pin kit + image to their stamped version; only
 		// --kit-ref and version_pin move that pin.
-		if !o.Dev && !kitOverride {
+		if !kitOverride {
 			ref, src := launch.ResolveKitRef(version, o.KitRef, cfg.VersionPin)
 			o.KitRef = ref
 			if msg := launch.KitRefNotice(version, ref, src); msg != "" {
@@ -469,14 +469,13 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		}
 
 		if o.Dev {
-			// --dev needs a resolvable repo checkout; fail loud otherwise.
+			// --dev grants host tools even with an installed launcher.
 			root, rerr := launch.ResolveRepoRoot()
-			if rerr != nil {
-				return runFail(d, 1, "--dev: %v", rerr)
+			if rerr == nil {
+				o.DevRoot = root
+				o.LocalKit = filepath.Join(root, "pi-kit")
+				o.LocalImageTag = launch.ReadLocalImageTag(root)
 			}
-			o.DevRoot = root
-			o.LocalKit = filepath.Join(root, "pi-kit")
-			o.LocalImageTag = launch.ReadLocalImageTag(root)
 		} else if !released && !kitOverride {
 			if root, rerr := launch.ResolveRepoRoot(); rerr == nil {
 				o.LocalKit = filepath.Join(root, "pi-kit")
@@ -565,6 +564,9 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 	// and re-validated under the lifecycle lock by launch.RunSession, which is
 	// also where a fingerprint divergence refuses.
 	sessionKey := sessionKeyFor(o)
+	if o.Dev {
+		fmt.Fprintln(d.Err, "Development mode: this session can execute commands on your host with your user permissions.")
+	}
 	fp := launch.SessionFingerprint(cfg, o)
 	attachExec := false
 	// root is this launch's interactive-root reference (session.go/session_root.go,

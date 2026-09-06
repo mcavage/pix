@@ -30,20 +30,20 @@
       "_gog_symlink_fix_note": "env_cmd.go's renderTrustBill now renders each MCP server command's RESOLVED symlink target and content sha256 alongside the authored command (mirroring the existing kit/host-service rows) \u2014 the fix for an ordinary Homebrew-style symlinked MCP command (e.g. `gog`) that ResolveSymlinkedReference (workflow/env) now resolves instead of blindly refusing. A real capability addition (new render lines a human approving trust actually needs to see), not accumulation. Rebaselined to the exact current values.",
       "_env_keys_trust_screen_note": "validateDeclaredEnvironmentValues (env_keys/plain_keys pre-flight) and the concise setup-hook trust screen landed in a prior commit without a budget rebaseline; this rebaseline also folds in the current change (env trust default output collapsed to summary counts plus named risk categories, full per-item detail moved to --verbose; the memory-container replace prompt says only that the service changed and /data is preserved, image refs/fingerprints moved to --verbose), doc-comment and gating changes rather than new accumulation. Rebaselined to the exact current values.",
       "_env_setup_no_personal_interview_note": "`pix setup --env NAME` now returns from setupCredentials right after the refs file is established, so a work environment with its own authenticated backends is never asked for a public-vendor 1Password key and is never told it has \"no model provider key configured\" \u2014 a correctness fix to what setup asks a human, with the reasoning kept next to the guard. Rebaselined to the exact current values (prod_loc +8).",
-      "prod_loc": 5989,
+      "prod_loc": 6133,
       "_setup_download_progress_note": "Restore optional provider/Parallel reference onboarding, retain environment-owned auth, expose the full shipped model picker, and announce image pulls. Real setup caller tests cover skips, reruns, credential handling and progress. Exact measured production LOC; no slack.",
-      "test_loc": 10047,
+      "test_loc": 10538,
       "exports": 5,
       "exports_used_externally": 0,
       "exits": 1,
-      "streams": 3,
+      "streams": 6,
       "globals": 21,
       "init": 1,
-      "edges": 26,
+      "edges": 27,
       "parser_families": {
         "cmd": 8,
-        "core": 14,
-        "test": 63
+        "core": 16,
+        "test": 65
       },
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
       "_model_picker_note": "Explicit Inference Setup item 5: setup_model.go's new setupModelSelection is the TTY-only, default-No current-model picker that writes a fully-qualified [models].main into ONLY a same-run scaffolded default pix.toml (writeScaffoldedModelMain); an already-existing default environment gets a display-only fallback line instead, and the write refuses outright if [models].main is already declared. Real capability, not accumulation. Rebaselined to the exact current values (+1 core parser family for the new file).",
@@ -57,7 +57,8 @@
       "_trust_receipt_note": "Trust receipts and the change diff: an acceptance now records the ITEMIZED bill of materials it approved (workflow/env's receipt.go: Receipt/DiffReceipts/UnchangedCount over the same canonicalDoc value Fingerprint hashes), and the next review of an already-accepted environment renders what CHANGED (cmd/pix's renderTrustReview) instead of a second full audit dump. cmd/pix also collapsed both acceptance write sites onto one writeTrustRecord and both review sites onto one renderTrustReview. A real capability addition -- a re-gate is now reviewable, which is the trust-fatigue failure this closes -- not accumulation. The new workflow/env exports are ReceiptEntry/ChangeKind/ChangeAdded/ChangeRemoved/ChangeChanged/ReceiptChange/Receipt/DiffReceipts/UnchangedCount; the three new globals are that ChangeKind enum. Rebaselined by hand to the EXACT current values.",
       "_host_values_note": "Explicit environment value metadata: pix.toml gains an optional [host.values.<NAME>] table (envinfo.HostValueMeta: label/help/example/required) describing an already-declared env_keys/plain_keys name, so `pix setup --env NAME`'s one-screen requirements prompt can ask \"Google Workspace account email\" instead of a bare env-var name. workflow/env's BillOfMaterials grows a parallel Values/HostValueFact plus ValueMeta, deliberately excluded from canonicalDoc/Fingerprint (rewording a prompt is not host execution, a credential handoff, or a mount expansion). setup_cmd.go's validateDeclaredEnvironmentValues now splits missing names by their own declared Required bit (default true) so an author-marked-optional value never refuses setup. A real capability addition, not accumulation. Rebaselined to the exact current values.",
       "_mcp_integration_status_note": "`pix env show` now prints an `integrations:` section (and JSON `integrations` key) with the declared/registered/reachable tri-state for every MCP server the environment declares, via the new computeIntegrationStatuses/renderIntegrationStatuses/integrationStatusesJSON helpers. A real capability addition (the first real caller of the long-dormant pix.toml `probe_args` field), not accumulation. Rebaselined to the exact current values.",
-      "_credential_isolation_note": "Exact measured growth for per-integration reference filtering at Gateway process start and the environment gateway label during setup. Tests execute the compiled Gateway argv with a broken unrelated provider reference, exercise reference rotation and stdin, and verify keyless model setup. No additional registry, daemon, credential store, or budget slack."
+      "_credential_isolation_note": "Exact measured growth for per-integration reference filtering at Gateway process start and the environment gateway label during setup. Tests execute the compiled Gateway argv with a broken unrelated provider reference, exercise reference rotation and stdin, and verify keyless model setup. No additional registry, daemon, credential store, or budget slack.",
+      "_host_tools_note": "Exact measured capability growth: Gateway-owned Pix environment tools and explicit --dev host jobs, with fixed launch authority, live instance/holder checks, bounded execution and output, cancellation, and scoped reset. Tests drive the compiled CLI through MCP and reject privilege escalation and stale instances. No second registry or resident supervisor."
     },
     "pix/host/config": {
       "_prod_loc_note": "Sparse PIX_HOME config serialization adds an explicit disk shape so applied defaults and inert empty tables never appear as authored choices; the memory port moved to .state/memory/port. QA F5: config.Path/StateDir/DataDir/configDir now delegate to pixhome.Dir() (PIX_HOME) instead of re-deriving PIX_CONFIG/XDG_*/~/.config fallbacks inline \u2014 net prod_loc SHRANK (fewer resolution branches) but config now imports pixhome (edges 0 -> 1), closing the last executable-state escape. Coexistence docs sync: OpRefsMentalModel/OpRefsTemplate reworded to drop stale pack/host-global-gateway prose and explain the ref feeds a per-sandbox scoped credential OR a declared MCP server's own host command, +3 prod_loc, no behavior change.",
@@ -97,23 +98,24 @@
     },
     "pix/host/envinfo": {
       "_plain_keys_note": "[host.mcp.<name>] gained plain_keys (a declared non-secret name list distinct from env_keys's secrets) in a prior commit without a budget rebaseline; real capability, not accumulation. Rebaselined to the exact current values.",
-      "prod_loc": 3845,
-      "test_loc": 4222,
-      "exports": 104,
-      "exports_used_externally": 19,
+      "prod_loc": 3883,
+      "test_loc": 4247,
+      "exports": 107,
+      "exports_used_externally": 22,
       "exits": 0,
       "streams": 0,
-      "globals": 33,
+      "globals": 34,
       "init": 0,
       "edges": 1,
       "parser_families": {
-        "core": 12,
-        "test": 12
+        "core": 13,
+        "test": 13
       },
       "_prod_loc_note": "Environment [[setup]] hooks (the v2 replacement for pack-authored install/auth hooks): a real capability addition, not accumulation. sidecar.go adds the strict [[setup]] grammar: SetupHook + kind constants + EffectiveKind + validateSetupHooks/hasControlChars/hasDotDotSegment. Every field is refused at the exact file and line rather than defaulted, which is what the extra lines buy. Strict optional `inputs = [...]` (companion scripts/data a hook declares): relative, clean, `..`-free, unique-per-hook validation in validateSetupHooks, no new exported surface.",
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
       "_explicit_inference_setup_note": "Explicit Inference Setup, environment-contract unit: pix.toml [inference.backends.*] now carries the three sbx-session credential_* fields (envinfo), passes them through the per-run merge and makes [models].exclusive narrow the callable set (workflow/launch), fingerprints and renders them as review facts (workflow/env, cmd/pix), and [pi].skills finally reaches pi --skill (cmd/pix). Rebaselined by hand to the EXACT grown metrics, no slack.",
-      "_host_values_note": "Explicit environment value metadata: pix.toml gains an optional [host.values.<NAME>] table (envinfo.HostValueMeta: label/help/example/required) describing an already-declared env_keys/plain_keys name, so `pix setup --env NAME`'s one-screen requirements prompt can ask \"Google Workspace account email\" instead of a bare env-var name. workflow/env's BillOfMaterials grows a parallel Values/HostValueFact plus ValueMeta, deliberately excluded from canonicalDoc/Fingerprint (rewording a prompt is not host execution, a credential handoff, or a mount expansion). setup_cmd.go's validateDeclaredEnvironmentValues now splits missing names by their own declared Required bit (default true) so an author-marked-optional value never refuses setup. A real capability addition, not accumulation. Rebaselined to the exact current values."
+      "_host_values_note": "Explicit environment value metadata: pix.toml gains an optional [host.values.<NAME>] table (envinfo.HostValueMeta: label/help/example/required) describing an already-declared env_keys/plain_keys name, so `pix setup --env NAME`'s one-screen requirements prompt can ask \"Google Workspace account email\" instead of a bare env-var name. workflow/env's BillOfMaterials grows a parallel Values/HostValueFact plus ValueMeta, deliberately excluded from canonicalDoc/Fingerprint (rewording a prompt is not host execution, a credential handoff, or a mount expansion). setup_cmd.go's validateDeclaredEnvironmentValues now splits missing names by their own declared Required bit (default true) so an author-marked-optional value never refuses setup. A real capability addition, not accumulation. Rebaselined to the exact current values.",
+      "_host_tools_note": "Exact measured capability growth: Gateway-owned Pix environment tools and explicit --dev host jobs, with fixed launch authority, live instance/holder checks, bounded execution and output, cancellation, and scoped reset. Tests drive the compiled CLI through MCP and reject privilege escalation and stale instances. No second registry or resident supervisor."
     },
     "pix/host/envsetup": {
       "prod_loc": 594,
@@ -336,10 +338,10 @@
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port."
     },
     "pix/host/session": {
-      "prod_loc": 1284,
+      "prod_loc": 1296,
       "test_loc": 1113,
-      "exports": 44,
-      "exports_used_externally": 5,
+      "exports": 45,
+      "exports_used_externally": 6,
       "exits": 0,
       "streams": 1,
       "globals": 16,
@@ -349,7 +351,8 @@
         "core": 7,
         "test": 8
       },
-      "_prod_loc_note": "L2 (security re-review): limits.go adds pix_session_delegate's live-children-per-tree and max-depth caps (Limits/DefaultLimits/Store.CheckDelegateCaps/Store.Depth/Store.LiveNodeCount/Store.WithTreeLock), enforced atomically under one per-tree flock so concurrent delegate calls cannot race past the same cap (+1 edge: this package now imports pix/host/sys for the lock). mcp.go's Delegate wires the check-then-reserve section under that lock, refusing excess before anything is spawned or held. Real new capability with concurrent/depth/release test coverage, not accumulation."
+      "_prod_loc_note": "L2 (security re-review): limits.go adds pix_session_delegate's live-children-per-tree and max-depth caps (Limits/DefaultLimits/Store.CheckDelegateCaps/Store.Depth/Store.LiveNodeCount/Store.WithTreeLock), enforced atomically under one per-tree flock so concurrent delegate calls cannot race past the same cap (+1 edge: this package now imports pix/host/sys for the lock). mcp.go's Delegate wires the check-then-reserve section under that lock, refusing excess before anything is spawned or held. Real new capability with concurrent/depth/release test coverage, not accumulation.",
+      "_host_tools_note": "Exact measured capability growth: Gateway-owned Pix environment tools and explicit --dev host jobs, with fixed launch authority, live instance/holder checks, bounded execution and output, cancellation, and scoped reset. Tests drive the compiled CLI through MCP and reject privilege escalation and stale instances. No second registry or resident supervisor."
     },
     "pix/host/sys": {
       "_prod_loc_note": "Coexistence review fix (MEDIUM): sys.Exec gains RunInput, the seam that writes a value to a child's stdin so a resolved credential never enters an argv. Real.RunInput is five lines; the rest is the interface method's contract.",
@@ -430,10 +433,10 @@
     },
     "pix/host/workflow/launch": {
       "_prod_loc_note": "Review round 1 blocker #2 fix: FindPositivelyIdentified (the running-or-stopped identity check DecideEnvAttach's reattach gate now uses) and DecideEnvAttach's relaxed running-or-stopped gate. Real new logic (a stopped sandbox used to be refused outright by this gate), not accumulation. Round-7 adds EffectiveInferenceConfig: the production merge of a selected environment's pix.toml [inference.*] over machine config into an ephemeral, never-persisted snapshot for SynthesizeInferenceKit/CallableRuntimeModels/roster validation. Coexistence review fix (INFO): RemoveScopedPixSandbox, now the ONLY exported forced-removal seam, validates a RECORDED sandbox name against this stack's id before any argv is composed; the unscoped form is unexported, so no package outside launch can reach it.",
-      "prod_loc": 4949,
-      "test_loc": 7318,
-      "exports": 185,
-      "exports_used_externally": 61,
+      "prod_loc": 4989,
+      "test_loc": 7352,
+      "exports": 186,
+      "exports_used_externally": 62,
       "exits": 0,
       "streams": 3,
       "globals": 62,
@@ -446,7 +449,8 @@
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
       "_launch_ux_note": "Launch UX wave: SessionDeps.SpawnCreate, the dedicated create-child seam (and spawnCreate's fallback to Spawn). The create is the ONE non-interactive child of a launch and needs the opposite stdio from a session; telling the two apart by seam rather than by sniffing argv is what keeps a future create-argv change from silently re-routing the user's terminal. PIX_HOME cleanup reads the memory port from .state through pixhome instead of config.toml (+1 edge). sbx 0.41 follow-up: EnvCreateArgs now carries --auto-approve because captured stdin is non-TTY and sbx refuses the already trust-gated plan without the explicit flag. Recreate-output follow-up: a failed sbx removal's first output line passes through sys.TerminalSafe before it reaches the user's terminal. Rebaselined ONCE to the EXACT current value, no slack.",
       "_explicit_inference_setup_note": "Explicit Inference Setup, environment-contract unit: pix.toml [inference.backends.*] now carries the three sbx-session credential_* fields (envinfo), passes them through the per-run merge and makes [models].exclusive narrow the callable set (workflow/launch), fingerprints and renders them as review facts (workflow/env, cmd/pix), and [pi].skills finally reaches pi --skill (cmd/pix). Rebaselined by hand to the EXACT grown metrics, no slack.",
-      "_uat_note": "The selected Ollama model is written to the existing bridge hint, fixing the UAT-observed false unknown-model warning. No additional state or process is introduced."
+      "_uat_note": "The selected Ollama model is written to the existing bridge hint, fixing the UAT-observed false unknown-model warning. No additional state or process is introduced.",
+      "_host_tools_note": "Exact measured capability growth: Gateway-owned Pix environment tools and explicit --dev host jobs, with fixed launch authority, live instance/holder checks, bounded execution and output, cancellation, and scoped reset. Tests drive the compiled CLI through MCP and reject privilege escalation and stale instances. No second registry or resident supervisor."
     },
     "pix/host/workflow/models": {
       "prod_loc": 862,
@@ -482,7 +486,7 @@
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port."
     },
     "pix/host/workflow/reset": {
-      "prod_loc": 210,
+      "prod_loc": 215,
       "test_loc": 299,
       "exports": 10,
       "exports_used_externally": 1,
@@ -495,7 +499,8 @@
         "core": 1,
         "test": 1
       },
-      "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port."
+      "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
+      "_host_tools_note": "Exact measured capability growth: Gateway-owned Pix environment tools and explicit --dev host jobs, with fixed launch authority, live instance/holder checks, bounded execution and output, cancellation, and scoped reset. Tests drive the compiled CLI through MCP and reject privilege escalation and stale instances. No second registry or resident supervisor."
     },
     "pix/host/workflow/task": {
       "prod_loc": 833,
@@ -545,6 +550,22 @@
       },
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port.",
       "_uat_note": "Two-home Gateway UAT requires local MCP registrations to carry the existing stack ID. One validated naming helper owns the spelling."
+    },
+    "pix/host/hosttools": {
+      "prod_loc": 400,
+      "test_loc": 154,
+      "exports": 2,
+      "exports_used_externally": 0,
+      "exits": 0,
+      "streams": 4,
+      "globals": 2,
+      "init": 0,
+      "edges": 1,
+      "parser_families": {
+        "core": 2,
+        "test": 1
+      },
+      "_host_tools_note": "Exact measured capability growth: Gateway-owned Pix environment tools and explicit --dev host jobs, with fixed launch authority, live instance/holder checks, bounded execution and output, cancellation, and scoped reset. Tests drive the compiled CLI through MCP and reject privilege escalation and stale instances. No second registry or resident supervisor."
     }
   }
 }

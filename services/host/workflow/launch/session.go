@@ -44,9 +44,11 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/envinfo"
 	"pix/host/hostenv"
 	"pix/host/lease"
 	"pix/host/mcp"
+	"pix/host/pixhome"
 	"pix/host/sandbox"
 )
 
@@ -125,6 +127,9 @@ func SessionFingerprint(cfg *config.Config, o RunOpts) sandbox.Fingerprint {
 	sorted := append([]string(nil), mcpSet...)
 	sort.Strings(sorted)
 	fp := sandbox.Fingerprint{"static_mcp": strings.Join(sorted, ",")}
+	if home, err := pixhome.Resolve(); err == nil && os.Getenv("PIX_HOST_TOOLS_DISABLED") != "1" {
+		fp["host_tools"] = envinfo.HostToolsID(home.Home, o.Workspace, o.Name, o.Dev)
+	}
 	// The stamped launcher build is part of a sandbox's creation identity: a
 	// sandbox built by 0.1.71 and one built by 0.1.72-beta.gabc1234 are
 	// different constructions even when every other pin matches, because the
@@ -751,4 +756,10 @@ func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, 
 		}
 	}
 	return child, nil
+}
+
+// SessionHostToolsMatch refuses stale Gateway registrations after recreation.
+func SessionHostToolsMatch(name, id string) bool {
+	fp, ok := readSessionFingerprint(name)
+	return ok && fp["host_tools"] == id
 }

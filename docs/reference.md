@@ -65,8 +65,17 @@ after an explicit but invalid `--env`. Pix never auto-selects a
 credentials and host execution, so selection is always explicit or the
 machine default. `--model` overrides the environment's main model for this
 session; pix does not score or choose one for you. `--resume SESSION` is an
-option on `run`, not a separate top-level verb. `--dev` mounts the current pix
-source for live development; it is not a second production launch path.
+option on `run`, not a separate top-level verb. `--dev` grants the session host command execution with your user permissions.
+In a Pix checkout it also uses the locally loaded image and live skills.
+An installed launcher can use `--dev` without a checkout.
+
+The shipped `environments` skill authors environment directories in your mounted
+workspace, adopts them through Pix MCP tools, and tests them in a separate host
+workspace. This works in ordinary sessions. The `pix-dev` skill uses the additional
+`pix_host_exec` tool for Pix and sbx development. Host commands return jobs with
+bounded output, polling, cancellation, and a timeout; they end with the session.
+Normal environment tools never grant trust or accept arbitrary host commands.
+See [host tools](design/host-tools.md) for their scope and lifetime.
 
 Every launch carries this `PIX_HOME`'s own stack id (a 16-hex id derived
 from its canonical path) and the stamped launcher version as two composed

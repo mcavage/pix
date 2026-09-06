@@ -141,7 +141,7 @@ func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
 	// mount: it is inside it.
 	liveSkills := LiveSkillDirs(cfg, o)
 	args = append(args, MountDirs(cfg, o)...)
-	if o.Dev {
+	if o.Dev && o.DevRoot != "" {
 		args = append(args, filepath.Join(o.DevRoot, "skills"))
 	}
 
@@ -190,7 +190,7 @@ func MountDirs(cfg *config.Config, o RunOpts) []string {
 
 func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
 	piArgs := []string{"--session-dir", ".pi-sessions"}
-	if o.Dev {
+	if o.Dev && o.DevRoot != "" {
 		// Mode B: turn off baked skills and load the repo tree live.
 		piArgs = append(piArgs, "--no-skills", "--skill", filepath.Join(o.DevRoot, "skills"))
 	}

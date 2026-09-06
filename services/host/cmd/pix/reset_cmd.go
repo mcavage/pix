@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"pix/host/cli"
+	"pix/host/envinfo"
+	"pix/host/mcp"
 	"pix/host/pixhome"
 	"pix/host/stack"
 	"pix/host/workflow/launch"
@@ -94,16 +96,21 @@ func (c *resetCmd) Run(d *cli.Deps) error {
 			return cli.SilentError{Code: 1}
 		}
 	}
+	var sessionNames []string
+	if listing, _, err := runSbxCapturedOut("mcp", "ls"); err == nil {
+		sessionNames = scopedHostToolRegistrations(sessionMCPName, mcp.RegisteredNamesFrom(listing))
+	}
 	res, err := reset.ResetHome(reset.HomeDeps{
-		Home:           home.Home,
-		ContainerName:  containerName,
-		MCP:            sbxMemoryDeregistrar{},
-		MemoryMCPName:  memoryMCPName,
-		SessionMCPName: sessionMCPName,
-		Sweep:          rmAllSandboxes(d),
-		Out:            d.Out,
-		ErrOut:         d.Err,
-		Now:            time.Now,
+		Home:            home.Home,
+		ContainerName:   containerName,
+		MCP:             sbxMemoryDeregistrar{},
+		MemoryMCPName:   memoryMCPName,
+		SessionMCPName:  sessionMCPName,
+		SessionMCPNames: sessionNames,
+		Sweep:           rmAllSandboxes(d),
+		Out:             d.Out,
+		ErrOut:          d.Err,
+		Now:             time.Now,
 	})
 	if err != nil {
 		return err
@@ -137,4 +144,14 @@ func rmAllSandboxes(d *cli.Deps) reset.Sweep {
 			All: true, Interactive: d.Interactive,
 		}))
 	}
+}
+
+func scopedHostToolRegistrations(base string, names []string) []string {
+	var out []string
+	for _, name := range names {
+		if strings.HasPrefix(name, base+"-") && envinfo.IsSessionMCPName(name) {
+			out = append(out, name)
+		}
+	}
+	return out
 }

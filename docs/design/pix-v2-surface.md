@@ -131,8 +131,11 @@ does not score or choose a model.
 
 `--resume SESSION` is an option on `run`, not a separate top-level verb.
 
-`--dev` mounts the current Pix source needed for live development. It is not a
-second production launch path.
+`--dev` explicitly grants host command execution through Pix MCP tools. The
+agent still runs inside sbx. In a Pix checkout it also uses the local image and
+live skills; an installed launcher can grant host tools without a checkout.
+Ordinary sessions can author, adopt, inspect, and trial environments through
+narrow Pix MCP tools. See [host tools](host-tools.md).
 
 The transport used to pass model and resume arguments to the custom Pix agent is
 an architecture decision. The surface guarantee is that both options apply to

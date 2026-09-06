@@ -512,11 +512,17 @@ service.
 
 Authored `.sbxenv.yaml` declares environment MCP servers using native sbx
 grammar. The effective compiler adds only Pix's two built-ins: the local memory
-endpoint (`pix-memory-<stack-id>`) and the narrow session-control command
-(`pix-session-<stack-id>`), both named for THIS `PIX_HOME`'s own stack id
+endpoint (`pix-memory-<stack-id>`) and the compiled-in Pix host tools
+(`pix-session-<stack-id>-<context-id>`), both named for THIS `PIX_HOME`'s own stack id
 (`stack.MCPMemoryName`/`stack.MCPSessionName`, §4), never the bare legacy
 name. They are emitted as native sbx MCP declarations, not attached through a
 second client or registry.
+
+The context id binds the workspace, sandbox name, and explicit `--dev` authority.
+Ordinary tools adopt, inspect, and trial environments; `--dev` additionally grants
+bounded host command jobs. The Gateway owns the stdio process, and commands
+require a matching creation record and live instance-bound holder. See
+[host tools](host-tools.md).
 
 Pix does not provide `mcp add`, `mcp auth`, a catalog, or a registration
 database. Setup may invoke the exact native `sbx mcp` command required by a

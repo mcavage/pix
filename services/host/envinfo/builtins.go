@@ -34,7 +34,7 @@ const (
 // stack's pix-memory is exactly as reserved as this host's own.
 var (
 	scopedMemoryNameRe  = regexp.MustCompile(fmt.Sprintf(`^pix-memory-[0-9a-f]{%d}$`, stack.IDLen))
-	scopedSessionNameRe = regexp.MustCompile(fmt.Sprintf(`^pix-session-[0-9a-f]{%d}$`, stack.IDLen))
+	scopedSessionNameRe = regexp.MustCompile(fmt.Sprintf(`^pix-session-[0-9a-f]{%d}(?:-[0-9a-f]{16})?$`, stack.IDLen))
 )
 
 // IsMemoryMCPName reports whether name is Pix's reserved pix-memory

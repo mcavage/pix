@@ -155,7 +155,7 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 	}
 	in.MCPServers = envinfo.WithBuiltinMCPServers(
 		launch.ComposeMCPServerFacts(in.EnvMCPServers, o.StaticMCP),
-		builtinMCPFacts(),
+		envinfo.WithHostTools(builtinMCPFacts(), home, primary.Path, o.Name, o.Dev, os.Getenv("PIX_HOST_TOOLS_DISABLED") == "1"),
 	)
 	return in, nil
 }

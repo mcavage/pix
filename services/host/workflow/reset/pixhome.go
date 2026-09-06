@@ -105,6 +105,8 @@ type HomeDeps struct {
 	// the proof-gated resource reset must remove before it may rename
 	// PIX_HOME.
 	MemoryMCPName, SessionMCPName string
+	// SessionMCPNames are this stack's per-context host tool registrations.
+	SessionMCPNames []string
 	// Sweep is the SAME injected sandbox teardown Opts/Runtime already use
 	// (`pix rm --all` in the command layer's words) — proof-gated, never a
 	// second force-removal seam.
@@ -187,6 +189,9 @@ func ResetHome(d HomeDeps) (HomeResult, error) {
 	// rename below — only the CONTAINER proof gates that.
 	res.MemoryMCPState = removeMCPRegistrationOrRetained(d.MCP, d.MemoryMCPName)
 	res.SessionMCPState = removeMCPRegistrationOrRetained(d.MCP, d.SessionMCPName)
+	for _, name := range d.SessionMCPNames {
+		removeMCPRegistrationOrRetained(d.MCP, name)
+	}
 
 	fi, err := os.Lstat(d.Home)
 	if err != nil {

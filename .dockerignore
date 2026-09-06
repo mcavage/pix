@@ -46,6 +46,7 @@ skills/*
 !skills/docs-sync
 !skills/draft-email
 !skills/enrich
+!skills/environments
 !skills/git-conventions
 !skills/gtm-launch
 !skills/guard
@@ -62,6 +63,7 @@ skills/*
 !skills/ship
 !skills/slide-deck
 !skills/tdd
+!skills/pix-dev
 !skills/plan
 !skills/verify
 !skills/weekly-wrap

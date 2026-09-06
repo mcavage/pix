@@ -51,6 +51,8 @@ func runHiddenSessionVerb(argv []string, d *cliDeps) (code int, handled bool) {
 		return 0, false
 	}
 	switch argv[0] {
+	case "__pix-tools-mcp":
+		return runHostToolsMCP(argv[1:], d), true
 	case hiddenSessionMCPVerb:
 		return runSessionMCP(d), true
 	case hiddenSessionChildVerb:
