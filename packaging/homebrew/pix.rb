@@ -60,8 +60,8 @@ class Pix < Formula
 
         brew install docker/tap/sbx
 
-      Use that mainline cask, not docker/tap/sbx@nightly. The two conflict, so
-      having one means uninstalling it before the other will install.
+      Or install the nightly cask: brew install docker/tap/sbx@nightly
+      Stable and nightly conflict; uninstall one before switching to the other.
 
       Then run `pix setup` to finish onboarding.
 
