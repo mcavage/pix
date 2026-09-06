@@ -90,6 +90,7 @@ var pkgLayer = map[string]int{
 	// package that no longer exists on disk is a GHOST — see
 	// TestArchitecture_NoGhostPlacements below, which fails the day one lingers
 	// instead of relying on someone noticing.
+	"hosttools": layerCapability,
 	"inference": layerCapability,
 	"secret":    layerCapability,
 	"mcp":       layerCapability,

@@ -67,7 +67,7 @@ const (
 // mcpSessionSubcommand: pix-session's reserved argv[1]. Kept as a
 // duplicated literal for the same reason as effectiveMemoryHostPort —
 // cmd/pix cannot be imported from here.
-const effectiveSessionSubcommandArg = "mcp-session"
+const effectiveSessionSubcommandArg = envinfo.HostToolsSubcommand
 
 // resolveEffectiveName is ComputeEffective's/`env [NAME]`'s shared name
 // resolution: an explicit positional wins; otherwise the machine default
@@ -162,7 +162,7 @@ func ComputeEffective(home pixhome.Paths, explicit, launcherVersion string) (env
 		// producer, envinfo.PixManagedEnvVars, so `--effective` never shows an
 		// env block a real create would then silently add to.
 		PixEnvVars: envinfo.PixManagedEnvVars(launcherVersion, previewStackID(home)),
-		MCPServers: envinfo.WithBuiltinMCPServers(servers, builtinMCPFacts(home)),
+		MCPServers: envinfo.WithBuiltinMCPServers(servers, envinfo.WithHostTools(builtinMCPFacts(home), home.Home, cwd, sandboxName, false, os.Getenv("PIX_HOST_TOOLS_DISABLED") == "1")),
 	}
 	return facts, nil
 }

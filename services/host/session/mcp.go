@@ -1,11 +1,4 @@
-// mcp.go is the session-control MCP tool: a minimal stdio JSON-RPC server
-// (architecture §7.2's "narrowly scoped Gateway-launched MCP command
-// implemented by pix"), NOT a general MCP framework and not a shell. It
-// exposes exactly one tool, pix_session_delegate, whose input schema is
-// ChildRequest's four fields and nothing else, and whose only action is to
-// record a child node and spawn one bounded child-runner (Spawner). Anything
-// this tool cannot express — an arbitrary command, a plugin call, a second
-// tool — is out of scope on purpose.
+// Stdio MCP transport for compiled-in Pix tools.
 package session
 
 import (
@@ -46,7 +39,13 @@ type Spawner func(ctx ServerContext, treeID, nodeID string, req ChildRequest) er
 // (Store.WithTreeLock/CheckDelegateCaps) — NewServer sets it to
 // DefaultLimits so a caller that never touches this field still gets a
 // bounded server, never an accidentally-unbounded one.
+type ToolService interface {
+	Definitions() []any
+	Call(string, json.RawMessage) (string, error)
+}
+
 type Server struct {
+	Tools  ToolService
 	Ctx    ServerContext
 	Spawn  Spawner
 	NewID  func() (string, error)
@@ -136,7 +135,11 @@ func (s *Server) Serve() error {
 				"serverInfo":      map[string]interface{}{"name": "pix-session-control", "version": "1.0"},
 			})
 		case "tools/list":
-			s.sendResponse(req.ID, map[string]interface{}{"tools": []interface{}{sessionDelegateTool()}})
+			listed := []any{sessionDelegateTool()}
+			if s.Tools != nil {
+				listed = s.Tools.Definitions()
+			}
+			s.sendResponse(req.ID, map[string]interface{}{"tools": listed})
 		case "tools/call":
 			wg.Add(1)
 			go func(req mcpRequest) {
@@ -162,6 +165,15 @@ func (s *Server) handleToolCall(id interface{}, params json.RawMessage) {
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		s.sendError(id, -32602, "Invalid params")
+		return
+	}
+	if s.Tools != nil {
+		result, err := s.Tools.Call(p.Name, p.Arguments)
+		if err != nil {
+			s.sendToolError(id, err)
+		} else {
+			s.sendToolText(id, result)
+		}
 		return
 	}
 	if p.Name != toolName {

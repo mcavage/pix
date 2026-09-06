@@ -26,9 +26,11 @@ func TestEnvShow_DeclaredProbeActuallyRuns(t *testing.T) {
 	}
 
 	scriptDir := t.TempDir()
+	marker := filepath.Join(scriptDir, "probe-ran")
+	t.Setenv("PIX_PROBE_MARKER", marker)
 	okScript := filepath.Join(scriptDir, "warehouse-ok")
 	failScript := filepath.Join(scriptDir, "warehouse-fail")
-	if err := os.WriteFile(okScript, []byte("#!/bin/sh\necho authenticated\nexit 0\n"), 0o700); err != nil {
+	if err := os.WriteFile(okScript, []byte("#!/bin/sh\necho called > \"$PIX_PROBE_MARKER\"\necho authenticated\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(failScript, []byte("#!/bin/sh\necho not authenticated >&2\nexit 1\n"), 0o700); err != nil {
@@ -66,6 +68,23 @@ probe_args = [%q, "probe"]
 	d := &cli.Deps{Out: &out, Err: &errb}
 	if code := dispatch([]string{"env", "show", "work"}, d); code != 0 {
 		t.Fatalf("dispatch exit = %d, stderr=%s", code, errb.String())
+	}
+	if strings.Contains(out.String(), "reachable:ready") || strings.Contains(out.String(), "reachable:absent") {
+		t.Fatalf("untrusted inspection ran a probe: %s", out.String())
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("untrusted probe executed")
+	}
+	out.Reset()
+	if code := dispatch([]string{"env", "trust", "work", "--yes"}, d); code != 0 {
+		t.Fatalf("trust exit %d: %s", code, errb.String())
+	}
+	out.Reset()
+	if code := dispatch([]string{"env", "show", "work"}, d); code != 0 {
+		t.Fatalf("show exit %d: %s", code, errb.String())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("trusted probe did not execute", err)
 	}
 	got := out.String()
 

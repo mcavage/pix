@@ -72,6 +72,7 @@ skills/*
 !skills/docs-sync/
 !skills/draft-email/
 !skills/enrich/
+!skills/environments/
 !skills/git-conventions/
 !skills/gtm-launch/
 !skills/guard/
@@ -83,6 +84,7 @@ skills/*
 !skills/onboarding/
 !skills/one-pager/
 !skills/peer-review/
+!skills/pix-dev/
 !skills/plan/
 !skills/promote/
 !skills/qa/

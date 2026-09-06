@@ -1009,3 +1009,37 @@ func TestRm_AllOnlyRemovesCurrentStack(t *testing.T) {
 		t.Errorf("the foreign-stack box was removed by this stack's --all sweep")
 	}
 }
+
+func TestTeardownRemovesOnlyRecordedHostToolsAfterAbsence(t *testing.T) {
+	isolateState(t)
+	fixture := installFakeSbx(t, removableFixture)
+	key := "pix-demo"
+	seedRecordedSession(t, key, "inst-1")
+	contextID := "0123456789abcdef"
+	if err := writeSessionState(key, sessionFingerprintFileName, sandbox.Fingerprint{"host_tools": contextID}); err != nil {
+		t.Fatal(err)
+	}
+	result := TeardownSandbox(realEnv(), key, key, TriggerSession, fastTeardown(t))
+	if !result.Removed() {
+		t.Fatalf("%+v", result)
+	}
+	id, err := stack.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, _ := stack.MCPSessionName(id)
+	calls := sbxArgv(t, fixture)
+	want := "mcp rm " + base + "-" + contextID
+	found := false
+	for _, call := range calls {
+		if call == want {
+			found = true
+		}
+		if strings.HasPrefix(call, "mcp rm ") && call != want {
+			t.Fatalf("foreign cleanup: %s", call)
+		}
+	}
+	if !found {
+		t.Fatalf("no Gateway cleanup after teardown: %v", calls)
+	}
+}

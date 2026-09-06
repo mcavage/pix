@@ -311,7 +311,7 @@ func teardownUnderProof(env hostenv.Env, dir, key, name string, trigger Teardown
 		return kept(TeardownKeptUnknown, "could not trust `sbx ls --json` for %q; leaving it alone", name)
 	case entry == nil:
 		// Positively absent: nothing to remove, only stale state to clear.
-		return clearedResult(TeardownAlreadyAbsent, dir, name,
+		return clearedResult(env, budgetedTimeout(o.ProbeTimeout, o, deadline), TeardownAlreadyAbsent, dir, name,
 			"%q is already gone; cleared its stale lease state", name)
 	case !entry.IdentityVerified || entry.InstanceID == nil || *entry.InstanceID == "":
 		return kept(TeardownKeptUnknown, "%q is listed without a schema-verified instance id; leaving it alone", name)
@@ -355,7 +355,7 @@ func removeAndConfirm(env hostenv.Env, dir, name string, plan EnvRemovalPlan, o 
 			break
 		}
 		if probeStateWithin(env, name, within) == SbxAbsent {
-			return withPlanReport(clearedResult(TeardownRemoved, dir, name, "removed %q (pix's own zero-reference/explicit-intent gate, not sbx's -f) and confirmed it is gone", name), plan)
+			return withPlanReport(clearedResult(env, budgetedTimeout(o.ProbeTimeout, o, deadline), TeardownRemoved, dir, name, "removed %q (pix's own zero-reference/explicit-intent gate, not sbx's -f) and confirmed it is gone", name), plan)
 		}
 	}
 	return withPlanReport(TeardownResult{Verdict: TeardownFailed, Detail: fmt.Sprintf("`sbx %s` reported success but %q was never confirmed absent within %d probes; its state is retained", strings.Join(rmArgv, " "), name, o.ProbeRetries+1)}, plan)
@@ -375,10 +375,13 @@ func withPlanReport(res TeardownResult, plan EnvRemovalPlan) TeardownResult {
 
 // clearedResult clears the session's recorded state (launcher-owned files
 // first, then everything package lease owns, then the directory) and reports v.
-func clearedResult(v TeardownVerdict, dir, name, format string, a ...any) TeardownResult {
+func clearedResult(env hostenv.Env, within time.Duration, v TeardownVerdict, dir, name, format string, a ...any) TeardownResult {
 	res := TeardownResult{Verdict: v, Detail: fmt.Sprintf(format, a...)}
 	if dir == "" {
 		return res
+	}
+	if err := clearHostToolsRegistration(env, dir, within); err != nil {
+		res.Detail += "; " + err.Error()
 	}
 	if err := clearSessionState(dir); err != nil {
 		res.Detail += fmt.Sprintf("; some lease state for %q could not be cleared: %v", name, err)
@@ -665,4 +668,30 @@ func readJournalLines(path string) []string {
 		}
 	}
 	return out
+}
+
+// Called only under the teardown proof after positive absence, before its
+// fingerprint is removed. Recreating the same workspace must start a fresh
+// Gateway process, never reuse one bound to the previous instance.
+func clearHostToolsRegistration(env hostenv.Env, dir string, within time.Duration) error {
+	data, err := os.ReadFile(filepath.Join(dir, sessionFingerprintFileName))
+	if err != nil {
+		return nil
+	}
+	var fp sandbox.Fingerprint
+	if json.Unmarshal(data, &fp) != nil || stack.ValidID(fp["host_tools"]) != nil {
+		return nil
+	}
+	id, err := stack.Current()
+	if err != nil {
+		return err
+	}
+	base, _ := stack.MCPSessionName(id)
+	name := base + "-" + fp["host_tools"]
+	if within > 0 {
+		if _, timedOut, err := env.RunWithin(within, "sbx", "mcp", "rm", name); err == nil && !timedOut {
+			return nil
+		}
+	}
+	return fmt.Errorf("host tool registration retained; run sbx mcp rm %s before recreating this sandbox", name)
 }

@@ -38,6 +38,7 @@ environment repository, not this public repository.
 | `services/host/workflow/provision/`, `container/` | Runtime/image preparation and memory-container reconciliation |
 | `services/host/envinfo/`, `envsetup/`, `hosttrust/` | Environment sidecar, setup snapshots, and approval receipts |
 | `services/host/inference/`, `secret/` | Literal model choices, provider manifests, and credential references |
+| `services/host/hosttools/` | Compiled-in environment tools and bounded development host jobs |
 | `services/host/pixhome/`, `stack/`, `session/`, `sandbox/` | Storage paths, scoped identities, and lifetime records |
 | `services/memory/` | Independent Go MCP service, SQLite store, and Dockerfile |
 | `images/agent/Dockerfile`, `scripts/patches/` | Pinned Pi/toolchain image and reviewed upstream patches |
@@ -180,7 +181,9 @@ you touch the surface it names.
 10. **`pix-host`, packs, scored model routing, and the custom memory RPC are
     deleted, not merely hidden.** No code path reaches any of them; there is
     no `pack.toml`, no `routing.json`, no pix-owned top-level `memory` command,
-    and no unsandboxed host-agent mode. A model is chosen by name
+    and no unsandboxed host-agent mode. Explicit `--dev` grants host command tools through
+    the Gateway while the agent remains sandboxed; ordinary tools cannot promote
+    themselves or approve environment trust. A model is chosen by name
     (`--model`, then `[models].main`, then the shipped session preference
     OpenAI/Anthropic/Google among configured providers; no choice refuses rather than using Pi's stale default);
     nothing scores or auto-selects one.

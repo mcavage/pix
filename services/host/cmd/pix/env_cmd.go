@@ -259,8 +259,10 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 	// there is no environment to compute it from.
 	var integrations []nativeenv.IntegrationStatus
 	if loadErr == nil {
-		if bom, _, err := bomForLoaded(loaded); err == nil {
-			integrations = computeIntegrationStatuses(bom)
+		if bom, currentFP, err := bomForLoaded(loaded); err == nil {
+			trusted = trustSatisfied(home, sel, bom, currentFP)
+			fp = currentFP
+			integrations = computeIntegrationStatuses(bom, trusted)
 		}
 	}
 	if c.JSON {
@@ -387,14 +389,17 @@ func renderCatalogSource(info inference.CatalogSourceInfo) string {
 // extra. sbx absent or the listing failing degrades to StatusUnknown
 // registration for every server (mcp.McpRegEvidenceFrom's own fail-open
 // rule) rather than aborting `env show` itself.
-func computeIntegrationStatuses(bom nativeenv.BillOfMaterials) []nativeenv.IntegrationStatus {
+func computeIntegrationStatuses(bom nativeenv.BillOfMaterials, trusted bool) []nativeenv.IntegrationStatus {
 	if len(bom.MCPServers) == 0 && len(bom.HostServices) == 0 {
 		return nil
 	}
 	var statuses []nativeenv.IntegrationStatus
 	if len(bom.MCPServers) > 0 {
 		lsOut, _, lsErr := runSbxCapturedOut("mcp", "ls")
-		run := nativeenv.RunnerFromEnv(defaultShellEnv())
+		var run nativeenv.ProbeRunner
+		if trusted {
+			run = nativeenv.RunnerFromEnv(defaultShellEnv())
+		}
 		statuses = nativeenv.IntegrationStatuses(bom, lsOut, lsErr == nil, run)
 	}
 	// The resident [[host.services]] entries belong on the SAME surface: they
@@ -402,7 +407,11 @@ func computeIntegrationStatuses(bom nativeenv.BillOfMaterials) []nativeenv.Integ
 	// are the half carrying an explicit health endpoint. Omitting them made
 	// `pix env show` silent about a warehouse proxy that was not answering,
 	// which reads as "nothing to report".
-	return append(statuses, nativeenv.HostServiceStatuses(bom, nativeenv.LoopbackHTTPProbe)...)
+	var probe nativeenv.HTTPProbe
+	if trusted {
+		probe = nativeenv.LoopbackHTTPProbe
+	}
+	return append(statuses, nativeenv.HostServiceStatuses(bom, probe)...)
 }
 
 // renderIntegrationStatuses is `pix env show`'s plain-text integrations
