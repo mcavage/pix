@@ -94,12 +94,10 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 		return launch.EffectiveInput{}, err
 	}
 	template := o.Template
-	if template == "" {
-		if o.LocalImageTag != "" {
-			template = launch.DockerImageRepo + ":" + o.LocalImageTag
-		} else {
-			template = launch.DockerImageRepo
-		}
+	// Without an explicit/local override, the selected kit owns its image pin.
+	// An untagged repository here overrides that pin with cached :latest.
+	if template == "" && o.LocalImageTag != "" {
+		template = launch.DockerImageRepo + ":" + o.LocalImageTag
 	}
 	// The PRIMARY workspace is this run's own project directory — `pix run
 	// DIR`, else the current directory. The selected environment's SOURCE

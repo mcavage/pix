@@ -239,6 +239,7 @@ COPY --chown=agent:agent mcp.json          /home/agent/.pi/agent/mcp.json
 # providers (mcp server / cli / http / none). Swap it to retarget every data skill
 # at once. See the capability-routing skill.
 COPY --chown=agent:agent capabilities.json /home/agent/.pi/agent/capabilities.json
+COPY --chown=agent:agent services/host/inference/catalog/models.json /home/agent/.pi/agent/pix-models.json
 COPY --chown=agent:agent skills/       /home/agent/.pi/agent/skills/
 COPY --chown=agent:agent extensions/   /home/agent/.pi/agent/extensions/
 # lib/ holds code SHARED by extensions but deliberately not loadable as one (pi

@@ -272,6 +272,9 @@ func TestRunEffectiveHostToolRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if preview.Template != "" {
+		t.Fatalf("preview overrides the kit image: %q", preview.Template)
+	}
 	previewServer := find(preview.MCPServers)
 	if fmt.Sprint(previewServer) != fmt.Sprint(server) {
 		t.Fatalf("preview mismatch: %+v vs %+v", previewServer, server)

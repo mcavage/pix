@@ -27,15 +27,9 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { parseRoster, type Roster } from "../lib/inference-roster.ts";
 
-// The bridge model is configured on the HOST, in config.toml's
-// ollama_bridge_model key (there is no dedicated CLI verb for it in v2; it
-// is set by the in-sandbox onboarding proposal, or by hand-editing the
-// key); `pix run` writes the resolved value into
-// <workspace>/.pix/ollama-bridge.model, and pi runs with the workspace as
-// cwd, so we read it here — the same host-writes-file / VM-reads-file seam the
-// profile + knowledge-scope files use. This is why you do NOT hand-edit sandbox
-// env: change the host config and every `pix run` picks it up. A literal
-// OLLAMA_BRIDGE_MODEL env var still wins (power-user override).
+// Pix writes the explicitly selected model into this generated workspace marker.
+// Author a new environment's [models].main in pix.toml, or use pix run --model.
+// Never edit this marker or sandbox startup files to persist a model choice.
 function bridgeModelFromWorkspace(): string | undefined {
 	try {
 		const raw = readFileSync(".pix/ollama-bridge.model", "utf8").trim();
@@ -49,23 +43,14 @@ const LISTEN_PORT = Number(process.env.OLLAMA_BRIDGE_PORT ?? 11434);
 const HOST = process.env.OLLAMA_BRIDGE_HOST ?? "host.docker.internal";
 const HOST_PORT = Number(process.env.OLLAMA_BRIDGE_HOST_PORT ?? 11434);
 
-// Which local model to expose in the cycle. It MUST match a tag pulled on the
-// HOST (`ollama pull <tag>`), or the call 404s. Default: qwen3.5:9b — the current
-// all-rounder that still fits a 16GB box (loads on demand, not resident). This is
-// the SAME id the shipped catalog carries as its local rung
-// (services/host/inference/catalog/models.json), so the generated manifest and
-// the interactive cycle agree on how local is spelled. Override via env (e.g. in the
-// sandbox's /etc/sandbox-persistent.sh) for a bigger/smaller model — no code edit:
-//   OLLAMA_BRIDGE_MODEL, OLLAMA_BRIDGE_CONTEXT (and OLLAMA_BRIDGE_MODEL_NAME to
-// override the auto-derived display label). contextWindow is what pi will fill; a
-// smaller window means a smaller KV cache on the host, the other half of the DRAM
-// story after model size.
+// The selected tag can be local or Ollama Cloud. Transport through the host
+// daemon does not imply local inference.
 const MODEL_ID =
 	process.env.OLLAMA_BRIDGE_MODEL ?? bridgeModelFromWorkspace() ?? "qwen3.5:9b";
 // The display label is cosmetic; derive it from the tag so you only ever set ONE
 // var (OLLAMA_BRIDGE_MODEL). OLLAMA_BRIDGE_MODEL_NAME still overrides if you care.
 const MODEL_NAME =
-	process.env.OLLAMA_BRIDGE_MODEL_NAME ?? `${MODEL_ID} (local)`;
+	process.env.OLLAMA_BRIDGE_MODEL_NAME ?? `${MODEL_ID} (Ollama)`;
 // posInt: a positive finite integer or the fallback — so OLLAMA_BRIDGE_CONTEXT="",
 // "0", or "32k" can't feed NaN/0 into the provider metadata (which would break
 // context accounting + compaction).
@@ -73,7 +58,7 @@ function posInt(v: string | undefined, fallback: number): number {
 	const n = Number(v);
 	return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
-const MODEL_CTX = posInt(process.env.OLLAMA_BRIDGE_CONTEXT, 32768);
+const MODEL_CTX = process.env.OLLAMA_BRIDGE_CONTEXT;
 
 // One entry in the provider's model list.
 type BridgeModel = {
@@ -90,14 +75,19 @@ type BridgeModel = {
 // It stays the FALLBACK, and on a stack with no generated manifest it is still
 // the whole answer.
 function bridgeTagModel(): BridgeModel {
+	let model: any;
+	try {
+		const catalog = JSON.parse(readFileSync(join(getAgentDir(), "pix-models.json"), "utf8"));
+		model = catalog.models?.find((m: any) => m.id === `ollama/${MODEL_ID}`);
+	} catch { /* Standalone extension users may not have Pix's shipped catalog. */ }
 	return {
 		id: MODEL_ID,
-		name: MODEL_NAME,
+		name: process.env.OLLAMA_BRIDGE_MODEL_NAME ?? model?.label ?? MODEL_NAME,
 		reasoning: true,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: MODEL_CTX,
-		maxTokens: 8192,
+		contextWindow: posInt(MODEL_CTX, posInt(model?.context_window, 32768)),
+		maxTokens: posInt(model?.max_output_tokens, 8192),
 	};
 }
 
@@ -122,8 +112,8 @@ function bridgeTagModel(): BridgeModel {
 // pre-manifest world, and falling back to the bridge tag is exactly right there.
 // modelsFromManifest is the PURE half: parsed manifest in, provider model list
 // out, with the configured bridge tag guaranteed present. The tag must survive
-// a manifest that omits it — it is what config.toml's ollama_bridge_model key
-// promises and what the interactive cycle offers. Exported for tests.
+// a manifest that omits it so the explicitly selected model remains callable.
+// Exported for tests.
 export function modelsFromManifest(
 	parsed: any,
 	bridgeTag: BridgeModel,
@@ -207,7 +197,7 @@ export default async function (pi: any): Promise<void> {
 	// sandbox keep pointing at our own localhost listener (started below).
 	try {
 		pi.registerProvider("ollama", {
-			name: "Ollama (local)",
+			name: "Ollama",
 			baseUrl: `http://localhost:${LISTEN_PORT}/v1`,
 			api: "openai-completions",
 			apiKey: "ollama", // placeholder; Ollama ignores it, but pi wants auth present
