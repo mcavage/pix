@@ -40,22 +40,5 @@
 				]
 			}
 		]
-	},
-	{
-		"id": "argv.op-run-wrapper.exact-grammar",
-		"rationale": "Resolve only each MCP server\u2019s declared references at spawn time. The wrapper retains op run, uses a filtered in-memory env file, and execs op to preserve signals; unrelated provider references cannot block or leak into integrations.",
-		"evidence": "services/host/workflow/env/mcp_test.go: TestEnvironmentFacts_CredentialsAreScopedAndReadAtSpawn; setup Google callback regression in the environment repository",
-		"changes": [
-			{
-				"file": "services/host/mcp/mcp.go",
-				"kind": "contains",
-				"from": [
-					"return append([]string{opPath, \"run\", \"--no-masking\", \"--env-file=\" + opRefs, \"--\"}, argv...)"
-				],
-				"to": [
-					"return append([]string{\"/bin/bash\", \"-c\", scopedOpRun, \"pix-mcp\", opPath, opRefs, strings.Join(keys, \",\")}, argv...)"
-				]
-			}
-		]
 	}
 ]
