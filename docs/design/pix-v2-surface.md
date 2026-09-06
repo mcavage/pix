@@ -306,9 +306,11 @@ It performs only these jobs:
 Every environment gets the same guided onboarding. Existing declarations supply
 its model choice; when that choice is missing, setup offers the environment's
 models, or installed supported Ollama models and shipped provider defaults. The
-user chooses explicitly. Setup asks only for the selected model's missing
-credentials and the environment's declared connections. It preserves completed
-choices on rerun and keeps diagnostic details behind `--verbose`.
+user chooses explicitly. For basic environments such as the generated default, setup first offers
+optional personal provider and Parallel references, independently of the main
+model. Environments declaring inference backends or setup hooks retain their
+own connection flow. Setup preserves completed choices on rerun, offers only
+missing optional connections, and keeps diagnostic details behind `--verbose`.
 
 Environment names are arbitrary. `default` is the initial environment; home and
 work are user conventions, never different product modes.

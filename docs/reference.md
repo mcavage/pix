@@ -312,6 +312,19 @@ Normal review explains the requested actions and access in plain language.
 
 ## 6. Setup
 
+For a basic environment such as the generated `default`, interactive setup
+first offers optional Anthropic, OpenAI, Google, and Parallel web-search
+connections. Enter a 1Password reference or press Enter to skip each. Pix
+checks that a new reference resolves before saving it; this does not prove
+provider API access. Rerunning setup offers missing connections and preserves
+the chosen model. Environments declaring inference backends or setup hooks
+retain their own connection flow without this personal-provider interview.
+
+The model picker offers every available shipped OpenAI, Anthropic, and Google
+catalog entry, plus supported models listed by your Ollama endpoint. It does
+not silently upgrade a saved model or download a different Ollama model.
+Image downloads announce themselves before Docker starts pulling.
+
 `pix setup` is the supported, repeatable, idempotent path from an installed
 binary to a working first session, and the repair command when something
 this host owns has drifted. It is NOT an upgrade step: `pix run` compares

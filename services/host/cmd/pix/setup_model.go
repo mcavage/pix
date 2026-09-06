@@ -60,12 +60,10 @@ func setupModelSelection(d *cli.Deps, home pixhome.Paths, env hostenv.Env, name 
 			local, _ := installedOllamaChoices(catalog, env)
 			choices = append(choices, local...)
 			for _, provider := range []string{"openai", "anthropic", "google"} {
-				id, err := inference.DefaultModelForProviders(catalog, []string{provider})
-				if err != nil {
-					continue
-				}
-				if model, ok := catalog.Get(id); ok {
-					choices = append(choices, model)
+				for _, model := range catalog.Models {
+					if model.Provider == provider && model.Available {
+						choices = append(choices, model)
+					}
 				}
 			}
 		}

@@ -81,9 +81,11 @@ groups are run, ls, rm, task, env, secret, setup, doctor, and reset, plus help a
 version. `cmd/pix/root.go` owns dispatch. Removed commands receive an ordinary
 unknown-command error, not compatibility aliases or retirement messages.
 
-Setup chooses a missing model with the user, collects only relevant connection
-details, and checks completed steps before applying anything. Keyless or
-Gateway-authenticated environments must not get a personal-provider interview.
+Setup offers optional provider and Parallel references for basic environments,
+including the generated default, before choosing a missing model. Reruns offer
+missing connections without replacing a saved model. Environments declaring
+their own inference backends or setup hooks keep their own connection flow;
+keyless and Gateway-authenticated backends do not get a personal-provider interview.
 A launch reuses the same effective-document compiler as environment preview.
 
 ## Build and verify

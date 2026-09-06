@@ -164,3 +164,15 @@ func TestSetupModelSelection_NamesEnvironmentGatewayWithoutResolvingPersonalKeys
 		t.Fatalf("model announcement omits its source: %s", out.String())
 	}
 }
+
+func TestSetupModelSelectionRecognizesGLM53FromOllama(t *testing.T) {
+	home, path := modelSetupHome(t, "")
+	env := ollamaEnvAt(t, "", `{"models":[{"name":"glm-5.3:cloud"}]}`)
+	var out bytes.Buffer
+	if err := setupModelSelection(&cli.Deps{Out: &out, Err: &out, In: strings.NewReader("1\n"), Interactive: true}, home, env, "default"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "GLM 5.3 (Ollama Cloud)") || !strings.Contains(readFile(t, path), `main = "ollama/glm-5.3:cloud"`) {
+		t.Fatalf("GLM 5.3 was not selected: %s", out.String())
+	}
+}

@@ -28,6 +28,7 @@ import (
 type setupFakeDocker struct {
 	calls    []string
 	imageErr map[string]error
+	onPull   func()
 }
 
 func (f *setupFakeDocker) Run(args ...string) (string, error) {
@@ -41,6 +42,9 @@ func (f *setupFakeDocker) Run(args ...string) (string, error) {
 		}
 		return "[]", nil
 	case args[0] == "pull":
+		if f.onPull != nil {
+			f.onPull()
+		}
 		if err, ok := f.imageErr[args[1]]; ok {
 			return "pull failed", err
 		}
@@ -343,3 +347,23 @@ func TestDefaultEnvironmentParses(t *testing.T) {
 }
 
 var _ = container.Name
+
+func TestSetupReportsDownloadBeforeWaitingForDocker(t *testing.T) {
+	t.Setenv("PIX_HOME", t.TempDir())
+	dir, manifest := fakeInstallDir(t, "2.0.0")
+	var out bytes.Buffer
+	ref := provision.AgentImageRef(manifest)
+	docker := &setupFakeDocker{imageErr: map[string]error{ref: errors.New("missing image")}}
+	docker.onPull = func() {
+		if !strings.Contains(out.String(), "Downloading runtime image") {
+			t.Fatalf("setup entered Docker pull without reporting progress: %q", out.String())
+		}
+	}
+	err := (&setupCmd{}).run(&cli.Deps{Out: &out, Err: &out}, setupSeamsFor(t, dir, docker, &setupFakeMCP{}))
+	if err == nil || !strings.Contains(err.Error(), "cannot obtain") {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Contains(out.String(), "ready") {
+		t.Fatalf("failed download reported ready: %s", out.String())
+	}
+}
