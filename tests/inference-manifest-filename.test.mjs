@@ -64,14 +64,14 @@ test("extensions/inference.ts reads the same filename the Go writer declares", (
 
 test("extensions/ollama-bridge.ts reads the same filename the Go writer declares", () => {
 	const goFilename = liveGo.match(/const inferenceManifestFilename = "([^"]+)"/)[1];
-	const m = ollamaBridgeTs.match(/join\(getAgentDir\(\), "([^"]+)"\)/);
+	const m = ollamaBridgeTs.match(/const manifestPath = join\(getAgentDir\(\), "([^"]+)"\)/);
 	assert.ok(m, 'expected `join(getAgentDir(), "...")` in extensions/ollama-bridge.ts');
 	assert.equal(m[1], goFilename);
 });
 
 test("both TS readers agree with each other on the manifest path segment", () => {
 	const a = inferenceTs.match(/path\.join\(getAgentDir\(\), "([^"]+)"\)/)[1];
-	const b = ollamaBridgeTs.match(/join\(getAgentDir\(\), "([^"]+)"\)/)[1];
+	const b = ollamaBridgeTs.match(/const manifestPath = join\(getAgentDir\(\), "([^"]+)"\)/)[1];
 	assert.equal(a, b, "extensions/inference.ts and extensions/ollama-bridge.ts must read the identical manifest filename");
 });
 

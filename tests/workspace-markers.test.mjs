@@ -24,7 +24,7 @@
 // comment for the full inventory.
 import assert from "node:assert";
 import * as http from "node:http";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { register } from "node:module";
@@ -297,4 +297,31 @@ test("ollama-bridge.ts falls back to its own default model when .pix/ollama-brid
 test("none of these fixtures require or read .pix/host-state.json", async (t) => {
 	const workspace = makeWorkspace("profile", "work\n");
 	assert.ok(!existsSync(join(workspace, ".pix", "host-state.json")), "host-state.json must never be planted or expected by any TS reader");
+});
+
+// Basic generated environments have no inference manifest. Exercise the factory,
+// using the same canonical catalog the Dockerfile ships, for cloud and local tags.
+test("Ollama registration preserves selected tags and catalog limits without a manifest", async (t) => {
+	const agentDir = mkdtempSync(join(tmpdir(), "pix-catalog-"));
+	copyFileSync(new URL("../services/host/inference/catalog/models.json", import.meta.url), join(agentDir, "pix-models.json"));
+	const saved = process.env.PI_TEST_AGENT_DIR;
+	process.env.PI_TEST_AGENT_DIR = agentDir;
+	t.after(() => { if (saved === undefined) delete process.env.PI_TEST_AGENT_DIR; else process.env.PI_TEST_AGENT_DIR = saved; });
+	for (const [tag, context, output] of [["deepseek-v4-flash:cloud", 1048576, 131072], ["qwen3.5:9b", 16384, 16384]]) {
+		const workspace = makeWorkspace("ollama-bridge.model", `${tag}\n`);
+		const mod = await importFromWorkspace("../extensions/ollama-bridge.ts", workspace, {
+			OLLAMA_BRIDGE_PORT: "0", OLLAMA_BRIDGE_MODEL: undefined,
+			OLLAMA_BRIDGE_CONTEXT: undefined, OLLAMA_BRIDGE_MODEL_NAME: undefined,
+		});
+		let provider;
+		const hooks = new Map();
+		await mod.default({registerProvider(_name, cfg) { provider = cfg; }, on(name, fn) { hooks.set(name, fn); }});
+		try {
+			assert.equal(provider.models.length, 1);
+			assert.equal(provider.models[0].id, tag);
+			assert.equal(provider.models[0].contextWindow, context);
+			assert.equal(provider.models[0].maxTokens, output);
+			assert.equal(provider.models[0].name.includes("local"), !tag.endsWith(":cloud"));
+		} finally { await hooks.get("session_shutdown")?.(); }
+	}
 });

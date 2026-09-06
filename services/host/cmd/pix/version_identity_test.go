@@ -157,3 +157,34 @@ func TestVersionBumpRecreatesOnlyWithACompleteProof(t *testing.T) {
 		t.Errorf("an undetermined workspace must refuse the recreate, got plan=%v refusals=%v", plan, refusals)
 	}
 }
+
+func TestRunEffectiveInputPreservesKitImagePin(t *testing.T) {
+	t.Setenv("PIX_HOME", t.TempDir())
+	for _, tc := range []struct{ name, template, local, want string }{
+		{"released kit", "", "", ""},
+		{"local build", "", "local-abc", launch.DockerImageRepo + ":local-abc"},
+		{"explicit override", "example/agent:pinned", "local-abc", "example/agent:pinned"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := launch.RunOpts{Workspace: t.TempDir(), Name: "pix-test", Template: tc.template, LocalImageTag: tc.local}
+			in, err := runEffectiveInput(&config.Config{}, o, launch.EnvSelection{}, "0.1.79")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if in.Template != tc.want {
+				t.Fatalf("template = %q, want %q", in.Template, tc.want)
+			}
+			rendered, err := launch.RenderEffectiveEnvironment(in, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data := rendered.Bytes
+			if tc.want == "" && strings.Contains(string(data), "template:") {
+				t.Fatalf("release launch overrides the selected kit image: %s", data)
+			}
+			if !strings.Contains(string(data), "ref=v0.1.79") {
+				t.Fatalf("missing versioned kit: %s", data)
+			}
+		})
+	}
+}
