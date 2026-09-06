@@ -6,7 +6,8 @@ const workflow = fs.readFileSync(new URL("../.github/workflows/test.yml", import
 const gate = fs.readFileSync(new URL("../scripts/gate.sh", import.meta.url), "utf8");
 
 test("PR branches do not launch duplicate push and pull_request workflows", () => {
-	assert.match(workflow, /push:\n\s+branches: \["main"\]\n\s+pull_request:/);
+	assert.match(workflow, /^  pull_request:/m);
+	assert.doesNotMatch(workflow, /^  push:/m);
 });
 
 test("Node test workers cannot strand CI after results complete", () => {

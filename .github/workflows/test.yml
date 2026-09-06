@@ -1,5 +1,5 @@
-# Always-on checks for PRs and main. Feature-branch pushes are covered by the
-# pull_request event, so they do not launch an identical second workflow.
+# Checks run standalone for PRs and inside publish for main. No standalone
+# push trigger: publish already requires this workflow before releasing.
 #
 # TWO JOBS, TWO DIFFERENT DEALS — the split is explicit on purpose:
 #
