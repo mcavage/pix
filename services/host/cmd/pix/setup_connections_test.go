@@ -29,17 +29,17 @@ func TestSetupDefaultOffersAllConnectionsBeforeOllamaChoice(t *testing.T) {
 	var out bytes.Buffer
 	seams := setupSeamsFor(t, dir, &setupFakeDocker{}, &setupFakeMCP{})
 	seams.Env = env
-	input := "op://fixture/anthropic/key\nop://fixture/openai/key\nop://fixture/google/key\nop://fixture/parallel/key\n1\n"
+	input := "op://fixture/anthropic/key\nop://fixture/openai/key\nop://fixture/google/key\nop://fixture/parallel/key\nop://fixture/github/key\n1\n"
 	err := (&setupCmd{}).run(&cli.Deps{Out: &out, Err: &out, In: strings.NewReader(input), Interactive: true}, seams)
 	if err != nil {
 		t.Fatalf("setup: %v\n%s", err, out.String())
 	}
-	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "PARALLEL_API_KEY"} {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "PARALLEL_API_KEY", "GITHUB_TOKEN"} {
 		if !strings.Contains(readFile(t, filepath.Join(home, "secrets.env")), key+"=op://fixture/") {
 			t.Errorf("missing %s", key)
 		}
 	}
-	for _, label := range []string{"Anthropic:", "OpenAI:", "Google:", "Parallel web search:"} {
+	for _, label := range []string{"Anthropic:", "OpenAI:", "Google:", "Parallel web search:", "GitHub:"} {
 		if at := strings.Index(out.String(), label); at < 0 || at > strings.Index(out.String(), "Choose your model") {
 			t.Errorf("connection not offered before model: %s", label)
 		}
@@ -57,7 +57,7 @@ func TestSetupDefaultOffersAllConnectionsBeforeOllamaChoice(t *testing.T) {
 	if err := (&setupCmd{}).run(&cli.Deps{Out: &out, Err: &out, In: strings.NewReader(""), Interactive: true}, seams); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "Parallel web search:") || strings.Contains(out.String(), "Model number:") || before != readFile(t, filepath.Join(home, "envs/default/pix.toml")) {
+	if strings.Contains(out.String(), "GitHub:") || strings.Contains(out.String(), "Parallel web search:") || strings.Contains(out.String(), "Model number:") || before != readFile(t, filepath.Join(home, "envs/default/pix.toml")) {
 		t.Fatal("rerun repeated completed setup")
 	}
 }
@@ -66,7 +66,7 @@ func TestSetupConnectionsSkipNeedsNoOnePassword(t *testing.T) {
 	home, _ := modelSetupHome(t, "")
 	env := hostenv.Env{System: &systest.Fake{Base: sys.Real{}, LookPathFn: func(string) (string, error) { t.Fatal("skipping connections must not look for op"); return "", nil }}}
 	var out bytes.Buffer
-	if err := setupOptionalConnections(&cli.Deps{Out: &out, Err: &out, In: strings.NewReader("\n\n\n\n"), Interactive: true}, home, env, "default"); err != nil {
+	if err := setupOptionalConnections(&cli.Deps{Out: &out, Err: &out, In: strings.NewReader("\n\n\n\n\n"), Interactive: true}, home, env, "default"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(home.Home, "secrets.env")); !os.IsNotExist(err) {
@@ -95,7 +95,7 @@ func TestSetupConnectionsResumeMissingOnlyAndRejectUnreadableReference(t *testin
 	env := hostenv.Env{System: &systest.Fake{Base: sys.Real{}, LookPathFn: func(string) (string, error) { return "/stub/op", nil }, RunWithinFn: func(_ time.Duration, _ string, _ ...string) (string, bool, error) {
 		return "fixture-must-not-leak", true, nil
 	}}}
-	d := &cli.Deps{Out: &out, Err: &out, In: strings.NewReader("op://fixture/unreadable/key\n\n\n\n"), Interactive: true}
+	d := &cli.Deps{Out: &out, Err: &out, In: strings.NewReader("op://fixture/unreadable/key\n\n\n\n\n"), Interactive: true}
 	if err := setupOptionalConnections(d, home, env, "default"); err != nil {
 		t.Fatal(err)
 	}
@@ -104,5 +104,41 @@ func TestSetupConnectionsResumeMissingOnlyAndRejectUnreadableReference(t *testin
 	}
 	if got := readFile(t, filepath.Join(home.Home, "secrets.env")); got != "OPENAI_API_KEY=op://fixture/existing/key\n" {
 		t.Fatalf("failed probe changed refs: %s", got)
+	}
+}
+
+func TestSetupConnectionsAddsOnlyMissingGitHub(t *testing.T) {
+	refs := "ANTHROPIC_API_KEY=op://fixture/anthropic/key\nOPENAI_API_KEY=op://fixture/openai/key\nGEMINI_API_KEY=op://fixture/google/key\nPARALLEL_API_KEY=op://fixture/parallel/key\n"
+	home, sidecar := modelSetupHome(t, refs)
+	before := readFile(t, sidecar)
+	var out bytes.Buffer
+	env := hostenv.Env{System: &systest.Fake{Base: sys.Real{}, LookPathFn: func(string) (string, error) { return "/stub/op", nil }, RunWithinFn: func(_ time.Duration, name string, args ...string) (string, bool, error) {
+		if name != "op" || len(args) != 2 || args[0] != "read" || args[1] != "op://pix/GITHUB_TOKEN/credential" {
+			t.Fatalf("unexpected reference check: %s %v", name, args)
+		}
+		return "fixture-github-value", false, nil
+	}}}
+	d := &cli.Deps{Out: &out, Err: &out, In: strings.NewReader("\"op://pix/GITHUB_TOKEN/credential\"\n"), Interactive: true}
+	if err := setupOptionalConnections(d, home, env, "default"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "GitHub:") {
+		t.Fatal("missing GitHub prompt")
+	}
+	for _, label := range []string{"Anthropic:", "OpenAI:", "Google:", "Parallel web search:"} {
+		if strings.Contains(out.String(), label) {
+			t.Fatalf("repeated %s", label)
+		}
+	}
+	saved := readFile(t, home.SecretsEnv)
+	if saved != refs+"GITHUB_TOKEN=op://pix/GITHUB_TOKEN/credential\n" {
+		t.Fatalf("unexpected saved references: %s", saved)
+	}
+	if strings.Contains(out.String(), "fixture-github-value") || before != readFile(t, sidecar) {
+		t.Fatal("disclosed credential or changed model settings")
+	}
+	info, err := os.Stat(home.SecretsEnv)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal("references lost private file permissions", err)
 	}
 }

@@ -36,17 +36,21 @@ func setupOptionalConnections(d *cli.Deps, home pixhome.Paths, env hostenv.Env, 
 		saved[ref.Key] = ref.IsRef && !ref.Placeholder
 	}
 	keys := append(append([]secret.ProviderKeyRef{}, secret.ProviderKeyRefOrder...), secret.ToolKeyRefOrder...)
+	keys = append(keys, secret.GitHubKeyRef)
 	printed := false
 	for _, key := range keys {
 		if saved[key.EnvVar] {
 			continue
 		}
 		if !printed {
-			fmt.Fprintln(d.Out, "Optional connections for model switching, subagents, and web search.")
+			fmt.Fprintln(d.Out, "Optional connections for model switching, subagents, web search, and GitHub.")
 			fmt.Fprintln(d.Out, "Paste a 1Password secret reference for each, or press Enter to skip.")
 			printed = true
 		}
 		label := providerDisplayName(key.Name)
+		if key.Name == "github" {
+			label = "GitHub"
+		}
 		if key.Name == "parallel" {
 			label = "Parallel web search"
 		}
