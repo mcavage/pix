@@ -142,8 +142,15 @@ func TestHostToolsHiddenDispatchLifetime(t *testing.T) {
 	if _, err := lease.CreateRecord(dir, "instance-1"); err != nil {
 		t.Fatal(err)
 	}
-	identity := envinfo.HostToolsID(home.Home, workspace, name, false)
-	fp, _ := json.Marshal(map[string]string{"host_tools": identity})
+	// Exercise the real default CLI workspace ("."), not a hand-built
+	// fingerprint that already agrees with the MCP registration.
+	t.Chdir(workspace)
+	opts, err := parseRunOpts(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.Name = name
+	fp, _ := json.Marshal(launch.SessionFingerprint(&config.Config{}, opts))
 	if err := os.WriteFile(filepath.Join(dir, "fingerprint.json"), fp, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -303,6 +310,50 @@ func TestRunEffectiveHostToolRegistration(t *testing.T) {
 	for _, server := range trial.MCPServers {
 		if envinfo.IsSessionMCPName(server.Name) {
 			t.Fatal("trial received host tools")
+		}
+	}
+}
+
+func TestHostToolsWorkspaceIdentityMatchesEffectiveDocument(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "linked")
+	if err := os.Symlink(workspace, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PIX_HOME", filepath.Join(root, "home"))
+	t.Chdir(workspace)
+	for _, path := range []string{".", "../workspace", workspace, link} {
+		for _, dev := range []bool{false, true} {
+			opts, err := parseRunOpts([]string{path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts.Name, opts.Dev = "pix-test", dev
+			in, err := runEffectiveInput(&config.Config{}, opts, launch.EnvSelection{}, "0.1.82")
+			if err != nil {
+				t.Fatal(err)
+			}
+			fp := launch.SessionFingerprint(&config.Config{}, opts)
+			want := envinfo.HostToolsID(filepath.Join(root, "home"), workspace, opts.Name, dev)
+			if fp["host_tools"] != want || in.PrimaryWorkspace.Path != workspace {
+				t.Fatalf("path %q dev %v: fingerprint %q workspace %q", path, dev, fp["host_tools"], in.PrimaryWorkspace.Path)
+			}
+			found := false
+			for _, server := range in.MCPServers {
+				if envinfo.IsSessionMCPName(server.Name) {
+					found = strings.HasSuffix(server.Name, "-"+want)
+				}
+			}
+			if !found {
+				t.Fatalf("path %q dev %v: MCP registration mismatches session", path, dev)
+			}
 		}
 	}
 }

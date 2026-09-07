@@ -128,7 +128,11 @@ func SessionFingerprint(cfg *config.Config, o RunOpts) sandbox.Fingerprint {
 	sort.Strings(sorted)
 	fp := sandbox.Fingerprint{"static_mcp": strings.Join(sorted, ",")}
 	if home, err := pixhome.Resolve(); err == nil && os.Getenv("PIX_HOST_TOOLS_DISABLED") != "1" {
-		fp["host_tools"] = envinfo.HostToolsID(home.Home, o.Workspace, o.Name, o.Dev)
+		// Use the same workspace identity the effective document gives the MCP
+		// server; ordinary `pix` carries "." here, not an absolute path.
+		if primary, err := PrimaryWorkspaceFact(o.Workspace); err == nil {
+			fp["host_tools"] = envinfo.HostToolsID(home.Home, primary.Path, o.Name, o.Dev)
+		}
 	}
 	// The stamped launcher build is part of a sandbox's creation identity: a
 	// sandbox built by 0.1.71 and one built by 0.1.72-beta.gabc1234 are
