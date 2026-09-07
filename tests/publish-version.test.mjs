@@ -74,3 +74,13 @@ test("the tap bump reads release hashes and opens a gated PR", () => {
 	assert.match(workflow, /gh pr merge "\$pr_url" --repo mcavage\/homebrew-tap --auto --squash/);
 	assert.doesNotMatch(workflow, /sha256sum.*tap\/Formula\/pix\.rb/);
 });
+
+// Workflow concurrency serializes execution, not the push event's checkout SHA.
+// A queued release must start its bump from the preceding release's commit.
+test("queued version bumps check out current main before stamping", () => {
+	const bump = workflow.slice(workflow.indexOf("\n  bump:"), workflow.indexOf("\n  release-binaries:"));
+	const checkout = bump.slice(0, bump.indexOf("- name: Bump version files"));
+	assert.match(checkout, /ref: main/);
+	assert.match(checkout, /fetch-depth: 0/);
+	assert.match(bump, /git pull --rebase origin main/);
+});
