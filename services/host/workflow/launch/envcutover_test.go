@@ -36,7 +36,10 @@ func TestPrimaryWorkspaceFact_RefusesEmptyNeverSubstitutes(t *testing.T) {
 	if _, err := PrimaryWorkspaceFact("   "); err == nil {
 		t.Fatal("a blank workspace must be refused")
 	}
-	ws := t.TempDir()
+	ws, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := PrimaryWorkspaceFact(ws)
 	if err != nil || got.Path != ws {
 		t.Fatalf("PrimaryWorkspaceFact(%q) = (%+v, %v)", ws, got, err)

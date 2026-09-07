@@ -43,6 +43,7 @@ import (
 	"pix/host/pixhome"
 	"pix/host/recreatelog"
 	"pix/host/sandbox"
+	"pix/host/stack"
 	"pix/host/sys"
 )
 
@@ -135,7 +136,7 @@ func PrimaryWorkspaceFact(workspace string) (envinfo.WorkspaceFact, error) {
 	if strings.TrimSpace(workspace) == "" {
 		return envinfo.WorkspaceFact{}, errors.New("launch: a primary workspace is required; refusing to compose one from an empty path")
 	}
-	abs, err := filepath.Abs(workspace)
+	abs, err := stack.CanonicalPath(workspace)
 	if err != nil {
 		return envinfo.WorkspaceFact{}, fmt.Errorf("launch: resolve workspace %q: %w", workspace, err)
 	}
