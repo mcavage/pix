@@ -282,30 +282,24 @@ new sandbox:
   record instance id + fingerprint + invocation
   sbx exec -it <sandbox> -- <pix-entrypoint> [--model M] [--resume S]
 
-existing sandbox, RUNNING:
+existing sandbox, RUNNING or STOPPED:
   verify name, instance id, effective fingerprint, and holder state
   sbx exec -it <sandbox> -- <pix-entrypoint> [--model M] [--resume S]
-
-existing sandbox, STOPPED:
-  verify name, instance id, effective fingerprint, and holder state
-  sbx run --name <sandbox> [-- [--model M] [--resume S]]
 ```
 
 The command after `--` is inside the sandbox. Model and resume are Pi entrypoint
-arguments, not sbx flags. The same builder is used on every RUNNING attach.
+arguments, not sbx flags. The same builder is used on every attach.
 
-A STOPPED sandbox is never `sbx exec`'d (exec has no "start" of its own and
-fails outright against an already-stopped container). It goes through the
-same identity/fingerprint/review gate as a running attach (review round 1
-blocker #2 — a stopped sandbox is a legitimate reattach target,
-docs/getting-started.md: "A sandbox already exists -> reattach, running or
-stopped, as-is", never an outright refusal), but the actual
-start-then-attach uses the legacy `sbx run --name <name>` reattach argv
-instead, which is what actually starts a stopped sandbox — no `sbx start`
-verb is established in this codebase's observed sbx contract
-(docs/upstream/sbx-0.39-environments.md), so this is the one supported
-existing argv for that case. It still carries the session's CURRENT
-`--model`/`--resume`, not a replay of a stale prior invocation.
+A STOPPED sandbox is an ordinary `sbx exec` target, because `sbx exec` starts
+a stopped sandbox itself and no `sbx start` verb exists. It goes through the
+same identity, fingerprint, and review gate as a running attach
+(docs/getting-started.md: "A sandbox already exists -> reattach, running or
+stopped, as-is"), and it carries the session's CURRENT invocation: live skills,
+injected trusted host state, `--model`, `--resume`, and the `--` passthrough,
+never a replay of a stale prior one. Piped runs use `exec -i`, interactive ones
+`exec -it`. Asking sbx to re-derive Pi's command from the container's own spec
+(`sbx run --name <name>`) is not a supported attach: it drops this launch's
+skills and host state.
 
 Host UAT must prove this exact argv against the supported sbx release. If it
 fails, implementation stops at this seam and records the observed contract; it

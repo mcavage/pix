@@ -272,12 +272,12 @@ func FindPositivelyIdentified(env hostenv.Env, name string) (*sandbox.Entry, boo
 	return found, true
 }
 
-// FindPositivelyIdentifiedRunning is the RUNNING-only predicate a caller
-// authorizing `sbx exec` needs (exec has no "start" of its own — it fails
-// outright against a stopped sandbox). A stopped, schema-verified row is
-// deliberately NOT positively-identified-running here: the caller must fall
-// back to the legacy `sbx run --name` reattach path instead, which is what
-// actually starts a stopped sandbox (see BuildReattachArgs).
+// FindPositivelyIdentifiedRunning is the RUNNING-only predicate, for the
+// callers whose question is liveness rather than "may I attach": the
+// interactive-root receipt (cmd/pix/session_root.go) and the host-tools
+// registration (cmd/pix/hosttools.go). It is NOT the attach gate: `sbx exec`
+// starts a stopped sandbox itself, so a reattach asks
+// FindPositivelyIdentified above and execs either way.
 func FindPositivelyIdentifiedRunning(env hostenv.Env, name string) (*sandbox.Entry, bool) {
 	found, ok := FindPositivelyIdentified(env, name)
 	if !ok || found.State != sandbox.StateRunning {
@@ -376,12 +376,16 @@ type SessionSpec struct {
 	// failure or unset flag can select one (PRD §8; envargv_sentinel_test.go).
 	EnvCreateArgs []string
 	// AttachArgs is the ONE non-exec attach argv a caller may supply (the
-	// pre-cutover `run --name` re-attach). It is NEVER used for a create.
+	// pre-cutover `run --name` re-attach). It is NEVER used for a create,
+	// and no longer selected by a real attach either: every positively
+	// identified live sandbox execs (AttachExec).
 	AttachArgs []string
 	// AttachTTY selects `sbx exec -it` (interactive) vs `-i` (piped).
 	AttachTTY bool
-	// AttachExec is true when the pre-lock probe positively identified a RUNNING,
-	// schema-verified sandbox — the only case an attach may exec.
+	// AttachExec is true when the pre-lock probe positively identified a
+	// schema-verified sandbox, running or stopped: both exec, because `sbx
+	// exec` starts a stopped one itself. It is what makes an attach use THIS
+	// launch's own DefaultInvocation instead of AttachArgs.
 	AttachExec bool
 
 	Fingerprint sandbox.Fingerprint // recorded on create, validated on attach
@@ -726,7 +730,7 @@ func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, 
 		// RETAINS the sandbox: this transition did not create it.
 		if perr := prepareSessionSecrets(spec, deps); perr != nil {
 			return nil, &SecretPrepFailed{Created: false, Refusal: &SessionRefused{
-				Err: fmt.Errorf("%q was left running; its credentials could not be prepared: %w", spec.Name, perr)}}
+				Err: fmt.Errorf("%q was retained; its credentials could not be prepared: %w", spec.Name, perr)}}
 		}
 	}
 

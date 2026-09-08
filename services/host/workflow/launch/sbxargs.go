@@ -211,11 +211,11 @@ func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
 }
 
 // BuildAttachArgv composes `sbx exec` argv to re-attach to an existing,
-// POSITIVELY IDENTIFIED, RUNNING sandbox by re-invoking pi directly with
-// invocation — replacing `sbx run --name`, which asks sbx to re-derive a pi
-// command from the container's own spec, with an explicit exec pix fully
-// controls. tty selects "-it" (interactive) vs "-i" (piped/scripted), the
-// same convention sandbox.ExecOpts/CreateOpts already use everywhere else.
+// POSITIVELY IDENTIFIED sandbox (running or stopped: exec starts a stopped
+// one) by re-invoking pi directly with invocation, rather than asking sbx to
+// re-derive a pi command from the container's own spec. tty selects "-it"
+// (interactive) vs "-i" (piped/scripted), the same convention
+// sandbox.ExecOpts/CreateOpts already use everywhere else.
 func BuildAttachArgv(name string, tty bool, invocation []string) ([]string, error) {
 	return sandbox.ExecArgv(sandbox.ExecOpts{
 		Name:    name,
@@ -248,12 +248,17 @@ func PlanSandboxLaunch(state SbxState, cfg *config.Config, o RunOpts, version st
 // create-only work, exactly as PlanSandboxLaunch refuses to plan one.
 func WillCreate(state SbxState) bool { return state == SbxAbsent }
 
-// BuildReattachArgs composes the argv for ATTACHING: `run --name <name>`,
+// BuildReattachArgs composes the PRE-CUTOVER argv for ATTACHING: `run --name <name>`,
 // deliberately WITHOUT any create-only flag — sbx reads the agent from the
 // existing sandbox's own spec, so reapplying them would be a no-op at best and
 // a lie about what's running at worst. --model is NOT create-only: it is a pi
 // RUNTIME arg, so a resolved o.Model (from --model or --intent) still reaches
 // the session, exactly as on a fresh create.
+//
+// No live sandbox is attached this way any more: every positively identified
+// row execs (BuildAttachArgv), the only form carrying this launch's complete pi
+// invocation. This stays as PlanSandboxLaunch's reattach argv and as
+// SessionSpec.AttachArgs' unselected fallback.
 func BuildReattachArgs(o RunOpts) []string {
 	args := []string{"run", "--name", o.Name}
 	piArgs := []string{"--session-dir", ".pi-sessions"}
@@ -269,40 +274,4 @@ func BuildReattachArgs(o RunOpts) []string {
 		args = append(args, piArgs...)
 	}
 	return args
-}
-
-func PinnedGitKit(args []string) string {
-	for _, a := range args {
-		if strings.HasPrefix(a, kitRepo) && strings.Contains(a, "#ref=") {
-			return a
-		}
-	}
-	return ""
-}
-
-// KitResolveFailureMsg formats an actionable error for when `sbx run` fails and
-// the composed kit used a git #ref; "" when none was pinned.
-func KitResolveFailureMsg(pinnedKit string) string {
-	if pinnedKit == "" {
-		return ""
-	}
-	ref := "main"
-	if i := strings.Index(pinnedKit, "#ref="); i >= 0 {
-		rest := pinnedKit[i+len("#ref="):]
-		if amp := strings.IndexByte(rest, '&'); amp >= 0 {
-			rest = rest[:amp]
-		}
-		ref = rest
-	}
-	return fmt.Sprintf("pix: sbx could not resolve the kit at ref %q.", ref) + `
-Check the error above first — it is the actual failure. Common causes:
-  - the shell's working directory no longer exists (git cannot start there):
-    "fatal: Unable to read current working directory" — cd somewhere real
-  - no network / GitHub unreachable
-  - the ref genuinely is not published yet
-Options:
-  - pick another ref:                          pix run --kit-ref <tag-or-branch>
-  - run a local build from your pix checkout:  pix run --dev
-  - override the kit entirely:                 pix run --kit <path-or-git-url>
-See ` + "`pix help run`" + ` for the released-vs-local behavior.`
 }

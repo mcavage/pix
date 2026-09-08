@@ -633,13 +633,14 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			}
 			return runFail(d, 1, "%s", decision.Refusal)
 		}
-		// exec has no "start" of its own and fails outright against a stopped
-		// sandbox — only a RUNNING, positively identified entry may exec. A
-		// stopped one still attaches (decision.Attach is true above), but via
-		// spec.AttachArgs, the legacy `sbx run --name` reattach that actually
-		// starts it, honoring THIS launch's current --model/--resume exactly
-		// like BuildReattachArgs already does for a fresh create.
-		attachExec = entry != nil && entry.State == sandbox.StateRunning
+		// BOTH live states exec: `sbx exec` starts a stopped sandbox itself, so
+		// a positively identified stopped row is an ordinary exec target and gets
+		// THIS launch's complete invocation (live skills, injected trusted host
+		// state, --model, --resume, the `--` passthrough). decision.Attach above
+		// already proved the row is schema-verified, this host's own recorded
+		// instance, and fingerprint-clean; the state check is the last of those
+		// proofs, never a substitute for them.
+		attachExec = entry != nil && (entry.State == sandbox.StateRunning || entry.State == sandbox.StateStopped)
 
 		// The interactive-root Hold: this attach has a POSITIVE instance receipt
 		// right here (a fresh probe's entry.InstanceID, else the recorded one
@@ -851,24 +852,15 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		code := 1
 		var exitErr *exec.ExitError
 		if errors.As(xerr, &exitErr) {
+			// Exit status alone cannot distinguish an agent failure from an
+			// sbx failure. Preserve it without inventing a diagnosis; actual
+			// stderr and captured, redacted create output remain available.
 			code = exitErr.ExitCode()
-			// A pinned git #ref kit that sbx could not resolve fails with an opaque
-			// git 128; replace it with an actionable note.
-			// The pinned git kit now lives in the effective document's kit
-			// list, composed by EnvExtraKits from the same inputs.
-			if msg := launch.KitResolveFailureMsg(launch.PinnedGitKit(launch.EnvExtraKits(cfg, o, version))); msg != "" {
-				fmt.Fprintln(d.Err, msg)
-			}
 		} else {
 			fmt.Fprintf(d.Err, "pix run: exec sbx: %v\n", xerr)
 			if errors.Is(xerr, exec.ErrNotFound) {
 				fmt.Fprintln(d.Err, "install sbx with: "+doctor.SbxInstallHint)
 			}
-		}
-		// A re-attach can fail on an sbx that won't reattach a kit-created sandbox;
-		// never leave the user without a next step.
-		if plan.Reattach {
-			fmt.Fprintf(d.Err, "pix run: attach failed; %s\n", launch.RecreateGuidance(o.Name))
 		}
 		return cli.SilentError{Code: code}
 	}

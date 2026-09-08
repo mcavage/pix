@@ -403,16 +403,53 @@ exit 0
 	}
 }
 
-// TestRunSession_StoppedSandbox_ReattachesViaLegacyRunName is review round 1
-// blocker #2's regression: a STOPPED sandbox must never be exec'd (exec has
-// no "start" of its own and fails outright against an already-stopped
-// container) — the command layer (cmd/pix/run_cmd.go) sets AttachExec=false
-// for exactly this case, so RunSession spawns the legacy `sbx run --name`
-// reattach argv instead, which IS the supported existing argv that actually
-// starts a stopped sandbox, and it honors THIS launch's current
-// --model/--resume exactly like BuildReattachArgs already does for a fresh
-// create — never a replay of some stale prior invocation.
-func TestRunSession_StoppedSandbox_ReattachesViaLegacyRunName(t *testing.T) {
+// TestRunSession_StoppedSandbox_ExecsThisLaunchsInvocation is the retained-
+// sandbox regression: a STOPPED, positively identified sandbox attaches with
+// `sbx exec` exactly like a running one, because exec starts it itself, and it
+// carries THIS launch's current invocation rather than one sbx re-derives from
+// the container's own spec. The command layer (cmd/pix/run_cmd.go) sets
+// AttachExec for both live states; the caller-level proof lives in
+// cmd/pix/run_stopped_attach_test.go.
+func TestRunSession_StoppedSandbox_ExecsThisLaunchsInvocation(t *testing.T) {
+	isolateState(t)
+	dir := installFakeSbx(t, `
+if [ "$1" = "ls" ]; then
+  if [ "$2" = "--json" ]; then echo '[{"name":"pix-demo","state":"stopped","instance_id":"inst-1"}]'
+  else echo "pix-demo  x  stopped"; fi
+  exit 0
+fi
+echo "$@" >> "$(dirname "$0")/argv.log"
+exit 0
+`)
+	invocation := []string{"--session-dir", ".pi-sessions", "--skill", "/opt/skills", "--model", "anthropic/claude-sonnet-5", "--session", "sess-9"}
+	err := RunSession(SessionSpec{
+		Key: SessionName(t.TempDir()), Name: "pix-demo",
+		AttachArgs: BuildReattachArgs(RunOpts{Name: "pix-demo"}), AttachExec: true, AttachTTY: false,
+		DefaultInvocation: invocation,
+	}, SessionDeps{Env: realEnv(), Poll: SbxCreatePoll(realEnv()), Warn: io.Discard, Spawn: fixtureSpawn(t)})
+	if err != nil {
+		t.Fatalf("RunSession: %v", err)
+	}
+	logged, rerr := os.ReadFile(filepath.Join(dir, "argv.log"))
+	if rerr != nil {
+		t.Fatalf("argv.log: %v", rerr)
+	}
+	got := strings.TrimSpace(string(logged))
+	want := "exec -i pix-demo -- pi " + strings.Join(invocation, " ")
+	if got != want {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "run --name") {
+		t.Fatalf("a stopped sandbox still uses the legacy reattach argv: %q", got)
+	}
+}
+
+// TestRunSession_NonExecAttach_SpawnsTheSuppliedArgv keeps the non-exec
+// branch honest: when a caller does NOT authorize an exec, RunSession spawns
+// the AttachArgs it was given verbatim and invents nothing. No production
+// caller selects this any more, so it pins the fallback, not the
+// stopped-sandbox policy.
+func TestRunSession_NonExecAttach_SpawnsTheSuppliedArgv(t *testing.T) {
 	isolateState(t)
 	dir := installFakeSbx(t, `
 if [ "$1" = "ls" ]; then
@@ -436,16 +473,8 @@ exit 0
 	if rerr != nil {
 		t.Fatalf("argv.log: %v", rerr)
 	}
-	got := strings.TrimSpace(string(logged))
-	want := strings.Join(reattachArgv, " ")
-	if got != want {
+	if got, want := strings.TrimSpace(string(logged)), strings.Join(reattachArgv, " "); got != want {
 		t.Fatalf("argv = %q, want %q", got, want)
-	}
-	if strings.Contains(got, "exec") {
-		t.Fatalf("a stopped sandbox must never be exec'd, got argv %q", got)
-	}
-	if !strings.Contains(got, "--model anthropic/claude-sonnet-5") || !strings.Contains(got, "--session sess-9") {
-		t.Fatalf("argv %q does not honor the current --model/--resume", got)
 	}
 }
 
