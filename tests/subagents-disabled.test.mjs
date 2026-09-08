@@ -161,7 +161,14 @@ test("PI_SUBAGENT_DISABLED=1 refuses single, parallel, chain, and doctor", async
 		const r = await exec(reg, params);
 		assert.equal(r.isError, true, JSON.stringify(params));
 		assert.match(text(r), /disabled in host mode/i);
-		assert.equal(r.details.results.length, 0, "nothing may have run");
+		// One refusal row (not an empty array, so callers get its timing), and it
+		// proves nothing ran: no child messages, no usage.
+		assert.equal(r.details.results.length, 1, "one refusal row");
+		const [refused] = r.details.results;
+		assert.equal(refused.exitCode, 1);
+		assert.match(refused.errorMessage, /disabled in host mode/i);
+		assert.equal(refused.messages.length, 0, "nothing may have run");
+		assert.equal(refused.usage.turns, 0, "nothing may have run");
 	}
 	// The doctor path used to call runSingle() directly, bypassing the check
 	// that lived only in execute() — it spawned the canary even when disabled.

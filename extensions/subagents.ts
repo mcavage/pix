@@ -569,6 +569,75 @@ interface SingleResult {
 	wallMs?: number;
 	step?: number;
 	fallbackFrom?: string;
+	// Wall-clock stage timing in epoch milliseconds. This is NOT a second usage
+	// or rate system: it records only when a child's stage began and ended, so a
+	// caller can attribute elapsed time per child alongside the existing usage
+	// totals. Every result carries startedAt, including the early returns
+	// (disabled, unknown agent), and endedAt/durationMs are stamped before the
+	// result leaves runSingle.
+	startedAt: number;
+	endedAt?: number;
+	durationMs?: number;
+}
+
+// Wall-clock time can step BACKWARD mid-run (NTP correction, a manual clock
+// set), and every caller reads durationMs as exactly endedAt - startedAt. So
+// clamp the END, not the duration: clamping only the duration would publish a
+// nonnegative durationMs next to an endedAt that precedes startedAt, i.e. three
+// fields that contradict each other. Pure and exported so that edge is testable
+// deterministically, without a clock stub or a whole child run.
+export function completionTiming(
+	startedAt: number,
+	now: number,
+): { endedAt: number; durationMs: number } {
+	const endedAt = Math.max(startedAt, now);
+	return { endedAt, durationMs: endedAt - startedAt };
+}
+
+// Idempotent like finalizeRun: the normal path stamps once, the safety net in
+// runSingle's finally no-ops.
+function stampCompletion(r: SingleResult): void {
+	if (r.endedAt !== undefined) return;
+	const t = completionTiming(r.startedAt, Date.now());
+	r.endedAt = t.endedAt;
+	r.durationMs = t.durationMs;
+}
+
+// The single shape of a host-mode refusal, shared by the tool's early return and
+// by runSingle's central kill switch, so both report an identical fully-stamped
+// result. The tool used to return an empty results array here, which forced
+// callers to special-case "refused" as "no rows" and lost the refusal's timing.
+function disabledRefusal(
+	agentName: string,
+	task: string,
+	startedAt: number = Date.now(),
+	step?: number,
+): SingleResult {
+	const refused: SingleResult = {
+		agent: agentName,
+		agentSource: "unknown",
+		task,
+		exitCode: 1,
+		messages: [],
+		stderr: SUBAGENTS_DISABLED_MSG,
+		errorMessage: SUBAGENTS_DISABLED_MSG,
+		usage: zeroUsage(),
+		step,
+		startedAt,
+	};
+	stampCompletion(refused);
+	return refused;
+}
+
+// Which agent/task the refusal names. The guard fires before any mode dispatch,
+// so there is nothing per-child to report: one row, naming whatever the call
+// asked for first, in every mode.
+function refusalSubject(params: any): { agent: string; task: string } {
+	const first = params?.chain?.[0] ?? params?.tasks?.[0];
+	return {
+		agent: String(params?.agent ?? first?.agent ?? "unknown"),
+		task: String(params?.task ?? first?.task ?? ""),
+	};
 }
 
 interface SubagentDetails {
@@ -1562,21 +1631,12 @@ async function runSingle(
 		enabled?: boolean; // false = don't pin (e.g. the doctor canary)
 	},
 ): Promise<SingleResult> {
+	const startedAt = Date.now();
 	// CENTRAL kill switch: every spawn path (tool single/parallel/chain, trees,
 	// the doctor canary, anything added later) funnels through runSingle, so the
 	// host-mode disable is enforced HERE — not only in the tool's execute().
 	if (SUBAGENTS_DISABLED) {
-		const refused: SingleResult = {
-			agent: agentName,
-			agentSource: "unknown",
-			task,
-			exitCode: 1,
-			messages: [],
-			stderr: SUBAGENTS_DISABLED_MSG,
-			errorMessage: SUBAGENTS_DISABLED_MSG,
-			usage: zeroUsage(),
-			step,
-		};
+		const refused = disabledRefusal(agentName, task, startedAt, step);
 		if (track?.enabled !== false && track?.preRunId)
 			finalizeRun(track.preRunId, refused);
 		return refused;
@@ -1596,7 +1656,9 @@ async function runSingle(
 			stderr: `Unknown agent "${agentName}".${skillHint} Available agents: ${available}.`,
 			usage: zeroUsage(),
 			step,
+			startedAt,
 		};
+		stampCompletion(errResult);
 		// A pre-registered queued row (parallel/chain) would otherwise leak as
 		// "queued" forever, keeping the ticker alive. Finalize it as failed here,
 		// since this early return happens before the normal register/finalize path.
@@ -1669,6 +1731,7 @@ async function runSingle(
 		wallMs: effWallMs,
 		timedOut: null,
 		step,
+		startedAt,
 	};
 
 	// Pin this run in the live tracker. A pre-registered queued row (parallel /
@@ -1953,11 +2016,14 @@ async function runSingle(
 		// refusal is reported as an ordinary failure like any other;
 		// isProviderPolicyRefusal/clarifyRoutedModelFailure remain as general
 		// diagnostics, not as inputs to a retry decision.
+		stampCompletion(result);
 		if (runId) finalizeRun(runId, result);
 		return result;
 	} finally {
 		// Safety net: if runSingle threw before its normal finalize, don't leave the
-		// pin stuck on "running" (finalizeRun is idempotent, so a normal path no-ops).
+		// pin stuck on "running" (finalizeRun is idempotent, so a normal path no-ops)
+		// or the stage timing unstamped (stampCompletion is idempotent too).
+		stampCompletion(result);
 		if (runId) finalizeRun(runId, result);
 		if (tmpFile)
 			try {
@@ -2065,9 +2131,12 @@ export default function (pi: ExtensionAPI) {
 				// Host-mode guard: refuse to spawn ANY child (single/parallel/chain
 				// alike), explicitly and early. See PI_SUBAGENT_DISABLED comment above.
 				if (SUBAGENTS_DISABLED) {
+					const subject = refusalSubject(params);
 					return {
 						content: [{ type: "text", text: SUBAGENTS_DISABLED_MSG }],
-						details: makeDetails("single", scope, projectDir)([]),
+						details: makeDetails("single", scope, projectDir)([
+							disabledRefusal(subject.agent, subject.task),
+						]),
 						isError: true,
 					};
 				}
@@ -2204,6 +2273,7 @@ export default function (pi: ExtensionAPI) {
 						stderr: "",
 						usage: zeroUsage(),
 						timedOut: null,
+						startedAt: Date.now(),
 					}));
 					// Pre-register all tasks as "queued" so an N-way fanout shows every
 					// row at once, even the ones beyond MAX_CONCURRENCY waiting for a slot.
