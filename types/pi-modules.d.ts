@@ -16,6 +16,7 @@ declare module "@earendil-works/pi-coding-agent" {
 	export function getAgentDir(): string;
 	export function getPackageDir(): string;
 	export function getMarkdownTheme(): any;
+	export const DynamicBorder: any;
 	export function parseFrontmatter<T = Record<string, string>>(
 		content: string,
 	): { frontmatter: T; body: string };
@@ -29,6 +30,8 @@ declare module "@earendil-works/pi-tui" {
 	export const Text: any;
 	export const Markdown: any;
 	export const Spacer: any;
+	export const SelectList: any;
+	export type SelectItem = { value: string; label: string; description?: string };
 	const _default: any;
 	export default _default;
 }

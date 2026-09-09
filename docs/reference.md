@@ -69,6 +69,17 @@ option on `run`, not a separate top-level verb. `--dev` grants the session host 
 In a Pix checkout it also uses the locally loaded image and live skills.
 An installed launcher can use `--dev` without a checkout.
 
+**Themes.** Run `/theme` inside an interactive session to browse the shipped
+catalog. Use Up/Down to preview a styled palette sample, press Enter to keep a
+theme, or Escape to leave the current theme untouched. Pix offers
+16 choices, including Catppuccin, Dracula, Gruvbox, Kanagawa, Nord, One Dark,
+Rosé Pine, Solarized, Tokyo Night, and light variants. The selected name is
+stored in `~/.pix/context/themes/active` and passed to Pi on every create or
+attach, so disposable sandboxes keep the same look. `/theme NAME` switches
+directly. Pi cannot change the terminal's own background, so light themes still
+need a light terminal profile for correct contrast. The red `host` palette is
+reserved as the `--dev` safety cue and does not appear in the cosmetic picker.
+
 The shipped `environments` skill authors environment directories in your mounted
 workspace, adopts them through Pix MCP tools, and tests them in a separate host
 workspace. This works in ordinary sessions. The `pix-dev` skill uses the additional

@@ -1,5 +1,10 @@
 // Test stub for @earendil-works/pi-coding-agent (see tests/stub-loader.mjs).
 export const CONFIG_DIR_NAME = ".pi";
+export class DynamicBorder {
+	constructor() {}
+	render() { return []; }
+	invalidate() {}
+}
 export function getAgentDir() {
 	return process.env.PI_TEST_AGENT_DIR || "/nonexistent-pi-test-agent";
 }

@@ -201,6 +201,7 @@ export function renderNotices(deps) {
 	const npmRows = [...deps.npmGlobal].sort((a, b) => a.name.localeCompare(b.name));
 	const plannedRows = deps.goModulesPlanned || [];
 	const bakedToolRows = [...(deps.bakedTools || [])].sort((a, b) => a.name.localeCompare(b.name));
+	const themeRows = [...(deps.themePalettes || [])].sort((a, b) => a.name.localeCompare(b.name));
 
 	const parts = [HEADER];
 
@@ -264,6 +265,28 @@ export function renderNotices(deps) {
 		parts.push("");
 	}
 
+	if (themeRows.length) {
+		parts.push("## Theme palettes\n");
+		parts.push(
+			"Pix includes independent Pi theme definitions built from these published color palettes. Upstream names identify the palettes for attribution; the projects do not endorse Pix.\n"
+		);
+		parts.push(
+			renderTable(themeRows, [
+				{ label: "Palette", get: (r) => r.name },
+				{ label: "Pix themes", get: (r) => r.themes.map((name) => `\`${name}\``).join(", ") },
+				{ label: "License", get: (r) => r.license },
+				{ label: "Source", get: (r) => r.source },
+			])
+		);
+		parts.push("");
+		for (const r of themeRows) parts.push(`- **${r.name}:** ${r.copyright}`);
+		parts.push("");
+		parts.push("The MIT permission notice for the palettes above:\n");
+		parts.push(`Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n`);
+		parts.push("The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n");
+		parts.push(`THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\n`);
+	}
+
 	parts.push("## npm packages baked into the image (Dockerfile `npm install -g` / `pi install`)\n");
 	parts.push(
 		renderTable(npmRows, [
@@ -283,7 +306,7 @@ export function renderNotices(deps) {
 	}
 
 	parts.push(
-		"---\n\nUpstream license texts: the MPL-2.0 text — the only non-permissive license in this set — IS reproduced verbatim, in `licenses/MPL-2.0.txt`, and ships with the image and the Homebrew tarball. The permissive texts (MIT/BSD/Apache-2.0) are not reproduced here; each is available from its module cache / npm package at the versions pinned above and in `go.sum` / the Dockerfile. This file enumerates what is bundled and under what terms, per the fail-closed gate in `scripts/check-third-party-notices.sh`.\n"
+		"---\n\nUpstream license texts: the MPL-2.0 text — the only non-permissive license in this set — IS reproduced verbatim, in `licenses/MPL-2.0.txt`, and ships with the image and the Homebrew tarball. The palette MIT permission notice is reproduced above. Other permissive texts (MIT/BSD/Apache-2.0) are available from their module cache, npm package, or linked source. This file enumerates what is bundled and under what terms, per the fail-closed gate in `scripts/check-third-party-notices.sh`.\n"
 	);
 
 	return parts.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";

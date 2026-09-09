@@ -104,6 +104,26 @@ test("Suture is fully removed: no live ledger entry, no planned entry", () => {
 	assert.ok(!(deps.goModulesPlanned || []).some((m) => m.module.includes("suture")));
 });
 
+test("every shipped palette theme has permissive attribution", () => {
+	const paletteThemes = new Map();
+	for (const palette of deps.themePalettes ?? []) {
+		assert.equal(gen.classify(palette, policy).ok, true, `${palette.name}: disallowed license class`);
+		assert.ok(palette.source?.startsWith("https://"), `${palette.name}: missing source`);
+		assert.ok(palette.licenseEvidence?.startsWith("https://"), `${palette.name}: missing license evidence`);
+		assert.ok(palette.copyright, `${palette.name}: missing copyright notice`);
+		for (const name of palette.themes ?? []) {
+			assert.ok(!paletteThemes.has(name), `${name}: attributed to more than one palette`);
+			paletteThemes.set(name, palette.name);
+		}
+	}
+	const shipped = fs.readdirSync(path.join(repoRoot, "themes"))
+		.filter((name) => name.endsWith(".json"))
+		.map((name) => name.slice(0, -5));
+	const originals = new Set(deps.originalThemes ?? []);
+	assert.deepEqual(shipped.filter((name) => !paletteThemes.has(name) && !originals.has(name)), [], "shipped themes missing palette attribution");
+	assert.deepEqual([...originals].filter((name) => !shipped.includes(name)), [], "originalThemes names a theme that is not shipped");
+});
+
 test("npm globals include the patched pi-tui with attribution", () => {
 	const tui = deps.npmGlobal.find((p) => p.name === "@earendil-works/pi-tui");
 	assert.ok(tui, "expected @earendil-works/pi-tui in npmGlobal");
@@ -150,6 +170,8 @@ test("renderNotices() output contains required sections", () => {
 	assert.match(rendered, /astral-sh\/ruff/);
 	assert.match(rendered, /sharkdp\/fd/);
 	assert.match(rendered, /go\.dev\/dl/);
+	assert.match(rendered, /Theme palettes/);
+	assert.match(rendered, /Catppuccin/);
 });
 
 test("committed THIRD_PARTY_NOTICES.md is in sync with the ledger (no drift)", () => {

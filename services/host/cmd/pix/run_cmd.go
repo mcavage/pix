@@ -136,6 +136,10 @@ func (c *runCmd) Run(d *cli.Deps) error {
 	if err != nil {
 		return err
 	}
+	o.Theme = launch.ReadThemePreference()
+	if o.Dev {
+		o.Theme = "host"
+	}
 	return runLaunch(d, o)
 }
 

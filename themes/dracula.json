@@ -26,7 +26,11 @@
     "dim": "selection",
     "text": "",
     "thinkingText": "comment",
+    "scrollbarTrack": "selection",
+    "scrollbarThumb": "comment",
     "selectedBg": "selection",
+    "searchMatchBg": "yellow",
+    "searchMatchText": "bg",
     "userMessageBg": "#2d2f3d",
     "userMessageText": "",
     "customMessageBg": "#2d2f3d",
@@ -65,6 +69,7 @@
     "thinkingMedium": "purple",
     "thinkingHigh": "pink",
     "thinkingXhigh": "red",
+    "thinkingMax": "orange",
     "bashMode": "orange"
   },
   "export": {

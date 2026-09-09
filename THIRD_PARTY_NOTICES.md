@@ -40,6 +40,40 @@ from the source of truth.
 | golang.org/x/term | v0.42.0 | BSD-3-Clause |
 | gopkg.in/yaml.v3 | v3.0.1 | Apache-2.0 AND MIT |
 
+## Theme palettes
+
+Pix includes independent Pi theme definitions built from these published color palettes. Upstream names identify the palettes for attribution; the projects do not endorse Pix.
+
+| Palette | Pix themes | License | Source |
+| --- | --- | --- | --- |
+| Catppuccin | `catppuccin-latte`, `catppuccin-mocha` | MIT | https://github.com/catppuccin/palette |
+| Dracula | `dracula` | MIT | https://github.com/dracula/dracula-theme |
+| Gruvbox | `gruvbox-dark`, `gruvbox-light` | MIT | https://github.com/morhetz/gruvbox |
+| Kanagawa | `kanagawa` | MIT | https://github.com/rebelot/kanagawa.nvim |
+| Nord | `nord` | MIT | https://github.com/nordtheme/nord |
+| One Dark | `one-dark` | MIT | https://github.com/atom/one-dark-syntax |
+| Rosé Pine | `rose-pine`, `rose-pine-dawn` | MIT | https://github.com/rose-pine/vscode |
+| Solarized | `solarized-dark`, `solarized-light` | MIT | https://github.com/altercation/solarized |
+| Tokyo Night | `tokyo-night` | MIT | https://github.com/enkia/tokyo-night-vscode-theme |
+
+- **Catppuccin:** Copyright (c) 2021 Catppuccin
+- **Dracula:** Copyright (c) 2023 Dracula Theme
+- **Gruvbox:** Copyright (c) 2012 Pavel Pertsev
+- **Kanagawa:** Copyright (c) 2021 Tommaso Laurenzi
+- **Nord:** Copyright (c) 2016-present Sven Greb
+- **One Dark:** Copyright (c) 2016 GitHub Inc.
+- **Rosé Pine:** Copyright (c) 2020 mvllow
+- **Solarized:** Copyright (c) 2011 Ethan Schoonover
+- **Tokyo Night:** Copyright (c) 2018-present Enkia
+
+The MIT permission notice for the palettes above:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 ## npm packages baked into the image (Dockerfile `npm install -g` / `pi install`)
 
 | Package | Version | License |
@@ -63,4 +97,4 @@ from the source of truth.
 
 ---
 
-Upstream license texts: the MPL-2.0 text — the only non-permissive license in this set — IS reproduced verbatim, in `licenses/MPL-2.0.txt`, and ships with the image and the Homebrew tarball. The permissive texts (MIT/BSD/Apache-2.0) are not reproduced here; each is available from its module cache / npm package at the versions pinned above and in `go.sum` / the Dockerfile. This file enumerates what is bundled and under what terms, per the fail-closed gate in `scripts/check-third-party-notices.sh`.
+Upstream license texts: the MPL-2.0 text — the only non-permissive license in this set — IS reproduced verbatim, in `licenses/MPL-2.0.txt`, and ships with the image and the Homebrew tarball. The palette MIT permission notice is reproduced above. Other permissive texts (MIT/BSD/Apache-2.0) are available from their module cache, npm package, or linked source. This file enumerates what is bundled and under what terms, per the fail-closed gate in `scripts/check-third-party-notices.sh`.

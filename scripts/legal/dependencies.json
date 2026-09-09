@@ -72,6 +72,90 @@
     }
   ],
   "goModulesPlanned": [],
+  "originalThemes": ["host", "pix"],
+  "themePalettes": [
+    {
+      "name": "Catppuccin",
+      "themes": ["catppuccin-latte", "catppuccin-mocha"],
+      "license": "MIT",
+      "copyright": "Copyright (c) 2021 Catppuccin",
+      "source": "https://github.com/catppuccin/palette",
+      "licenseEvidence": "https://github.com/catppuccin/palette/blob/main/LICENSE",
+      "class": "permissive"
+    },
+    {
+      "name": "Dracula",
+      "themes": ["dracula"],
+      "license": "MIT",
+      "copyright": "Copyright (c) 2023 Dracula Theme",
+      "source": "https://github.com/dracula/dracula-theme",
+      "licenseEvidence": "https://github.com/dracula/dracula-theme/blob/main/LICENSE",
+      "class": "permissive"
+    },
+    {
+      "name": "Gruvbox",
+      "themes": ["gruvbox-dark", "gruvbox-light"],
+      "license": "MIT",
+      "copyright": "Copyright (c) 2012 Pavel Pertsev",
+      "source": "https://github.com/morhetz/gruvbox",
+      "licenseEvidence": "https://github.com/morhetz/gruvbox#license",
+      "class": "permissive"
+    },
+    {
+      "name": "Kanagawa",
+      "themes": ["kanagawa"],
+      "license": "MIT",
+      "copyright": "Copyright (c) 2021 Tommaso Laurenzi",
+      "source": "https://github.com/rebelot/kanagawa.nvim",
+      "licenseEvidence": "https://github.com/rebelot/kanagawa.nvim/blob/master/LICENSE",
+      "class": "permissive"
+    },
+    {
+      "name": "Nord",
+      "themes": ["nord"],
+      "license": "MIT",
+      "copyright": "Copyright (c) 2016-present Sven Greb",
+      "source": "https://github.com/nordtheme/nord",
+      "licenseEvidence": "https://github.com/nordtheme/nord/blob/develop/license",
+      "class": "permissive"
+    },
+    {
+      "name": "One Dark",
+      "themes": ["one-dark"],
+      "license": "MIT",
+      "copyright": "Copyright (c) 2016 GitHub Inc.",
+      "source": "https://github.com/atom/one-dark-syntax",
+      "licenseEvidence": "https://github.com/atom/one-dark-syntax/blob/master/LICENSE.md",
+      "class": "permissive"
+    },
+    {
+      "name": "Rosé Pine",
+      "themes": ["rose-pine", "rose-pine-dawn"],
+      "license": "MIT",
+      "copyright": "Copyright (c) 2020 mvllow",
+      "source": "https://github.com/rose-pine/vscode",
+      "licenseEvidence": "https://github.com/rose-pine/vscode/blob/main/license",
+      "class": "permissive"
+    },
+    {
+      "name": "Solarized",
+      "themes": ["solarized-dark", "solarized-light"],
+      "license": "MIT",
+      "copyright": "Copyright (c) 2011 Ethan Schoonover",
+      "source": "https://github.com/altercation/solarized",
+      "licenseEvidence": "https://github.com/altercation/solarized/blob/master/LICENSE",
+      "class": "permissive"
+    },
+    {
+      "name": "Tokyo Night",
+      "themes": ["tokyo-night"],
+      "license": "MIT",
+      "copyright": "Copyright (c) 2018-present Enkia",
+      "source": "https://github.com/enkia/tokyo-night-vscode-theme",
+      "licenseEvidence": "https://github.com/enkia/tokyo-night-vscode-theme/blob/master/LICENSE.txt",
+      "class": "permissive"
+    }
+  ],
   "npmGlobal": [
     {
       "name": "@earendil-works/pi-coding-agent",

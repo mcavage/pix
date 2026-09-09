@@ -71,13 +71,19 @@
 //     outside the SELECTED profile, handled the same as any other
 //     undocumented key.
 //
+// The same wrapped profile accepts v0.39 optional workspaces and ports,
+// observed on v0.39.0-1112-gad2ac89f4. Present workspaces must be strings;
+// ports must carry host_ip/protocol strings and integer host_port/sandbox_port
+// values in 1..65535. Missing mounts on an unrelated sandbox must not make
+// the host-global listing unreadable. See list_v39_test.go.
+//
 // Leniency does not imply trust. Under the legacy profile, a row is
 // IdentityVerified only when every field it supplied used the CANONICAL key
 // (not a fallback alias) and carried no key outside the fully documented
 // set; a row that had to lean on an alias, or came with a key this package
 // has never heard of, parses successfully but reports IdentityVerified=false.
 // Under the v0.38 profile, the pinned evidence is stronger, so the bar is
-// higher in one direction and lower in another: id/status/agent/workspaces
+// higher in one direction and lower in another: id/status/agent
 // are each REQUIRED with the documented type; workspace_missing may be absent
 // but must be bool when present (missing required or mistyped fields fail the
 // WHOLE parse, not just this row — see parseRowV38). id

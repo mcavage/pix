@@ -2,17 +2,17 @@
   "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "pix",
   "vars": {
-    "accent": "#7dcfff",
-    "iris": "#c099ff",
-    "teal": "#4fd6be",
-    "amber": "#ffc777",
-    "green": "#c3e88d",
-    "red": "#ff757f",
-    "coral": "#ff966c",
-    "muted": "#828bb8",
-    "dim": "#545c7e",
-    "surface": "#222436",
-    "surfaceHi": "#2f334d"
+    "accent": "#60a5fa",
+    "iris": "#a78bfa",
+    "teal": "#2dd4bf",
+    "amber": "#fbbf24",
+    "green": "#86efac",
+    "red": "#fb7185",
+    "coral": "#fb923c",
+    "muted": "#94a3b8",
+    "dim": "#64748b",
+    "surface": "#1e293b",
+    "surfaceHi": "#334155"
   },
   "colors": {
     "accent": "accent",
@@ -26,7 +26,11 @@
     "dim": "dim",
     "text": "",
     "thinkingText": "muted",
+    "scrollbarTrack": "dim",
+    "scrollbarThumb": "muted",
     "selectedBg": "surfaceHi",
+    "searchMatchBg": "amber",
+    "searchMatchText": "surface",
     "userMessageBg": "surface",
     "userMessageText": "",
     "customMessageBg": "surface",
@@ -65,10 +69,11 @@
     "thinkingMedium": "accent",
     "thinkingHigh": "iris",
     "thinkingXhigh": "red",
+    "thinkingMax": "coral",
     "bashMode": "amber"
   },
   "export": {
-    "pageBg": "#1a1b26",
+    "pageBg": "#0f172a",
     "cardBg": "#222436",
     "infoBg": "#2f334d"
   }

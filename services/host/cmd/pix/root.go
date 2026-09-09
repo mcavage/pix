@@ -112,6 +112,10 @@ func dispatch(argv []string, d *cli.Deps) int {
 		fmt.Fprintln(d.Err, "pix: refusing an implicit --dev launch on a non-interactive terminal. Run it explicitly instead: pix run --dev")
 		return 2
 	}
+	if len(argv) > 0 && argv[0] == "--" && !d.Interactive {
+		fmt.Fprintln(d.Err, "pix: refusing an implicit launch on a non-interactive terminal. Run it explicitly instead: pix run -- <pi arguments>")
+		return 2
+	}
 	argv = normalizeArgv(argv)
 	// A bare positional is `run DIR` when it names a directory, and a verb typo
 	// otherwise. kong would call both "unexpected argument".
@@ -169,8 +173,8 @@ func printRootError(w io.Writer, err error) {
 // every decision downstream, and it never fires for a real subcommand.
 func normalizeArgv(argv []string) []string {
 	// Plain `pix` is implicit `pix run`; let its dev-mode spelling take the
-	// same direct form instead of making `pix --dev` an unknown root flag.
-	if len(argv) > 0 && argv[0] == "--dev" {
+	// same direct form, including a bare `pix -- <pi arguments>` tail.
+	if len(argv) > 0 && (argv[0] == "--dev" || argv[0] == "--") {
 		argv = append([]string{"run"}, argv...)
 	}
 	if len(argv) == 3 && argv[0] == "task" && argv[2] == "path" && !isTaskKnownVerb(argv[1]) {
