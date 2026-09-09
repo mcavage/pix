@@ -10,7 +10,10 @@ import (
 	"pix/host/sandbox"
 )
 
-const kitRepo = "git+https://github.com/mcavage/pix.git"
+const (
+	kitRepo              = "git+https://github.com/mcavage/pix.git"
+	shippedHostThemePath = "/home/agent/.pi/agent/themes/host.json"
+)
 
 // DockerImageRepo is the published image repo. A local build pins a locally
 // loaded tag from <repo>/out/.local-image-tag via --template.
@@ -39,6 +42,7 @@ type RunOpts struct {
 	EnvName string
 	Model   string   // --model M: active pi model (passed through to pi)
 	Resume  string   // --resume SESSION: resume this pi session, on every path (create or attach)
+	Theme   string   // saved global Pi theme, passed on every create and attach
 	Models  []string // create-time callable model cycle, derived from probed bindings
 	// Keep is -k/--keep: bind a sticky, identity-bound keep marker to this
 	// session — what the teardown and the orphan sweep refuse on.
@@ -203,6 +207,7 @@ func BuildPiInvocation(liveSkills []string, o RunOpts) []string {
 	if o.Resume != "" {
 		piArgs = append(piArgs, "--session", o.Resume)
 	}
+	piArgs = appendThemeArgs(piArgs, o.Theme)
 	if len(o.Models) > 0 {
 		piArgs = append(piArgs, "--models", strings.Join(o.Models, ","))
 	}
@@ -268,10 +273,24 @@ func BuildReattachArgs(o RunOpts) []string {
 	if o.Resume != "" {
 		piArgs = append(piArgs, "--session", o.Resume)
 	}
+	piArgs = appendThemeArgs(piArgs, o.Theme)
 	piArgs = append(piArgs, o.Passthrough...)
 	if len(piArgs) > 0 {
 		args = append(args, "--")
 		args = append(args, piArgs...)
+	}
+	return args
+}
+
+func appendThemeArgs(args []string, theme string) []string {
+	if theme == "host" {
+		// Host mode disables discovered themes before loading the pinned safety
+		// palette. Pi deduplicates names first-wins, so a project host.json would
+		// otherwise shadow a later CLI path even though that path is explicit.
+		args = append(args, "--no-themes", "--theme", shippedHostThemePath)
+	}
+	if theme != "" {
+		args = append(args, "--use-theme", theme)
 	}
 	return args
 }

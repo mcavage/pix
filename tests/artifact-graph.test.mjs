@@ -181,6 +181,9 @@ test("the runtime archive stages skills/agents/settings/keybindings/themes into 
 	]) {
 		assert.ok(listing.includes(member), `runtime archive is missing ${member}`);
 	}
+	for (const file of fs.readdirSync(path.join(repoRoot, "themes")).filter((name) => name.endsWith(".json"))) {
+		assert.ok(listing.includes(`runtime/9.9.9/pi/themes/${file}`), `runtime archive is missing shipped theme ${file}`);
+	}
 
 	// Building the archive must never move or rewrite the LIVE repo-root
 	// directories `make run`'s dev-mode --skill flag reads (Mode B live

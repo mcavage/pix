@@ -97,15 +97,15 @@ const v38WrapperKey = "sandboxes"
 // otherwise pristine.
 var legacyAliasWrapperKeys = []string{"items", "boxes"}
 
-// v38RowKeys are the complete allowed row keys sbx v0.38 emits per sandbox:
+// v38RowKeys are the allowed row keys observed in sbx v0.38/v0.39:
 // name, id (a UUID), agent (string), status (a recognized value), workspaces
-// (array), plus optional workspace_missing (bool, omitted when false on some
-// v0.38 builds). Unlike the legacy profile's nameKeys/
+// (optional array since v0.39), ports (optional array), and workspace_missing
+// (optional bool). Unlike the legacy profile's nameKeys/
 // stateKeys/idKeys, this profile has NO key aliases — a v38-wrapped row using
 // a legacy alias (e.g. "instance_id" instead of "id") is a key outside the
 // selected profile, which this package treats the same as any other
 // undocumented key: never silently accepted as canonical.
-var v38RowKeys = []string{"name", "id", "agent", "status", "workspaces", "workspace_missing"}
+var v38RowKeys = []string{"name", "id", "agent", "status", "workspaces", "workspace_missing", "ports"}
 
 // v38UUIDPattern is the shape check for the v0.38 row's "id" field: canonical
 // 8-4-4-4-12 hyphenated hex, the documented UUID form. It does not pin a
@@ -155,7 +155,7 @@ type ParseResult struct {
 // uses the v0.38 profile (v38RowKeys, alias-free — see parseRowV38). It
 // never panics and never silently drops a row it cannot name: a row missing
 // every documented name-key alias, or (under the v0.38 profile) missing or
-// mistyping id/status/agent/workspaces/workspace_missing, fails the WHOLE
+// mistyping id/status/agent, or mistyping optional metadata, fails the WHOLE
 // parse (fail-closed — silently dropping an unparseable row could hide a
 // live sandbox from a caller deciding whether one already exists). A row it
 // CAN name but had to lean on a legacy alias for, or that carried an
@@ -295,8 +295,8 @@ func parseRow(m map[string]any) (Entry, error) {
 }
 
 // parseRowV38 parses one row of the v0.38 canonical profile: name, id, agent,
-// status and workspaces are required with exact canonical keys; optional
-// workspace_missing is accepted only as a bool (no aliases — see v38RowKeys'
+// status are required with exact canonical keys; optional workspaces, ports and
+// workspace_missing are type-checked (workspace_missing must be a bool) (no aliases — see v38RowKeys'
 // doc). Every present field must have the exact documented
 // type. Unlike the legacy profile, where a missing/wrong-typed id or state is
 // tolerated (id is optional; an unreadable state value degrades to
@@ -343,12 +343,41 @@ func parseRowV38(m map[string]any) (Entry, error) {
 		return Entry{}, fmt.Errorf("field %q is not a string", "agent")
 	}
 
-	workspacesVal, present := m["workspaces"]
-	if !present {
-		return Entry{}, fmt.Errorf("v0.38 row missing required field %q", "workspaces")
+	// sbx v0.39 omits workspaces for sandboxes without mounts. This is
+	// common in the host-global listing even when the target has mounts.
+	if workspacesVal, present := m["workspaces"]; present {
+		workspaces, ok := workspacesVal.([]any)
+		if !ok {
+			return Entry{}, fmt.Errorf("field %q is not an array", "workspaces")
+		}
+		for _, workspace := range workspaces {
+			if _, ok := workspace.(string); !ok {
+				return Entry{}, fmt.Errorf("workspace is not a string")
+			}
+		}
 	}
-	if _, ok := workspacesVal.([]any); !ok {
-		return Entry{}, fmt.Errorf("field %q is not an array", "workspaces")
+	if portsVal, present := m["ports"]; present {
+		ports, ok := portsVal.([]any)
+		if !ok {
+			return Entry{}, fmt.Errorf("field %q is not an array", "ports")
+		}
+		for _, port := range ports {
+			p, ok := port.(map[string]any)
+			if !ok || hasUndocumentedKeys(p, []string{"host_ip", "host_port", "sandbox_port", "protocol"}) {
+				return Entry{}, fmt.Errorf("port has an unrecognized shape")
+			}
+			for _, key := range []string{"host_ip", "protocol"} {
+				if _, ok := p[key].(string); !ok {
+					return Entry{}, fmt.Errorf("port field %q is not a string", key)
+				}
+			}
+			for _, key := range []string{"host_port", "sandbox_port"} {
+				n, ok := p[key].(float64)
+				if !ok || n < 1 || n > 65535 || n != float64(int(n)) {
+					return Entry{}, fmt.Errorf("port field %q is not a valid port number", key)
+				}
+			}
+		}
 	}
 
 	if wmVal, present := m["workspace_missing"]; present {
