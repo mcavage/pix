@@ -137,10 +137,61 @@ Workflow prompt templates (in `prompts/`): `/fan-out`, `/deep-dive`,
 | --- | --- | --- |
 | `PI_SUBAGENT_IDLE_MS` | 300000 (5 min) | kill a child after this long with no output |
 | `PI_SUBAGENT_TIMEOUT_MS` | 3600000 (60 min) | hard wall-clock cap per child |
-| `PI_SUBAGENT_MAX_CONCURRENCY` | 4 | concurrent children in parallel mode |
-| `PI_SUBAGENT_MAX_PARALLEL` | 8 | max tasks in one parallel call |
+| `PI_SUBAGENT_MAX_CONCURRENCY` | 8 | concurrent children in parallel mode |
+| `PI_SUBAGENT_MAX_PARALLEL` | 16 | max tasks in one parallel call |
 | `PI_SUBAGENT_MAX_DEPTH` | 3 | tree depth cap (fork-bomb guard) |
 | `PI_SUBAGENT_DEPTH` | (internal) | current depth, set on children |
+
+**Per-child timing sits alongside usage in the result details, not in a second
+accounting system.** Every `details.results[]` entry carries the existing
+`usage` (input/output/cache tokens, cost, turns) *and* stage wall-clock timing:
+`startedAt` and `endedAt` are epoch milliseconds; `durationMs` is their
+millisecond difference. Timing is
+stamped for every run, including the results that never spawn a child (unknown
+agent, host-mode refusal), and completion is stamped before the tool result is
+returned, so a caller can attribute elapsed time per child in single, parallel,
+and chain mode without inferring it from log order. There is no separate rate or
+metering channel: token and cost accounting stays in `usage` and in
+`aggregateSubagentUsage`, which is what the parent session bills.
+
+Response identity also travels with the result. `details.parentModels` contains
+unique provider/model pairs observed in assistant messages on the parent's current
+session branch; each child retains that snapshot alongside its own response
+metadata. The text result exposes both so the main agent can establish review
+independence when it authored the patch. Requested configuration and user prose
+are never substitutes for observed metadata; an unavailable session branch yields
+an empty list. These observations do not by themselves identify who authored a
+particular file.
+
+A zero process exit without final assistant text is an unverified completion and
+is marked failed. Single calls report the error, parallel summaries exclude the
+child from their success count, and chains stop before dependent steps. A mixed
+parallel batch retains its existing partial-success behavior. Earlier prose is
+still shown for progress and timeout diagnostics, but cannot establish completion.
+
+Two edge cases define the contract:
+
+- **A host-mode refusal is one timed row, not an empty array.** With
+  `PI_SUBAGENT_DISABLED=1` the tool refuses before any mode dispatch and returns
+  `details.results` holding exactly one result: the requested agent and task,
+  `exitCode: 1`, the refusal in `errorMessage`/`stderr`, zero usage, no
+  messages, and full timing, in single, parallel, and chain mode alike
+  (`details.mode` stays `single`, because nothing was dispatched). The same
+  shape is produced by the central kill switch inside `runSingle`, which stays
+  as defense in depth behind the tool's and the doctor's own guards. An empty
+  array would have made callers read "refused" as "no rows" and would have
+  thrown away the refusal's timing.
+- **A backward clock clamps `endedAt`, not `durationMs`.** Wall-clock time can
+  step back mid-run (NTP correction), so the pure `completionTiming(startedAt,
+  now)` helper returns `endedAt = max(startedAt, now)` and `durationMs = endedAt
+  - startedAt`. Clamping only the duration would publish a nonnegative
+  `durationMs` next to an `endedAt` that precedes `startedAt`. The invariants
+  are `endedAt >= startedAt` and `durationMs === endedAt - startedAt`, always.
+
+Pinned by `tests/subagent-timing.test.mjs`, which drives every case through the
+registered tool's `execute` (the path the model actually takes) and tests the
+backward-clock edge directly against the pure helper, the only export the
+timing tests need.
 
 **Per-agent budget overrides (frontmatter).** The env vars are read ONCE at pi
 startup, so a slow-by-design agent cannot raise them live. Instead an agent

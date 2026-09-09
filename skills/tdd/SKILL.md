@@ -1,6 +1,6 @@
 ---
 name: tdd
-description: Test-driven development, write a failing test first, watch it fail, write minimal code to pass, watch it pass, refactor. Use when writing or fixing logic and you need proof it tests anything.
+description: Standalone red/green/refactor guidance. Deliver already includes this cycle; do not load alongside it unless a testing question needs more detail or the user requests it.
 ---
 # tdd
 

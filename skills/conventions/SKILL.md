@@ -1,6 +1,6 @@
 ---
 name: conventions
-description: Working directory layout, scratch-file rules, output formats, terminal rendering, estimation, and how long multi-stage workflows survive compaction. Auto-loads on engineering and content work.
+description: Scratch layout, persisted workflow state, and output conventions. During deliver, use its embedded rules; load this only for an uncovered requirement or an explicit request.
 ---
 # conventions
 

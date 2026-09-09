@@ -12,6 +12,28 @@ Pix v2 is a breaking cutover to native Docker Sandbox environments. Existing
 v1 configuration and removed commands are not translated automatically. See
 [getting started](docs/getting-started.md) for the current setup flow.
 
+### Delivery instructions
+
+- Review handoffs supply a readable shipping diff and prior findings; read-only
+  reviewers are no longer instructed to run shell commands they cannot access.
+
+- Resumed delivery can reuse recorded checks when the candidate, requirements,
+  inputs, and environment still match. A new turn alone does not require another
+  full test run; reused evidence retains its original timestamp.
+
+- Empty subagent results are marked failed, excluded from parallel success counts,
+  and stop dependent chain steps. Partial progress remains available for timeout
+  diagnostics but does not count as a completed result.
+- Subagent results expose observed parent-session model metadata so a main-agent
+  implementation can establish review independence without guessing its model.
+
+- `deliver` keeps routine Git, scratch-file, testing, and reporting rules in its
+  entry instructions. Supporting skills load for uncovered requirements or an
+  explicit request; ordinary coding status reports do not trigger editorial review.
+- One implementer owns delivery, with independent cross-vendor review of the
+  candidate and its test evidence. Detailed verification and review instructions
+  load at those stages.
+
 ### Credential isolation and release recovery
 
 - Google setup and each Gateway integration resolve only their declared keys.

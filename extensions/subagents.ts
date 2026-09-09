@@ -550,6 +550,7 @@ function addUsage(target: UsageStats, usage: any): void {
 }
 
 interface SingleResult {
+	parentModels?: ObservedModel[];
 	agent: string;
 	agentSource: "user" | "project" | "unknown";
 	task: string;
@@ -569,31 +570,124 @@ interface SingleResult {
 	wallMs?: number;
 	step?: number;
 	fallbackFrom?: string;
+	// Wall-clock stage timing in epoch milliseconds. This is NOT a second usage
+	// or rate system: it records only when a child's stage began and ended, so a
+	// caller can attribute elapsed time per child alongside the existing usage
+	// totals. Every result carries startedAt, including the early returns
+	// (disabled, unknown agent), and endedAt/durationMs are stamped before the
+	// result leaves runSingle.
+	startedAt: number;
+	endedAt?: number;
+	durationMs?: number;
+}
+
+// Wall-clock time can step BACKWARD mid-run (NTP correction, a manual clock
+// set), and every caller reads durationMs as exactly endedAt - startedAt. So
+// clamp the END, not the duration: clamping only the duration would publish a
+// nonnegative durationMs next to an endedAt that precedes startedAt, i.e. three
+// fields that contradict each other. Pure and exported so that edge is testable
+// deterministically, without a clock stub or a whole child run.
+export function completionTiming(
+	startedAt: number,
+	now: number,
+): { endedAt: number; durationMs: number } {
+	const endedAt = Math.max(startedAt, now);
+	return { endedAt, durationMs: endedAt - startedAt };
+}
+
+// Idempotent like finalizeRun: the normal path stamps once, the safety net in
+// runSingle's finally no-ops.
+function stampCompletion(r: SingleResult): void {
+	if (r.endedAt !== undefined) return;
+	const t = completionTiming(r.startedAt, Date.now());
+	r.endedAt = t.endedAt;
+	r.durationMs = t.durationMs;
+}
+
+// The single shape of a host-mode refusal, shared by the tool's early return and
+// by runSingle's central kill switch, so both report an identical fully-stamped
+// result. The tool used to return an empty results array here, which forced
+// callers to special-case "refused" as "no rows" and lost the refusal's timing.
+function disabledRefusal(
+	agentName: string,
+	task: string,
+	startedAt: number = Date.now(),
+	step?: number,
+): SingleResult {
+	const refused: SingleResult = {
+		agent: agentName,
+		agentSource: "unknown",
+		task,
+		exitCode: 1,
+		messages: [],
+		stderr: SUBAGENTS_DISABLED_MSG,
+		errorMessage: SUBAGENTS_DISABLED_MSG,
+		usage: zeroUsage(),
+		step,
+		startedAt,
+	};
+	stampCompletion(refused);
+	return refused;
+}
+
+// Which agent/task the refusal names. The guard fires before any mode dispatch,
+// so there is nothing per-child to report: one row, naming whatever the call
+// asked for first, in every mode.
+function refusalSubject(params: any): { agent: string; task: string } {
+	const first = params?.chain?.[0] ?? params?.tasks?.[0];
+	return {
+		agent: String(params?.agent ?? first?.agent ?? "unknown"),
+		task: String(params?.task ?? first?.task ?? ""),
+	};
 }
 
 interface SubagentDetails {
+	parentModels?: ObservedModel[];
 	mode: "single" | "parallel" | "chain";
 	scope: AgentScope;
 	projectDir: string | null;
 	results: SingleResult[];
 }
 
+function messageText(message: any): string {
+	if (typeof message?.content === "string") return message.content;
+	return Array.isArray(message?.content)
+		? message.content.filter((part: any) => part?.type === "text" && typeof part.text === "string")
+			.map((part: any) => part.text).join("\n")
+		: "";
+}
 function finalText(messages: any[]): string {
+	for (let i = messages.length - 1; i >= 0; i--)
+		if (messages[i]?.role === "assistant") return messageText(messages[i]);
+	return "";
+}
+// Progress and timeout diagnostics may retain earlier prose, but completion may not.
+function partialText(messages: any[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
-		const m = messages[i];
-		if (m?.role === "assistant" && Array.isArray(m.content)) {
-			for (const part of m.content)
-				if (part?.type === "text") return part.text ?? "";
-		}
+		if (messages[i]?.role !== "assistant") continue;
+		const text = messageText(messages[i]);
+		if (text.trim()) return text;
 	}
 	return "";
+}
+interface ObservedModel { provider: string; model: string; }
+function observedParentModels(ctx: any): ObservedModel[] {
+	try {
+		const models = new Map<string, ObservedModel>();
+		for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+			const m = entry?.type === "message" ? entry.message : null;
+			if (m?.role !== "assistant" || typeof m.provider !== "string" || !m.provider || typeof m.model !== "string" || !m.model) continue;
+			models.set(JSON.stringify([m.provider, m.model]), { provider: m.provider, model: m.model });
+		}
+		return [...models.values()];
+	} catch { return []; }
 }
 // Runtime message metadata is evidence; the child's prose and requested model are not.
 function modelEvidence(r: SingleResult): string {
  const models = [...new Set(r.messages
   .filter((m) => m?.role === "assistant" && m.provider && m.model)
   .map((m) => `${m.provider}/${m.model}`))];
- return `Agent: ${r.agent}; model observed: ${models.join(", ") || "unavailable (no response metadata)"}`;
+ return `Agent: ${r.agent}; model observed: ${models.join(", ") || "unavailable (no response metadata)"}\nParent session models observed: ${(r.parentModels ?? []).map((m) => `${m.provider}/${m.model}`).join(", ") || "unavailable (no response metadata)"}`;
 }
 
 function isFailed(r: SingleResult): boolean {
@@ -648,9 +742,9 @@ export function clarifyRoutedModelFailure(r: SingleResult, agent: AgentConfig): 
 function resultOutput(r: SingleResult): string {
 	if (isFailed(r)) {
 		if (r.timedOut === "idle")
-			return `Timed out: no output for ${Math.round((r.idleMs ?? IDLE_MS) / 1000)}s (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
+			return `Timed out: no output for ${Math.round((r.idleMs ?? IDLE_MS) / 1000)}s (killed). Partial output:\n${partialText(r.messages) || r.stderr || "(none)"}`;
 		if (r.timedOut === "wall")
-			return `Timed out: exceeded ${Math.round((r.wallMs ?? WALL_MS) / 1000)}s wall-clock (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
+			return `Timed out: exceeded ${Math.round((r.wallMs ?? WALL_MS) / 1000)}s wall-clock (killed). Partial output:\n${partialText(r.messages) || r.stderr || "(none)"}`;
 		return r.errorMessage || r.stderr || finalText(r.messages) || "(no output)";
 	}
 	const text = `${modelEvidence(r)}\n\n${finalText(r.messages) || "(no output)"}`;
@@ -1562,21 +1656,12 @@ async function runSingle(
 		enabled?: boolean; // false = don't pin (e.g. the doctor canary)
 	},
 ): Promise<SingleResult> {
+	const startedAt = Date.now();
 	// CENTRAL kill switch: every spawn path (tool single/parallel/chain, trees,
 	// the doctor canary, anything added later) funnels through runSingle, so the
 	// host-mode disable is enforced HERE — not only in the tool's execute().
 	if (SUBAGENTS_DISABLED) {
-		const refused: SingleResult = {
-			agent: agentName,
-			agentSource: "unknown",
-			task,
-			exitCode: 1,
-			messages: [],
-			stderr: SUBAGENTS_DISABLED_MSG,
-			errorMessage: SUBAGENTS_DISABLED_MSG,
-			usage: zeroUsage(),
-			step,
-		};
+		const refused = disabledRefusal(agentName, task, startedAt, step);
 		if (track?.enabled !== false && track?.preRunId)
 			finalizeRun(track.preRunId, refused);
 		return refused;
@@ -1596,7 +1681,9 @@ async function runSingle(
 			stderr: `Unknown agent "${agentName}".${skillHint} Available agents: ${available}.`,
 			usage: zeroUsage(),
 			step,
+			startedAt,
 		};
+		stampCompletion(errResult);
 		// A pre-registered queued row (parallel/chain) would otherwise leak as
 		// "queued" forever, keeping the ticker alive. Finalize it as failed here,
 		// since this early return happens before the normal register/finalize path.
@@ -1656,6 +1743,7 @@ async function runSingle(
 		Math.max(agent.toolIdleMs ?? TOOL_IDLE_MS, effIdleMs),
 	);
 	const result: SingleResult = {
+		parentModels: makeDetails([]).parentModels ?? [],
 		agent: agentName,
 		agentSource: agent.source,
 		task,
@@ -1669,6 +1757,7 @@ async function runSingle(
 		wallMs: effWallMs,
 		timedOut: null,
 		step,
+		startedAt,
 	};
 
 	// Pin this run in the live tracker. A pre-registered queued row (parallel /
@@ -1693,7 +1782,7 @@ async function runSingle(
 		if (runId) updateRun(runId, result);
 		onUpdate?.({
 			content: [
-				{ type: "text", text: finalText(result.messages) || "(running...)" },
+				{ type: "text", text: partialText(result.messages) || "(running...)" },
 			],
 			details: makeDetails([result]),
 		});
@@ -1944,6 +2033,10 @@ async function runSingle(
 			result.stopReason = "aborted";
 			result.errorMessage = result.errorMessage || "Subagent aborted.";
 		}
+		if (!isFailed(result) && !finalText(result.messages).trim()) {
+			result.stopReason = "error";
+			result.errorMessage = result.errorMessage || "Agent exited without a final text response; completion is unverified.";
+		}
 		clarifyRoutedModelFailure(result, agent);
 
 		// There is no cross-vendor retry-on-policy-refusal anymore: it used to
@@ -1953,11 +2046,14 @@ async function runSingle(
 		// refusal is reported as an ordinary failure like any other;
 		// isProviderPolicyRefusal/clarifyRoutedModelFailure remain as general
 		// diagnostics, not as inputs to a retry decision.
+		stampCompletion(result);
 		if (runId) finalizeRun(runId, result);
 		return result;
 	} finally {
 		// Safety net: if runSingle threw before its normal finalize, don't leave the
-		// pin stuck on "running" (finalizeRun is idempotent, so a normal path no-ops).
+		// pin stuck on "running" (finalizeRun is idempotent, so a normal path no-ops)
+		// or the stage timing unstamped (stampCompletion is idempotent too).
+		stampCompletion(result);
 		if (runId) finalizeRun(runId, result);
 		if (tmpFile)
 			try {
@@ -2027,11 +2123,13 @@ export default function (pi: ExtensionAPI) {
 			mode: "single" | "parallel" | "chain",
 			scope: AgentScope,
 			projectDir: string | null,
+			parentModels: ObservedModel[] = [],
 		) =>
 		(results: SingleResult[]): SubagentDetails => ({
 			mode,
 			scope,
 			projectDir,
+			parentModels,
 			results,
 		});
 
@@ -2061,13 +2159,17 @@ export default function (pi: ExtensionAPI) {
 				const discovered = discoverAgents(ctx.cwd, scope);
 				const agents = inheritActiveParentModel(discovered.agents, ctx.model);
 				const projectDir = discovered.projectDir;
+				const parentModels = observedParentModels(ctx);
 
 				// Host-mode guard: refuse to spawn ANY child (single/parallel/chain
 				// alike), explicitly and early. See PI_SUBAGENT_DISABLED comment above.
 				if (SUBAGENTS_DISABLED) {
+					const subject = refusalSubject(params);
 					return {
 						content: [{ type: "text", text: SUBAGENTS_DISABLED_MSG }],
-						details: makeDetails("single", scope, projectDir)([]),
+						details: makeDetails("single", scope, projectDir, parentModels)([
+							disabledRefusal(subject.agent, subject.task),
+						]),
 						isError: true,
 					};
 				}
@@ -2081,7 +2183,7 @@ export default function (pi: ExtensionAPI) {
 								text: `Subagent depth limit reached (${CURRENT_DEPTH}/${MAX_DEPTH}). This subagent must do the work itself instead of delegating further. (Raise PI_SUBAGENT_MAX_DEPTH to allow deeper trees.)`,
 							},
 						],
-						details: makeDetails("single", scope, projectDir)([]),
+						details: makeDetails("single", scope, projectDir, parentModels)([]),
 						isError: true,
 					};
 				}
@@ -2101,14 +2203,14 @@ export default function (pi: ExtensionAPI) {
 								text: `Provide exactly one mode (agent+task, tasks[], or chain[]).\nAvailable agents: ${available}`,
 							},
 						],
-						details: makeDetails("single", scope, projectDir)([]),
+						details: makeDetails("single", scope, projectDir, parentModels)([]),
 						isError: true,
 					};
 				}
 
 				// ── chain ──
 				if (hasChain) {
-					const md = makeDetails("chain", scope, projectDir);
+					const md = makeDetails("chain", scope, projectDir, parentModels);
 					const results: SingleResult[] = [];
 					let prev = "";
 					// Pre-register every step as "queued" so the pin shows the whole
@@ -2190,11 +2292,11 @@ export default function (pi: ExtensionAPI) {
 									text: `Too many parallel tasks (${params.tasks.length}); max is ${MAX_PARALLEL}.`,
 								},
 							],
-							details: makeDetails("parallel", scope, projectDir)([]),
+							details: makeDetails("parallel", scope, projectDir, parentModels)([]),
 							isError: true,
 						};
 					}
-					const md = makeDetails("parallel", scope, projectDir);
+					const md = makeDetails("parallel", scope, projectDir, parentModels);
 					const all: SingleResult[] = params.tasks.map((t: any) => ({
 						agent: t.agent,
 						agentSource: "unknown" as const,
@@ -2204,6 +2306,7 @@ export default function (pi: ExtensionAPI) {
 						stderr: "",
 						usage: zeroUsage(),
 						timedOut: null,
+						startedAt: Date.now(),
 					}));
 					// Pre-register all tasks as "queued" so an N-way fanout shows every
 					// row at once, even the ones beyond MAX_CONCURRENCY waiting for a slot.
@@ -2276,7 +2379,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				// ── single ──
-				const md = makeDetails("single", scope, projectDir);
+				const md = makeDetails("single", scope, projectDir, parentModels);
 				const r = await runSingle(
 					ctx.cwd,
 					agents,
@@ -2424,7 +2527,7 @@ export default function (pi: ExtensionAPI) {
 										0,
 									),
 								);
-						const out = finalText(r.messages);
+						const out = r.exitCode === -1 || r.timedOut ? partialText(r.messages) : finalText(r.messages);
 						if (out) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(out.trim(), 0, 0, mdTheme));

@@ -6,7 +6,7 @@
 // disk (skills/*/SKILL.md + agents/*.md frontmatter) and asking pi for its live
 // command list. Nothing here hardcodes the full skill roster — only the GROUP
 // membership lists (which bucket a skill lands in) and the reference-rule set
-// (skills that auto-load as conventions and are hidden from the map) are
+// (reference skills loaded when relevant and hidden from the map) are
 // constants. A skill that isn't in any group still shows up under OTHER, so a
 // new skill is never silently dropped.
 //
@@ -44,7 +44,7 @@ const GROUPS: Array<{ title: string; members: string[] }> = [
 	{ title: "SYSTEM", members: ["onboarding", "promote"] },
 ];
 
-// Skills that are reference rules (auto-load as conventions) — hidden from the
+// Skills that are reference rules (loaded when relevant) — hidden from the
 // main /help body, counted in a one-line footer instead.
 const REFERENCE = new Set([
 	"conventions",
@@ -241,7 +241,7 @@ function wrapText(s: string, width = 76): string[] {
 function groupTitleFor(s: SkillInfo): string {
 	const keys = [s.dir, s.name];
 	if (keys.some((k) => REFERENCE.has(k)))
-		return "REFERENCE (auto-loads as a convention)";
+		return "REFERENCE (load when relevant)";
 	for (const g of GROUPS)
 		if (g.members.some((m) => s.dir === m || s.name === m)) return g.title;
 	return "OTHER";
@@ -351,7 +351,7 @@ function buildHelp(pi: any, ctx: any): string {
 		L.push("");
 		L.push(
 			p.desc(
-				`(${reference.length} reference rules auto-load in the background — /help <name> for any)`,
+				`(${reference.length} reference rules are available when relevant — /help <name> for any)`,
 			),
 		);
 	}

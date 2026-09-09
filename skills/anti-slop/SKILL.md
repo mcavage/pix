@@ -1,6 +1,6 @@
 ---
 name: anti-slop
-description: AI language pattern detection and rewrite. Use when writing, editing, or reviewing any text output, docs, PR descriptions, commit messages, comments, posts. Auto-loads on any writing or editing task.
+description: Editorial review of prose for vague claims and canned phrasing. Use for a writing task or explicit style review, not routine coding commentary, code comments, or deliver status reports.
 ---
 # anti-slop
 
