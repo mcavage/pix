@@ -15,7 +15,8 @@ const TARGETS = {
 };
 
 function read(name) {
-	return fs.readFileSync(TARGETS[name], "utf8");
+	const entry = fs.readFileSync(TARGETS[name], "utf8");
+	return name === "deliver" ? entry + "\n" + fs.readFileSync(path.join(repoRoot, "skills/deliver/references/complex-work.md"), "utf8") : entry;
 }
 
 // Markdown wraps multi-word rules across lines; whitespace is not semantics.
@@ -35,19 +36,20 @@ const REQUIRED_PHRASES = [
 const FORBIDDEN_PHRASES = ["serialize by default", "single shared working tree", "run one at a time in the shared"];
 
 for (const [name] of Object.entries(TARGETS)) {
-	test(`skills/${name}/SKILL.md states the worktree-parallel-by-default invariant`, () => {
+	const label = name === "deliver" ? "deliver entry and deferred parallel guide" : `skills/${name}/SKILL.md`;
+	test(`${label} states the worktree-parallel-by-default invariant`, () => {
 		const text = normalize(read(name).toLowerCase());
 		const missing = REQUIRED_PHRASES.filter((r) => !text.includes(r.phrase)).map((r) => r.id);
-		assert.deepEqual(missing, [], `${name}/SKILL.md is missing invariant phrase(s): ${missing.join(", ")}`);
+		assert.deepEqual(missing, [], `${label} is missing invariant phrase(s): ${missing.join(", ")}`);
 	});
 
-	test(`skills/${name}/SKILL.md does not default to a single shared working tree`, () => {
+	test(`${label} does not default to a single shared working tree`, () => {
 		const text = normalize(read(name).toLowerCase());
 		const present = FORBIDDEN_PHRASES.filter((p) => text.includes(p));
 		assert.deepEqual(
 			present,
 			[],
-			`${name}/SKILL.md contains anti-pattern wording that defaults to a shared tree: ${present.join(", ")}`,
+			`${label} contains anti-pattern wording that defaults to a shared tree: ${present.join(", ")}`,
 		);
 	});
 }

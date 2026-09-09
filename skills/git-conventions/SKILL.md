@@ -1,6 +1,6 @@
 ---
 name: git-conventions
-description: Git discipline, branch hygiene, worktree rules, and gh CLI usage. Use for any engineering work that touches git, branching, committing, rebasing, PRs, or GitHub operations.
+description: Branch, worktree, history, and PR operations. During deliver, use its embedded Git rules; load this only for an uncovered Git operation or an explicit request.
 ---
 # git-conventions
 

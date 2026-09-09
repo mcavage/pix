@@ -550,6 +550,7 @@ function addUsage(target: UsageStats, usage: any): void {
 }
 
 interface SingleResult {
+	parentModels?: ObservedModel[];
 	agent: string;
 	agentSource: "user" | "project" | "unknown";
 	task: string;
@@ -641,28 +642,52 @@ function refusalSubject(params: any): { agent: string; task: string } {
 }
 
 interface SubagentDetails {
+	parentModels?: ObservedModel[];
 	mode: "single" | "parallel" | "chain";
 	scope: AgentScope;
 	projectDir: string | null;
 	results: SingleResult[];
 }
 
+function messageText(message: any): string {
+	if (typeof message?.content === "string") return message.content;
+	return Array.isArray(message?.content)
+		? message.content.filter((part: any) => part?.type === "text" && typeof part.text === "string")
+			.map((part: any) => part.text).join("\n")
+		: "";
+}
 function finalText(messages: any[]): string {
+	for (let i = messages.length - 1; i >= 0; i--)
+		if (messages[i]?.role === "assistant") return messageText(messages[i]);
+	return "";
+}
+// Progress and timeout diagnostics may retain earlier prose, but completion may not.
+function partialText(messages: any[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
-		const m = messages[i];
-		if (m?.role === "assistant" && Array.isArray(m.content)) {
-			for (const part of m.content)
-				if (part?.type === "text") return part.text ?? "";
-		}
+		if (messages[i]?.role !== "assistant") continue;
+		const text = messageText(messages[i]);
+		if (text.trim()) return text;
 	}
 	return "";
+}
+interface ObservedModel { provider: string; model: string; }
+function observedParentModels(ctx: any): ObservedModel[] {
+	try {
+		const models = new Map<string, ObservedModel>();
+		for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+			const m = entry?.type === "message" ? entry.message : null;
+			if (m?.role !== "assistant" || typeof m.provider !== "string" || !m.provider || typeof m.model !== "string" || !m.model) continue;
+			models.set(JSON.stringify([m.provider, m.model]), { provider: m.provider, model: m.model });
+		}
+		return [...models.values()];
+	} catch { return []; }
 }
 // Runtime message metadata is evidence; the child's prose and requested model are not.
 function modelEvidence(r: SingleResult): string {
  const models = [...new Set(r.messages
   .filter((m) => m?.role === "assistant" && m.provider && m.model)
   .map((m) => `${m.provider}/${m.model}`))];
- return `Agent: ${r.agent}; model observed: ${models.join(", ") || "unavailable (no response metadata)"}`;
+ return `Agent: ${r.agent}; model observed: ${models.join(", ") || "unavailable (no response metadata)"}\nParent session models observed: ${(r.parentModels ?? []).map((m) => `${m.provider}/${m.model}`).join(", ") || "unavailable (no response metadata)"}`;
 }
 
 function isFailed(r: SingleResult): boolean {
@@ -717,9 +742,9 @@ export function clarifyRoutedModelFailure(r: SingleResult, agent: AgentConfig): 
 function resultOutput(r: SingleResult): string {
 	if (isFailed(r)) {
 		if (r.timedOut === "idle")
-			return `Timed out: no output for ${Math.round((r.idleMs ?? IDLE_MS) / 1000)}s (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
+			return `Timed out: no output for ${Math.round((r.idleMs ?? IDLE_MS) / 1000)}s (killed). Partial output:\n${partialText(r.messages) || r.stderr || "(none)"}`;
 		if (r.timedOut === "wall")
-			return `Timed out: exceeded ${Math.round((r.wallMs ?? WALL_MS) / 1000)}s wall-clock (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
+			return `Timed out: exceeded ${Math.round((r.wallMs ?? WALL_MS) / 1000)}s wall-clock (killed). Partial output:\n${partialText(r.messages) || r.stderr || "(none)"}`;
 		return r.errorMessage || r.stderr || finalText(r.messages) || "(no output)";
 	}
 	const text = `${modelEvidence(r)}\n\n${finalText(r.messages) || "(no output)"}`;
@@ -1718,6 +1743,7 @@ async function runSingle(
 		Math.max(agent.toolIdleMs ?? TOOL_IDLE_MS, effIdleMs),
 	);
 	const result: SingleResult = {
+		parentModels: makeDetails([]).parentModels ?? [],
 		agent: agentName,
 		agentSource: agent.source,
 		task,
@@ -1756,7 +1782,7 @@ async function runSingle(
 		if (runId) updateRun(runId, result);
 		onUpdate?.({
 			content: [
-				{ type: "text", text: finalText(result.messages) || "(running...)" },
+				{ type: "text", text: partialText(result.messages) || "(running...)" },
 			],
 			details: makeDetails([result]),
 		});
@@ -2007,6 +2033,10 @@ async function runSingle(
 			result.stopReason = "aborted";
 			result.errorMessage = result.errorMessage || "Subagent aborted.";
 		}
+		if (!isFailed(result) && !finalText(result.messages).trim()) {
+			result.stopReason = "error";
+			result.errorMessage = result.errorMessage || "Agent exited without a final text response; completion is unverified.";
+		}
 		clarifyRoutedModelFailure(result, agent);
 
 		// There is no cross-vendor retry-on-policy-refusal anymore: it used to
@@ -2093,11 +2123,13 @@ export default function (pi: ExtensionAPI) {
 			mode: "single" | "parallel" | "chain",
 			scope: AgentScope,
 			projectDir: string | null,
+			parentModels: ObservedModel[] = [],
 		) =>
 		(results: SingleResult[]): SubagentDetails => ({
 			mode,
 			scope,
 			projectDir,
+			parentModels,
 			results,
 		});
 
@@ -2127,6 +2159,7 @@ export default function (pi: ExtensionAPI) {
 				const discovered = discoverAgents(ctx.cwd, scope);
 				const agents = inheritActiveParentModel(discovered.agents, ctx.model);
 				const projectDir = discovered.projectDir;
+				const parentModels = observedParentModels(ctx);
 
 				// Host-mode guard: refuse to spawn ANY child (single/parallel/chain
 				// alike), explicitly and early. See PI_SUBAGENT_DISABLED comment above.
@@ -2134,7 +2167,7 @@ export default function (pi: ExtensionAPI) {
 					const subject = refusalSubject(params);
 					return {
 						content: [{ type: "text", text: SUBAGENTS_DISABLED_MSG }],
-						details: makeDetails("single", scope, projectDir)([
+						details: makeDetails("single", scope, projectDir, parentModels)([
 							disabledRefusal(subject.agent, subject.task),
 						]),
 						isError: true,
@@ -2150,7 +2183,7 @@ export default function (pi: ExtensionAPI) {
 								text: `Subagent depth limit reached (${CURRENT_DEPTH}/${MAX_DEPTH}). This subagent must do the work itself instead of delegating further. (Raise PI_SUBAGENT_MAX_DEPTH to allow deeper trees.)`,
 							},
 						],
-						details: makeDetails("single", scope, projectDir)([]),
+						details: makeDetails("single", scope, projectDir, parentModels)([]),
 						isError: true,
 					};
 				}
@@ -2170,14 +2203,14 @@ export default function (pi: ExtensionAPI) {
 								text: `Provide exactly one mode (agent+task, tasks[], or chain[]).\nAvailable agents: ${available}`,
 							},
 						],
-						details: makeDetails("single", scope, projectDir)([]),
+						details: makeDetails("single", scope, projectDir, parentModels)([]),
 						isError: true,
 					};
 				}
 
 				// ── chain ──
 				if (hasChain) {
-					const md = makeDetails("chain", scope, projectDir);
+					const md = makeDetails("chain", scope, projectDir, parentModels);
 					const results: SingleResult[] = [];
 					let prev = "";
 					// Pre-register every step as "queued" so the pin shows the whole
@@ -2259,11 +2292,11 @@ export default function (pi: ExtensionAPI) {
 									text: `Too many parallel tasks (${params.tasks.length}); max is ${MAX_PARALLEL}.`,
 								},
 							],
-							details: makeDetails("parallel", scope, projectDir)([]),
+							details: makeDetails("parallel", scope, projectDir, parentModels)([]),
 							isError: true,
 						};
 					}
-					const md = makeDetails("parallel", scope, projectDir);
+					const md = makeDetails("parallel", scope, projectDir, parentModels);
 					const all: SingleResult[] = params.tasks.map((t: any) => ({
 						agent: t.agent,
 						agentSource: "unknown" as const,
@@ -2346,7 +2379,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				// ── single ──
-				const md = makeDetails("single", scope, projectDir);
+				const md = makeDetails("single", scope, projectDir, parentModels);
 				const r = await runSingle(
 					ctx.cwd,
 					agents,
@@ -2494,7 +2527,7 @@ export default function (pi: ExtensionAPI) {
 										0,
 									),
 								);
-						const out = finalText(r.messages);
+						const out = r.exitCode === -1 || r.timedOut ? partialText(r.messages) : finalText(r.messages);
 						if (out) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(out.trim(), 0, 0, mdTheme));

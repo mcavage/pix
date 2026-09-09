@@ -154,6 +154,21 @@ and chain mode without inferring it from log order. There is no separate rate or
 metering channel: token and cost accounting stays in `usage` and in
 `aggregateSubagentUsage`, which is what the parent session bills.
 
+Response identity also travels with the result. `details.parentModels` contains
+unique provider/model pairs observed in assistant messages on the parent's current
+session branch; each child retains that snapshot alongside its own response
+metadata. The text result exposes both so the main agent can establish review
+independence when it authored the patch. Requested configuration and user prose
+are never substitutes for observed metadata; an unavailable session branch yields
+an empty list. These observations do not by themselves identify who authored a
+particular file.
+
+A zero process exit without final assistant text is an unverified completion and
+is marked failed. Single calls report the error, parallel summaries exclude the
+child from their success count, and chains stop before dependent steps. A mixed
+parallel batch retains its existing partial-success behavior. Earlier prose is
+still shown for progress and timeout diagnostics, but cannot establish completion.
+
 Two edge cases define the contract:
 
 - **A host-mode refusal is one timed row, not an empty array.** With

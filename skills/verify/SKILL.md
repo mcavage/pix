@@ -1,8 +1,15 @@
 ---
 name: verify
-description: Prove a claim before you make it. No "done", "fixed", or "tests pass" without running the command and reading the output first. Auto-loads before any completion claim, commit, PR, or handoff.
+description: Verify claims with executable evidence. During deliver, use its candidate-bound evidence rules; otherwise run fresh checks before completion, commit, PR, or handoff.
 ---
 # verify
+
+During `deliver`, its verification reference governs evidence reuse: confirm the
+recorded candidate, contract, inputs, and environment still match; cite the original
+run time and result. Never describe a digest check as a fresh test run. If identity
+cannot be established, rerun the check.
+
+For standalone verification, follow the fresh-run procedure below.
 
 **Iron law: no completion claim without fresh evidence.** Saying something works
 when you haven't checked is not efficiency, it's a guess dressed as a fact.

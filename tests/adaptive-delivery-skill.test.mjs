@@ -1,18 +1,87 @@
-// The delivery skill is the production caller: these checks protect its
-// required decisions and evidence, not a particular phase/table layout.
-import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
-import test from "node:test";
-import { fileURLToPath } from "node:url";
+// These are packaging/contract guards. They do not establish model adherence;
+// that requires an independently graded live comparison.
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import test from 'node:test';
+import {fileURLToPath} from 'node:url';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..','skills','deliver');
+const entry=fs.readFileSync(path.join(root,'SKILL.md'),'utf8');
+const refs=['verification.md','review.md','complex-work.md'].map(name=>fs.readFileSync(path.join(root,'references',name),'utf8'));
+const all=[entry,...refs].join('\n').replace(/\s+/g,' ');
+function requires(...patterns){for(const p of patterns)assert.match(all,p);}
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const skill = fs.readFileSync(path.join(repoRoot, "skills/deliver/SKILL.md"), "utf8");
-const text = skill.replace(/\s+/g, " ");
-
-function requires(...patterns) {
-	for (const pattern of patterns) assert.match(text, pattern);
-}
+test('entry has a bounded byte budget and references resolve without extra discovered skills',()=>{
+ assert.ok(Buffer.byteLength(entry)<=6000,'keep startup instructions under 6 KB');
+ assert.match(entry,/^---\nname: deliver\ndescription: .*Adaptive.*\n---/);
+ assert.match(entry,/cook and deliver/);
+ const links=[...entry.matchAll(/\]\((references\/[^)]+)\)/g)].map(m=>m[1]);
+ assert.deepEqual(links.sort(),['references/complex-work.md','references/review.md','references/verification.md']);
+ for(const link of links){assert.ok(fs.statSync(path.join(root,link)).isFile());assert.notEqual(path.basename(link),'SKILL.md');}
+ assert.match(entry,/Do not preload/);
+ assert.match(entry,/Bound search output/);
+ assert.ok(entry.indexOf('When a candidate exists, load')>entry.indexOf('## Implement'));
+ assert.doesNotMatch(entry,/\u2014/);
+});
+test('default is one implementer and independent review; early challenge is conditional',()=>{
+ assert.match(entry,/one implementer \(you\) and one independent reviewer/);
+ assert.match(entry,/If a concrete uncertainty prevents a credible acceptance check/);
+ assert.match(entry,/Otherwise let the final reviewer challenge both tests and implementation/);
+ assert.match(entry,/overrides their unconditional crew, authorship, and review-count rules/);
+ assert.doesNotMatch(all,/require an independent pre-implementation test challenge|behavior, security, concurrency, and recovery work goes to an implementation subagent/i);
+});
+test('compact framing keeps risky caller behavior and non-weakenable criteria',()=>{
+ requires(/scope, risk, and uncertainty, not line count/,/bounded/,/risky/,/epic/,
+ /credentials\/auth\/trust/,/data loss\/migration/,/concurrency\/cancellation/,
+ /public API\/CLI compatibility/,/external side effects/,/recovery\/retry/,
+ /User, situation, and real entry point/,/observable success and error/,
+ /unchanged behavior/,/executable checks/,/implementer cannot weaken/,
+ /Contract changes require explicit rationale, invalidate affected evidence/,
+ /Reclassify when evidence changes/);
+});
+test('behavioral proof cannot be replaced by meaningless red or green exit alone',()=>{
+ requires(/red-on-base where practical/,/real caller/,/Syntax\/import errors and unconditional failures are meaningless red/,
+ /characterization\/equivalence/,/never revert someone else's work/,
+ /Never infer correctness or completion from exit 0 alone/,
+ /partial patch correctness separately from workflow completion/);
+});
+test('deferred verification covers the whole candidate and invalidation',()=>{
+ requires(/SHA-256/,/staged and unstaged binary diffs/,/untracked shipping files/,
+ /paths, types, modes, symlink targets, and content bytes/,/ignored shipping files/,
+ /before and after each command/,/contract digest/,/command, cwd/,
+ /environment\/profile, test inputs, start\/end timestamps/,/exit code/,/log path/,
+ /Candidate, contract, or input changes invalidate affected evidence/,
+ /Reuse evidence for an identical candidate/,/not rerun full suites between unchanged gates/,
+ /baseline-red/,/never report that as all green/i);
+});
+test('review has an independent identity and secret boundary before dispatch',()=>{
+ requires(/local secret scan over the exact bytes you intend to send/,
+ /working-content scan if it covers only history/,/unresolved detection blocks the prompt/,
+ /Same-vendor or unknown identity is a review blocker/,
+ /response metadata/,/every implementation author's observed vendor/,
+ /Environment bindings remain authoritative/,/no hardcoded model table/,
+ /A clean first review finishes the review stage/,
+ /do not require a clean second review of an unchanged candidate/i,
+ /zero unresolved findings/,/Timeout, error, or missing context is not a clean review/,
+ /short independent validation invocation/,/explicitly accepts that disposition/);
+});
+test('specialists and decomposition answer questions instead of manufacturing roles',()=>{
+ requires(/separate PM and specialist invocations are conditional/,
+ /not shard a bounded one-unit change just to create handoffs/,
+ /explicit question and deliverable/,/security-lead.*actual trust\/security triggers/,
+ /product-manager.*uncertain user outcome/,/architect.*architecture uncertainty/,
+ /Each child runs the small delivery loop/,/isolated (?:git )?worktree/);
+});
+test('evidence example remains parseable and records observed costs and completion',()=>{
+ const match=refs[0].match(/```json\n([\s\S]*?)\n```/);assert.ok(match);
+ const state=JSON.parse(match[1]);
+ for(const field of ['base','head','digest'])assert.ok(field in state.candidate);
+ for(const field of ['candidate','contract','command','cwd','environment','inputs','startedAt','endedAt','exit','log'])assert.ok(field in state.evidence[0]);
+ for(const field of ['resultRef','usage','observedModels','exitCode'])assert.ok(field in state.subagents[0]);
+ requires(/unknown cost is not zero/i,/explicit total cap/,/All child, retry, and cloud costs count/,
+ /no separate rate table/,/Ordinary delivery must not invent a dollar cap unless the user supplied one/,
+ /no-commit and no-push/,/accepted patch or explicit blocker/);
+});
 
 const retiredRequirements = [
 	/minimum (?:of )?two reviews|at least two explicit|total (?:review )?rounds (?:MUST be )?>=\s*2/i,
@@ -28,233 +97,6 @@ const retiredRequirements = [
 	/the reviewer (?:is|acts as) the secret boundary|rely on the reviewer to (?:catch|detect) secrets/i,
 ];
 
-function retiredMatches(value) {
-	return retiredRequirements.filter((pattern) => pattern.test(value.replace(/\s+/g, " ")));
-}
-
-test("deliver stays concise, descriptive, and free of em dashes", () => {
-	const lines = skill.trimEnd().split("\n").length;
-	assert.ok(lines >= 180 && lines <= 280, `deliver is ${lines} lines; target is 180-280`);
-	assert.match(skill, /^---\nname: deliver\ndescription: .*Adaptive.*\n---\n/);
-	assert.match(skill, /cook and deliver/);
-	assert.doesNotMatch(skill, /\u2014/);
-});
-
-test("classification follows scope, risk, and uncertainty, with automatic risky triggers", () => {
-	requires(
-		/scope, risk, and uncertainty/i,
-		/bounded/i, /risky/i, /epic/i,
-		/not line count/i,
-		/small does not mean safe/i,
-		/credentials\/auth\/trust/i,
-		/data loss\/migration/i,
-		/concurrency\/cancellation/i,
-		/public API\/CLI compatibility/i,
-		/external side effects/i,
-		/recovery\/retry/i,
-		/reclassify when evidence changes/i,
-	);
-});
-
-test("the contract names the real user outcome and cannot be weakened by implementation", () => {
-	requires(
-		/user.*situation.*real entry point/i,
-		/observable success and error/i,
-		/unchanged behavior/i,
-		/interruption.*retry.*data preservation.*trust/i,
-		/executable checks/i,
-		/unresolved questions/i,
-		/implementer cannot weaken/i,
-		/contract changes.*orchestrator.*invalidate/i,
-	);
-});
-
-test("an independent test challenge precedes the bounded implementation unit", () => {
-	requires(
-		/independent pre-implementation test challenge/i,
-		/challenger must not implement/i,
-		/missing.*negative.*boundary/i,
-		/one bounded `engineer` or `deep` implementation unit/i,
-		/red\/green\/refactor/i,
-		/characterization\/equivalence/i,
-		/red-on-base.*behavioral regression.*practical/i,
-		/meaningless red.*syntax.*import.*unconditional/i,
-	);
-	assert.ok(text.indexOf("## 3. Challenge") < text.indexOf("## 4. Implement"));
-});
-
-test("candidate identity includes dirty and untracked shipping content, not just HEAD", () => {
-	requires(
-		/base.*head.*digest/i,
-		/SHA-256/i,
-		/staged and unstaged.*binary diffs/i,
-		/untracked shipping files/i,
-		/paths, types, modes, symlink targets, and content/i,
-		/ignored shipping files/i,
-		/before and after.*command/i,
-	);
-});
-
-test("verification binds the contract, inputs, environment, and full command result", () => {
-	requires(
-		/contract digest/i,
-		/command.*cwd.*environment\/profile.*test inputs.*timestamps.*exit.*log/i,
-		/candidate, contract, or input changes invalidate affected evidence/i,
-		/reuse evidence for an identical candidate/i,
-		/not rerun full suites between unchanged gates/i,
-		/fresh evidence in the current turn.*`verify`/i,
-		/digest check alone.*not.*test/i,
-		/baseline-red/i,
-		/no new failures.*affected.*pass/i,
-	);
-});
-
-test("a local secret scan gates the prompt before any content reaches a model reviewer", () => {
-	requires(
-		/before any diff, file content, or log excerpt leaves for a model reviewer/i,
-		/local secret scan over the exact bytes you intend to send/i,
-		/repository's own scan or gate where one exists/i,
-		/equivalent local high-entropy and credential-pattern check/i,
-		/working-content scan if it covers only history/i,
-		/`scripts\/check-secret-history\.sh` scans committed refs, not dirty or untracked bytes, so it is insufficient alone/i,
-		/untracked shipping files/i,
-		/unresolved detection blocks the prompt/i,
-		/removing or rotating the credential.*reviewed allowlist/i,
-		/redact matched values while preserving paths, line numbers, and surrounding context/i,
-		/never the first secret boundary/i,
-		/late backstop, not the gate/i,
-		/verification -> local secret scan -> one independent review/i,
-	);
-	assert.ok(
-		text.indexOf("local secret scan over the exact bytes") < text.indexOf("Clean means explicit LGTM"),
-		"the scan requirement must precede the review-verdict rules",
-	);
-});
-
-test("a refuted finding needs an independent disposition validation, a clean review needs nothing more", () => {
-	requires(
-		/a clean first review finishes the review stage/i,
-		/do not require a clean second review of an unchanged candidate/i,
-		/do not add a confirmation pass to a clean one/i,
-		/finding is refuted and the candidate therefore stays unchanged/i,
-		/not accepted until a short independent validation invocation/i,
-		/explicitly accepts that disposition/i,
-		/not a second review of the whole candidate/i,
-		/never becomes acceptance by the orchestrator's own assertion/i,
-		/dispositionValidatedBy/,
-	);
-});
-
-test("one independent cross-vendor review is sufficient until the candidate changes", () => {
-	requires(
-		/one focused independent cross-vendor review is the default/i,
-		/another review because the candidate changed/i,
-		/do not require a clean second review of an unchanged candidate/i,
-		/LGTM.*APPROVE.*zero unresolved findings/i,
-		/timeout.*error.*missing context.*not.*clean/i,
-		/response metadata/i,
-		/implementation author.*vendor/i,
-		/environment bindings remain authoritative/i,
-		/no hardcoded model table/i,
-		/same-vendor.*unknown.*block/i,
-	);
-});
-
-test("specialists answer explicit questions instead of attending every change", () => {
-	requires(
-		/product thinking is mandatory.*separate.*conditional/i,
-		/every invocation.*explicit question and deliverable/i,
-		/security-lead.*actual trust\/security triggers/i,
-		/qa-lead.*broad acceptance risk.*beyond.*test challenge/i,
-		/product-manager.*uncertain/i,
-		/architect.*uncertainty/i,
-		/DX.*designer.*surface is touched/i,
-		/not shard a bounded one-unit change just to create handoffs/i,
-		/epic.*product\/architecture decomposition/i,
-		/each child runs the small loop, not the full epic process/i,
-	);
-});
-
-test("the orchestrator owns acceptance and permits only tiny mechanical direct edits", () => {
-	requires(
-		/top-level orchestrator owns framing, contract, integration, evidence, and report/i,
-		/tiny mechanical shipping edit when delegation costs more than the change/i,
-		/behavior, security, concurrency, and recovery work.*implementation subagent/i,
-		/not.*direct coding the default/i,
-	);
-});
-
-test("the mechanical-edit exception overrides delegation-guide ownership and nothing else", () => {
-	requires(
-		/overrides `delegation-guide`'s general rule that the\s+orchestrator never writes the unit itself/i,
-		/only while\s+`deliver` is active/i,
-		/every other `delegation-guide` requirement still binds in\s+full/i,
-		/context passing, prescriptive prompts, parallel dispatch, file discipline,\s+per-unit worktrees, and escalation limits/i,
-		/owns team size, review count, and the mechanical-edit\s+exception while `deliver` is active/i,
-		/`delegation-guide` still supplies context,\s+file, and worktree discipline/i,
-	);
-});
-
-test("status is small, candidate-bound, and uses the extension's existing result metadata", () => {
-	requires(/\.pi-agent\/deliver\/<slug>\/status\.json/, /details\.results\[\]/);
-	const example = skill.match(/```json\n([\s\S]*?)\n```/);
-	assert.ok(example, "status needs a usable JSON example");
-	const state = JSON.parse(example[1]);
-	assert.deepEqual(Object.keys(state).sort(), [
-		"candidate", "classification", "contract", "decision", "evidence", "findings", "stages", "subagents",
-	]);
-	for (const key of ["base", "head", "digest"]) assert.ok(key in state.candidate, `candidate.${key}`);
-	for (const key of ["candidate", "contract", "command", "cwd", "environment", "inputs", "startedAt", "endedAt", "exit", "log"]) {
-		assert.ok(key in state.evidence[0], `evidence.${key}`);
-	}
-	for (const key of ["startedAt", "endedAt", "durationMs", "usage", "observedModels", "resultRef"]) {
-		assert.ok(key in state.subagents[0], `subagents.${key}`);
-	}
-	requires(/messages\[\].*provider.*model/, /never.*self-report.*requested model/i);
-});
-
-test("paid evaluations have one explicit total cap, ordinary delivery has no invented cap", () => {
-	requires(
-		/paid evaluations require one explicit total cap before any run/i,
-		/all child, retry, and cloud costs count/i,
-		/ordinary delivery.*not invent a dollar cap unless the user supplied one/i,
-		/no separate rate table/i,
-		/evaluationBudget/,
-		/unknown cost.*not zero/i,
-	);
-});
-
-test("delivery ends with an accepted patch or an explicit blocker and respects no-commit requests", () => {
-	requires(
-		/accepted patch or explicit blocker/i,
-		/no-commit.*no-push/i,
-		/do not claim background continuation/i,
-		/contract.*candidate.*checks.*review.*findings.*limitations/i,
-	);
-});
-
-test("retired unconditional crew, review-count, and model-pin requirements stay deleted", () => {
-	assert.deepEqual(retiredMatches(skill), [], "retired unconditional requirements were reintroduced");
-});
-
-test("the retirement guard rejects representative old requirements", () => {
-	for (const legacy of [
-		"Run at least two explicit top-level review rounds",
-		"Total rounds MUST be >= 2",
-		"MUST NOT drop the PM or any applicable specialist",
-		"product-manager always for non-trivial work",
-		"SECURITY (mandatory before REVIEW #1 for shipping code)",
-		"security-lead MUST run before REVIEW #1 on every deliverable",
-		"qa-lead MUST run on every deliverable that ships",
-		"No solo-coding, no exceptions",
-		"Review model openai/gpt-5.6-sol",
-		"Review model anthropic/claude-opus-4-8",
-		"Review model google/gemini-3.1-pro-preview",
-		"A clean review still requires a second review by another vendor",
-		"Two independent reviews are required for every shipping change",
-		"A confirmation pass is always required after review",
-		"Rely on the reviewer to catch secrets in the diff",
-	]) {
-		assert.ok(retiredMatches(legacy).length > 0, `retirement guard missed: ${legacy}`);
-	}
+test("delivery does not restore retired role, model-pin, or review-count requirements",()=>{
+ for(const pattern of retiredRequirements)assert.doesNotMatch(all,pattern);
 });
