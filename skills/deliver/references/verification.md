@@ -73,4 +73,3 @@ services. Reserve the bounded cost of in-flight work before launching more; stop
 if the remaining cap cannot cover the run. Unknown cost is not zero: resolve it
 or block the evaluation. Do not double-count nested usage already aggregated.
 Ordinary delivery must not invent a dollar cap unless the user supplied one.
-

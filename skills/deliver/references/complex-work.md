@@ -35,4 +35,3 @@ otherwise integrate returned patches without committing. Preserve unrelated work
 Remove worktrees only after accepted changes and evidence have been preserved.
 Child evidence proves its child candidate, not the merged tree. Verify affected
 integration paths and review new integration seams, not the entire epic process.
-

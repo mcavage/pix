@@ -57,4 +57,3 @@ is not accepted until a short independent validation invocation reads the findin
 the refutation, and its evidence, and explicitly accepts that disposition. Bound
 it to the disposition; it is not a second review of the whole candidate, and a
 refuted finding never becomes acceptance by the orchestrator's own assertion.
-
