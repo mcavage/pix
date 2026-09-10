@@ -1,10 +1,5 @@
-// Pix theme browser: preview a palette sample with arrow keys and commit with Enter.
-//
-// Preview rendering deliberately does not switch Pi's live Theme instance. The
-// public extension API cannot restore an automatic light/dark selection after an
-// in-memory switch. Passing a theme name only on Enter preserves cancel semantics.
-// Pix also stores the committed name in personal context so the next disposable
-// sandbox can start with the same theme.
+// Preview the whole interface without saving. Restore on cancellation or error;
+// Enter commits the selected name to Pi settings and personal context.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
@@ -32,7 +27,7 @@ const CATALOG: Record<string, CatalogEntry> = {
 	"one-dark": { label: "One Dark", appearance: "dark", description: "Crisp editor blues and greens" },
 	"rose-pine": { label: "Rosé Pine", appearance: "dark", description: "Muted rose and gold" },
 	"rose-pine-dawn": { label: "Rosé Pine Dawn", appearance: "light", description: "Muted rose on warm white" },
-	kanagawa: { label: "Kanagawa", appearance: "dark", description: "Ink, wave blue, and autumn gold" },
+	kanagawa: { label: "Kanagawa Wave", appearance: "dark", description: "Ink, wave blue, and autumn gold" },
 	dark: { label: "Dark", appearance: "dark", description: "Neutral Pi dark palette" },
 	light: { label: "Light", appearance: "light", description: "Neutral Pi light palette" },
 };
@@ -113,66 +108,63 @@ export function registerThemePicker(pi: ExtensionAPI, options: ThemePickerOption
 			return;
 		}
 
+		if (!ctx.ui.beginThemePreview) {
+			ctx.ui.notify("Live theme preview needs the updated Pix image. Exit and start a new sandbox.", "warning");
+			return;
+		}
 		const originalName = ctx.ui.theme.name;
-		const selected: string | null = await ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: string | null) => void) => {
-			const items: SelectItem[] = themes.map(({ name }: { name: string }) => {
-				const entry = CATALOG[name];
-				return {
+		const preview = ctx.ui.beginThemePreview();
+		let selected: string | null = null;
+		try {
+			selected = await ctx.ui.custom((tui: any, _theme: any, _keybindings: any, done: (value: string | null) => void) => {
+				const theme = () => ctx.ui.theme;
+				const items: SelectItem[] = themes.map(({ name }: { name: string }) => ({
 					value: name,
-					label: `${entry?.label ?? customLabel(name)} [${entry?.appearance ?? "custom"}]${name === originalName ? " [current]" : ""}`,
-					description: entry?.description ?? "Custom theme",
-				};
-			});
-			const container = new Container();
-			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-			container.addChild(new Text(theme.fg("accent", theme.bold("Theme")), 1, 0));
-			container.addChild(new Text(theme.fg("muted", "Moving the selection previews the palette below."), 1, 0));
-			const list = new SelectList(items, Math.min(items.length, 12), {
-				selectedPrefix: (text) => theme.fg("accent", text),
-				selectedText: (text) => theme.fg("accent", text),
-				description: (text) => theme.fg("muted", text),
-				scrollInfo: (text) => theme.fg("dim", text),
-				noMatch: (text) => theme.fg("warning", text),
-			});
-			list.onSelectionChange = () => {
-				container.invalidate();
-				tui.requestRender();
-			};
-			list.onSelect = (item) => done(item.value);
-			list.onCancel = () => done(null);
-			const currentIndex = items.findIndex((item) => item.value === originalName);
-			if (currentIndex >= 0) list.setSelectedIndex(currentIndex);
-			container.addChild(list);
-			container.addChild({
-				render(width: number) {
-					const selectedName = list.getSelectedItem()?.value ?? originalName;
-					const candidate = themes.find(({ name }: { name: string }) => name === selectedName)?.theme ?? theme;
-					const sample = [
-						candidate.fg("mdHeading", candidate.bold("Aa Heading")),
-						candidate.fg("mdLink", "link"),
-						candidate.fg("syntaxKeyword", "const"),
-						candidate.fg("syntaxVariable", "answer"),
-						candidate.fg("syntaxOperator", "="),
-						candidate.fg("syntaxNumber", "42"),
-						candidate.fg("success", "+ added"),
-						candidate.fg("warning", "! warning"),
-						candidate.fg("error", "× error"),
-					].join("  ");
-					return new Text(candidate.bg("userMessageBg", sample), 1, 0).render(width);
-				},
-				invalidate() {},
-			});
-			container.addChild(new Text(theme.fg("dim", "↑↓ preview  enter use  esc cancel  /theme QUERY filters"), 1, 0));
-			container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-			return {
-				render: (width: number) => container.render(width),
-				invalidate: () => container.invalidate(),
-				handleInput: (data: string) => {
-					list.handleInput(data);
+					label: `${CATALOG[name]?.label ?? customLabel(name)}${name === originalName ? " [current]" : ""}`,
+					description: CATALOG[name]?.appearance ?? "custom",
+				}));
+				const container = new Container();
+				const text = (render: () => string) => ({
+					render: (width: number) => new Text(render(), 1, 0).render(width),
+					invalidate() {},
+				});
+				container.addChild(new DynamicBorder((s: string) => theme().fg("accent", s)));
+				container.addChild(text(() => theme().fg("accent", theme().bold("Theme"))));
+				container.addChild(text(() => theme().fg("muted", "Previewing the whole interface")));
+				const list = new SelectList(items, Math.min(items.length, 8), {
+					selectedPrefix: (s) => theme().fg("accent", s),
+					selectedText: (s) => theme().fg("accent", s),
+					description: (s) => theme().fg("muted", s),
+					scrollInfo: (s) => theme().fg("dim", s),
+					noMatch: (s) => theme().fg("warning", s),
+				});
+				const update = () => {
+					const name = list.getSelectedItem()?.value;
+					if (!name) return;
+					const result = preview.preview(name);
+					if (!result.success) ctx.ui.notify(`Could not preview "${name}": ${result.error ?? "unknown error"}`, "error");
+					container.invalidate();
 					tui.requestRender();
-				},
-			};
-		});
+				};
+				list.onSelectionChange = update;
+				list.onSelect = (item) => done(item.value);
+				list.onCancel = () => done(null);
+				const currentIndex = items.findIndex((item) => item.value === originalName);
+				if (currentIndex >= 0) list.setSelectedIndex(currentIndex);
+				container.addChild(list);
+				container.addChild(text(() => theme().fg("muted", CATALOG[list.getSelectedItem()?.value ?? ""]?.description ?? "")));
+				container.addChild(text(() => theme().fg("dim", "↑↓ preview · enter keep · esc cancel")));
+				container.addChild(new DynamicBorder((s: string) => theme().fg("accent", s)));
+				update();
+				return {
+					render: (width: number) => container.render(width),
+					invalidate: () => container.invalidate(),
+					handleInput: (data: string) => { list.handleInput(data); tui.requestRender(); },
+				};
+			}, { overlay: true, overlayOptions: { anchor: "top-right", width: 54, maxHeight: "70%", margin: 1 } });
+		} finally {
+			preview.restore();
+		}
 
 		if (selected) apply(selected, ctx);
 	}
