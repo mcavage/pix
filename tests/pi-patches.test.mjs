@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // pi-manage-todo-list dist files under tests/fixtures/pi-patches/**), so it
 // runs with zero network calls and no `npm install`. The equivalent real
 // npm-resolution smoke (install the actual published packages, then patch)
-// lives in the release gate (.github/workflows/publish.yml, job
+// runs on PRs and in the release gate (.github/workflows/patch-smoke.yml, job
 // `patch-smoke`) — see docs there for why a smoke nobody runs is worse than
 // none.
 //
