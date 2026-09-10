@@ -89,6 +89,10 @@ their own inference backends or setup hooks keep their own connection flow;
 keyless and Gateway-authenticated backends do not get a personal-provider interview.
 A launch reuses the same effective-document compiler as environment preview.
 
+`pix env upgrade NAME` fast-forwards a clean tracking checkout with Git hooks
+disabled, then uses existing setup. Preserve local changes and existing trust
+checks; a failed setup retains the updated checkout with a retry instruction.
+
 ## Build and verify
 
 Run commands from the repository root unless shown otherwise:

@@ -68,6 +68,17 @@ pix run --env team
 
 `pix env add` also accepts a Git repository URL. Setup asks whether to make the
 new environment your default. Answer **yes** to use it whenever you type `pix`.
+
+To update a Git-backed environment:
+
+```bash
+pix env upgrade team
+```
+
+This pulls the current branch forward and runs setup, preserving completed
+connections. Commit or stash local changes first. Restart your session afterward
+to use the updated environment. Linked local checkouts are updated in place;
+Pix does not pull updates automatically.
 You can change that choice later:
 
 ```bash
