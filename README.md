@@ -173,3 +173,25 @@ sandbox-scoped credentials rather than host-global sbx secrets.
 - [Contributing](CONTRIBUTING.md) and [maintainer instructions](AGENTS.md)
 
 MIT. See [LICENSE](LICENSE).
+
+
+## From product idea to implementation
+
+Use `plan` to agree on the PR/FAQ, PRD and architecture before building a new
+product or material feature. `build` and `deliver` reuse that agreement; a
+brainstorm does not authorize production code. Existing approvals persist, and
+explicitly delegated product decisions can proceed autonomously.
+
+One main agent owns the product and can implement directly. Ready independent
+units can run in parallel workers, followed by verification and independent review
+of the integrated product. Visual review uses actual screenshots; completion
+claims must point to checks that ran. Model choices remain in your environment
+or explicit overrides. See [the product agreement rules](skills/deliver/references/product-agreement.md).
+
+### Product delivery
+
+For new products, `plan` establishes PR/FAQ, PRD and architecture before coding.
+`build` and `deliver` retain that agreement, with one implementation owner and
+optional workers. Product review covers the real experience and failures; routine
+bookkeeping is recorded locally. See [the delivery design](docs/design/thinner-product-delivery.md)
+for scope, acceptance and evidence collection.

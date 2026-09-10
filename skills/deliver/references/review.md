@@ -43,21 +43,38 @@ There is no hardcoded model table or silent model fallback in this workflow.
 Same-vendor or unknown identity is a review blocker: use an authorized configured
 cross-vendor binding, or report the missing capability without calling it reviewed.
 
-Clean means explicit LGTM or APPROVE, zero unresolved findings, and complete scope.
-Timeout, error, or missing context is not a clean review. A clean first review
-finishes the review stage. Do not require a clean second review of an unchanged
-candidate, and do not add a confirmation pass to a clean one. Record every finding; fix it, substantiate a refutation, or
-obtain explicit user acceptance of that specific risk. Never silently drop or
-downgrade findings. A finding that needs a fix causes fix + impacted verification
-+ another review because the candidate changed. New shipping edits invalidate its
-review even if described as a nit. For a large or stalled implementation context,
-use [repair.md](repair.md) to hand findings to a fresh worker. After repair, review
-the delta, prior finding dispositions, affected callers and updated evidence; retain
-the original full patch for context. Approval must cover the combined final candidate
-and every finding. Widen only for a named new risk or changed contract.
+A complete review can approve with explicitly nonblocking concerns. Zero unresolved
+blocking findings, complete required coverage and observed independent identity
+are mandatory. Timeout, error, or missing context is not a clean review. A clean
+first review finishes the review stage. Do not require a clean second review of an
+unchanged candidate. Never reinterpret a bare CONCERNS as approval: ask for a
+focused verdict if the reviewer did not distinguish blockers from suggestions.
 
-When a finding is refuted and the candidate therefore stays unchanged, the review
-is not accepted until a short independent validation invocation reads the finding,
-the refutation, and its evidence, and explicitly accepts that disposition. Bound
-it to the disposition; it is not a second review of the whole candidate, and a
-refuted finding never becomes acceptance by the orchestrator's own assertion.
+Every finding needs severity, concrete consequence and a disposition. Material
+product, correctness, security, data integrity and acceptance failures block release.
+Cosmetic preferences and expected pending-review status do not. Missing required
+evidence or false completion claims do block; actual findings are never silently
+dropped or downgraded. Nonblocking suggestions may be fixed or deferred with a
+reason by the owner; they do not require user risk acceptance or another review.
+
+Behavior, security, data, interface or acceptance changes need affected checks and
+a focused review of the delta, prior findings and combined final candidate. Pure
+copy/formatting/status edits need relevant checks and a recorded delta disposition,
+not another model invocation. Copy that changes instructions, legal meaning or a
+product promise is material. Widen review when impact is uncertain. A refuted
+blocking finding requires a short independent validation invocation that explicitly
+accepts that disposition; self-approval cannot erase it. For stalled or large
+contexts, [repair.md](repair.md) supports a fresh worker without losing evidence.
+
+## Product review
+
+Review the original agreed user outcome, PR/FAQ, PRD and architecture alongside
+the actual product. Ask where a real user still gets stuck, not merely whether the
+implementation follows the author's checklist. Separate release defects from
+valuable optional improvements; missing unrequested features are not blockers.
+For a UI, the reviewer must read actual desktop/mobile screenshots and evidence from primary, error
+and recovery journeys. For CLI/API work inspect real caller-visible behavior.
+Judge usefulness and UX first, then completeness, correctness/security, simplicity
+and tests. State unavailable coverage; do not infer polish from document count.
+
+Planned checks are not completed checks. Tests must fail if a required production module is missing; do not accept fallback dummy modules as integration proof.

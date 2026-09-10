@@ -174,6 +174,8 @@ test("the runtime archive stages skills/agents/settings/keybindings/themes into 
 	for (const member of [
 		"runtime/9.9.9/skills/",
 		"runtime/9.9.9/skills/deliver/scripts/repair-packet.mjs",
+		"runtime/9.9.9/skills/deliver/scripts/capture-evidence.mjs",
+		"runtime/9.9.9/skills/deliver/references/product-agreement.md",
 		"runtime/9.9.9/skills/deliver/references/repair.md",
 		"runtime/9.9.9/agents/",
 		"runtime/9.9.9/pi/settings.json",

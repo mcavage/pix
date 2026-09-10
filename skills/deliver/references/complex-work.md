@@ -21,8 +21,15 @@ make a small change look rigorous; do not omit a needed role to keep it "bounded
 
 ## Parallel units, not manufactured handoffs
 
-For an epic, decompose independently testable outcomes with owned callers. Each
-child runs the small delivery loop, not the full epic process.
+When useful, decompose independently testable outcomes with owned callers. Each
+child implements and checks its assigned unit, without its own planning/review crew.
+The main agent retains product judgment, integration and the independent review
+of the combined candidate. Delegation is optional; do not require a worker count.
+A work order includes the agreed product excerpt, exact interfaces/examples,
+owned files, real caller, executable acceptance and return artifact. Workers must
+raise material interface contradictions rather than invent a different product.
+Tests must fail if a required production module is missing, not create a dummy
+module or silently substitute a fallback that hides the integration failure.
 
 Do not shard a bounded one-unit change just to create handoffs. When there really
 are independent units, identify the full dependency DAG, including shared-file
@@ -30,7 +37,7 @@ conflicts. Independent units are PARALLEL BY DEFAULT: a shared working tree is
 never a reason to serialize. Create one isolated git worktree per concurrent unit;
 launch the whole ready wave in one parallel `{tasks:[...]}` call in the same turn.
 Serialize only a real dependency edge or file-conflict edge. Collect results, then
-merge reviewed commits after collecting results when commits are authorized;
+integrate worker commits after collecting results when commits are authorized;
 otherwise integrate returned patches without committing. Preserve unrelated work.
 Remove worktrees only after accepted changes and evidence have been preserved.
 Child evidence proves its child candidate, not the merged tree. Verify affected
