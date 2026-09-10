@@ -50,8 +50,10 @@ edge or file-conflict edge. Give each worker the contract slice, interface
 examples, owned files/caller, tests and return path. Do not give every worker the
 whole planning transcript. Reserve shared composition files for the integrator.
 
-Collect patches and evidence. Merge reviewed commits after collecting results when commits are authorized;
-otherwise integrate returned patches without committing. Preserve unrelated work.
+Collect patches and evidence. Merge reviewed commits after collecting results
+when current review already exists and commits are authorized; otherwise integrate
+returned patches without committing for the combined review. Do not require a
+separate review for every unit. Preserve unrelated work.
 Remove worktrees only after changes and evidence have been preserved. Child
 evidence proves its child candidate, not the merged tree: execute real integrated
 journeys and relevant regressions, then obtain one cross-vendor independent review.
