@@ -50,7 +50,11 @@ candidate, and do not add a confirmation pass to a clean one. Record every findi
 obtain explicit user acceptance of that specific risk. Never silently drop or
 downgrade findings. A finding that needs a fix causes fix + impacted verification
 + another review because the candidate changed. New shipping edits invalidate its
-review even if described as a nit.
+review even if described as a nit. For a large or stalled implementation context,
+use [repair.md](repair.md) to hand findings to a fresh worker. After repair, review
+the delta, prior finding dispositions, affected callers and updated evidence; retain
+the original full patch for context. Approval must cover the combined final candidate
+and every finding. Widen only for a named new risk or changed contract.
 
 When a finding is refuted and the candidate therefore stays unchanged, the review
 is not accepted until a short independent validation invocation reads the finding,
