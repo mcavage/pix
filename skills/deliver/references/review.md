@@ -61,3 +61,23 @@ is not accepted until a short independent validation invocation reads the findin
 the refutation, and its evidence, and explicitly accepts that disposition. Bound
 it to the disposition; it is not a second review of the whole candidate, and a
 refuted finding never becomes acceptance by the orchestrator's own assertion.
+
+## Product judgment in the existing review
+
+For new products or user-facing features, challenge the user job and product
+choices as well as the code. Read the contract, actual implementation and recorded
+browser outcomes: does the interaction help the user achieve the intended outcome?
+Are assumptions and conflicting evidence visible and revisable? Does the design
+solve the underlying problem with the simplest coherent scope? Separate observed
+usability failures from untested product hypotheses and optional ideas. Test count
+is not test quality; inspect whether tests reject plausible failures at state and
+integration boundaries. For UI changes, missing browser evidence remains a
+verification gap.
+Use this same review, not an automatic PM invocation or additional document.
+
+Distinguish blocking defects or unmet criteria from optional improvements. Every
+finding needs a disposition; optional suggestions are not automatically new
+acceptance criteria. The independent reviewer may explicitly mark a suggestion
+nonblocking and outside the agreed scope, with rationale, and approve the candidate.
+The implementer cannot silently relabel a defect as optional. Unresolved defects
+still block; a specific accepted risk still requires explicit user acceptance.

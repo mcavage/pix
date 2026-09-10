@@ -22,7 +22,10 @@ Fold these into Step 2 (assumptions) and Step 3 (alternatives), and push hard:
 
 ## Flow
 
-Run each step in sequence. One question per step. Wait for the user's response before proceeding.
+When the user requests an interactive challenge, work through the questions with
+them. Within authorized autonomous product delivery, answer from available
+evidence, label unknowns, make reversible decisions and return a concise challenge
+report. Do not introduce a sequence of approval pauses or invent answers.
 
 **Step 1: Frame the decision.**
 Ask: "What specifically are you deciding? State it as a single sentence. What happens if you do nothing?"
@@ -81,7 +84,8 @@ Revisit this decision if:
 
 ## Behavioral notes
 - This should take 5-10 minutes of back-and-forth. If it's taking longer, the decision is probably too large; break it into smaller decisions.
-- If the user says "just do it", say: "I can skip ahead, but you're making a decision without testing [specific untested assumption]. Your call."
+- Honor authorization to proceed. Record untested assumptions and the checks
+  that can resolve them; ask only when a user-only decision blocks safe progress.
 - If the challenge reveals the original idea is wrong, say so and recommend the better alternative.
 - The decision doc feeds downstream skills. If `build` or `brainstorm` follows, this doc is the source of truth for what you're building and why.
 - Not for routine tasks, bug fixes, or data pulls. For exploratory ideation before a decision exists, run `brainstorm` first.

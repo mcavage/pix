@@ -162,3 +162,13 @@ sandbox-scoped credentials rather than host-global sbx secrets.
 - [Contributing](CONTRIBUTING.md) and [maintainer instructions](AGENTS.md)
 
 MIT. See [LICENSE](LICENSE).
+
+### Product delivery
+
+Ask Pix to take an idea or substantial feature through product framing, architecture,
+scoped implementation workers and independent acceptance. The `deliver` skill uses
+a product path for that request and a smaller loop for an understood patch.
+`plan`, `build` and `ship` reuse the same contract and current evidence. Release
+claims distinguish a working local artifact, a green PR and a verified deployment.
+See [the delivery loop](docs/design/product-delivery-loop.md) for responsibilities
+and the boundary between workflow instructions and runtime enforcement.

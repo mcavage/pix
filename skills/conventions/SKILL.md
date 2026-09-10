@@ -31,12 +31,13 @@ status.json and the completed artifacts to reconstruct where the pipeline was. R
 the file; do not trust context memory for what a subagent produced.
 
 ## Estimation
-Time estimates use agent-time (wall-clock for an AI agent): a 1-day human task is
-5-15 min, a 1-week sprint is 30-60 min, a 1-month project is 2-4 hours.
+Estimate from observed comparable runs and the dependency path. Separate model,
+tool, integration and review time. Human-to-agent conversion ratios are not
+evidence; report uncertainty rather than promising a fixed compression factor.
 
 ## Output formats
-Prototypes: React + Tailwind + shadcn/ui. Docs: Markdown. Decks: Marp. Data:
-Python + pandas. Architecture: Mermaid diagrams.
+Preserve the project stack and requested output format. Choose new dependencies
+only for the actual artifact; do not introduce a UI framework for a CLI change.
 
 ## Terminal rendering
 This rule is about what you PRINT to the terminal at runtime, not what a skill or

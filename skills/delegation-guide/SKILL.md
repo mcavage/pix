@@ -4,16 +4,16 @@ description: Context-passing and delegation rules for multi-stage subagent workf
 ---
 # delegation-guide
 
-Subagents do not share state. You are the **overlord**: the top-level orchestrator.
-Your job is to DIRECT the crew, not to do the units yourself. You pass all context,
-collect results, and move the pipeline forward. If you catch yourself writing the
-code / doc / analysis a subagent should own, stop and delegate it. The overlord
-earns its keep by keeping many workers busy in parallel, not by grinding one task.
+The main agent owns product intent, architecture and integration. Delegate concrete
+implementation or investigation units when that separation helps the outcome.
+`deliver` owns stage and review policy; this guide describes handoffs, not another
+pipeline. Keeping workers busy is not a goal by itself.
 
 ## Context-passing rules
 
-1. **Inline, not references.** Paste actual content into the prompt. A file path
-   is not context; the file's contents are.
+1. **Decisions inline, evidence by reference.** Include the task, acceptance
+   criteria, owned scope and key interfaces inline. Supply accessible artifact
+   paths for source and detailed evidence; do not copy the full prior transcript.
 2. **Disk bridges stages.** Stage N writes its output to disk. You read it. You
    include the relevant parts in Stage N+1's prompt.
 3. **Pass forward, not back.** Upstream agents don't need downstream output; skip it.
@@ -43,17 +43,13 @@ earns its keep by keeping many workers busy in parallel, not by grinding one tas
 - **Escalation.** Max 2 retries per stage. On the third failure, stop and surface
   the blocker to the user; don't keep looping.
 
-## Subagent types (pix)
+## Model identity
 
-Invoke with the `subagent` tool, `agent=<name>` (NOT the old `Agent` tool with
-`subagent_type=`, which is not present here).
-
-| Type | subagent agent | Resolves to | Use for |
-|---|---|---|---|
-| `fanout` | `agent=fanout` | Gemini Flash-Lite | Parallel investigation, data gathering, cheap breadth |
-| `deep` | `agent=deep` | Opus 5 | Single hard task needing a full context window (a whole story, deep analysis) |
-| `review` | `agent=review` | Gemini Pro | Cross-vendor adversarial pass: code review, peer review, fact-check |
-| `engineer` | `agent=engineer` | Sonnet 5 | The workhorse for ordinary code units in a wave |
+Use the existing named presets and explicit environment bindings. Role names do
+not establish model identity or price. Verify observed model metadata on success
+and failure; unknown usage is not zero. Never silently switch to a cheaper or
+stronger model. A worker's question can expose a missing interface contract;
+resolve it instead of treating every question as an agent failure.
 
 ## Wave execution pattern
 
@@ -80,8 +76,9 @@ You orchestrate waves; you do not execute units yourself.
 5. Serialize ONLY units joined by a real dependency edge or file-conflict edge
    (one consumes the other's output, or both must edit the same file) — never
    because they happen to share a working tree.
-6. Gate with `code-review` (cross-vendor `review` subagent) before any wave that
-   produces code that will ship. Gate with `verify` before marking a unit done.
+6. Collect unit proof, then verify the integrated candidate and get independent
+   review. Do not impose full product review per unit and again per unchanged
+   wave. Preserve the actual evidence before marking a unit complete.
 
 ## Quality gates
 

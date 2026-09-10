@@ -1,11 +1,13 @@
 ---
 name: design-system
-description: React/Tailwind/shadcn/ui component conventions and all-states checklist. Auto-loads on any UI work. Pairs with design-review for visual audits.
+description: UI state, accessibility and component guidance. Use for designing interactive interfaces; preserve the existing stack. Pairs with design-review for visual audits.
 ---
 # design-system
 
 ## Stack
-React + Tailwind + shadcn/ui + lucide-react + recharts (charts).
+Use the repository's existing framework, components and tokens. For a greenfield
+web UI, React + Tailwind + shadcn/ui is an option, not an automatic dependency
+mandate. Choose the smallest stack that supports the product and deployment.
 
 ## Layout constants
 - Page max-width: `max-w-7xl`
@@ -47,7 +49,7 @@ Build every state before calling a component done:
 - Default box-shadow on every element.
 
 ## Workflow
-- Use `build` to lock the component contract before building.
+- Work from the existing product/component contract; do not start a second build pipeline.
 - Use `design-review` to screenshot and score the finished UI.
 - Use `qa` to exercise every state above in the running app.
 - Use `tdd` to drive empty/error/loading state rendering with tests.
