@@ -12,7 +12,7 @@
 # VERSION: the release manifest binds one Pix version to both digests, not two
 # independently numbered images.
 DOCKER_USER  ?= mcavage
-VERSION     ?= 0.1.89
+VERSION     ?= 0.1.90
 # LAUNCHER_VERSION stamps the pix binary. A LOCAL build derives a NEXT-PATCH
 # prerelease (X.Y.(Z+1)-beta.g<sha7>[.dirty.<12hex>], scripts/release/derive-build-version.sh)
 # from the committed package.json base plus this checkout's git state, so a
