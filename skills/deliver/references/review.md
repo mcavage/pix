@@ -61,3 +61,22 @@ is not accepted until a short independent validation invocation reads the findin
 the refutation, and its evidence, and explicitly accepts that disposition. Bound
 it to the disposition; it is not a second review of the whole candidate, and a
 refuted finding never becomes acceptance by the orchestrator's own assertion.
+
+
+## Review the product promise
+
+For products and material features, include the approved PR/FAQ/PRD, actual
+runnable artifact, primary/failure journey results and relevant original inputs.
+Judge usefulness, completeness and UX/polish before architecture, simplicity,
+security/data integrity and test quality. Do not reward role count or paperwork.
+For visual products, the reviewer must read actual desktop/mobile screenshots or
+use a real visual tool; DOM text and an author's description are not visual proof.
+If visual capability is unavailable, record visual review as unverified rather
+than asserting the product looks good. Do not change models silently to work
+around missing capability. Other kinds of product need evidence at their real
+caller, not irrelevant screenshot ceremony.
+
+Compare README, status and final claims with command exits/logs, candidate identity
+and actual reviewer responses. Planned checks are not completed checks. An absent
+release record cannot be replaced by confident prose. An interrupted workflow
+remains incomplete even if its patch passes later external evaluation.

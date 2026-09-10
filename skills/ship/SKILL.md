@@ -14,13 +14,16 @@ while its checks are queued or running.
 2. **Rebase on base.** Fetch, then rebase onto the base branch. On conflicts,
    abort and report the conflicted files; don't guess through a messy rebase.
 3. **Status.** `git status` + `git diff` to see exactly what's shipping.
-4. **Tests.** Detect and run the project's test command (package.json scripts,
+4. **Tests.** Reuse recorded checks only when candidate, contract, inputs and
+   environment still match; verify those identities. Otherwise run the project's test command (package.json scripts,
    Makefile, `pytest`, `cargo test`, …). If tests fail, **STOP** and report;
-   never ship red. `verify` the result from real output, not a remembered run.
+   never ship red. Verify from recorded command results, not memory or a README claim.
 5. **Lint.** Run the linter if the repo has one. Warnings don't block unless the
    repo treats them as errors. If there's no linter, say so.
-6. **Review gate.** Run `code-review` on the diff. If it returns `BLOCK`, fix it
-   or surface it before continuing.
+6. **Review gate.** Reuse a clean independent review bound to this exact candidate
+   and agreed product; otherwise run `code-review`. Resolve every finding before
+   proceeding. A rebase or source change invalidates affected evidence; obtain
+   focused disposition of the delta without restarting product planning.
 7. **Docs gate (no drift ships).** If the diff changes any user-facing surface,
    the docs that describe it MUST change in the SAME PR, never "later":
    - CLI verbs/subcommands, flags, config keys, env vars, defaults → man page,
@@ -35,7 +38,8 @@ while its checks are queued or running.
    fix drift by hand and no such test exists, add one now so it can't recur.
 8. **Version + changelog.** If the repo has a `VERSION` file and/or
    `CHANGELOG.md`, bump the patch version and add a one-line entry.
-9. **Commit.** Imperative subject, the *why* in the body. Follow the repo's
+9. **Commit.** Docs/version edits after review require updated affected checks
+   and review disposition before committing. Imperative subject, the *why* in the body. Follow the repo's
    existing commit convention.
 10. **PR.** Push the branch (`-u` if it has no upstream) and `gh pr create` with a
     concise title and this body:

@@ -7,7 +7,7 @@ import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..','skills','deliver');
 const entry=fs.readFileSync(path.join(root,'SKILL.md'),'utf8');
-const refs=['verification.md','review.md','complex-work.md'].map(name=>fs.readFileSync(path.join(root,'references',name),'utf8'));
+const refs=['verification.md','review.md','complex-work.md','product-agreement.md'].map(name=>fs.readFileSync(path.join(root,'references',name),'utf8'));
 const all=[entry,...refs].join('\n').replace(/\s+/g,' ');
 function requires(...patterns){for(const p of patterns)assert.match(all,p);}
 
@@ -16,7 +16,7 @@ test('entry has a bounded byte budget and references resolve without extra disco
  assert.match(entry,/^---\nname: deliver\ndescription: .*Adaptive.*\n---/);
  assert.match(entry,/cook and deliver/);
  const links=[...entry.matchAll(/\]\((references\/[^)]+)\)/g)].map(m=>m[1]);
- assert.deepEqual(links.sort(),['references/complex-work.md','references/review.md','references/verification.md']);
+ assert.deepEqual(links.sort(),['references/complex-work.md','references/product-agreement.md','references/review.md','references/verification.md']);
  for(const link of links){assert.ok(fs.statSync(path.join(root,link)).isFile());assert.notEqual(path.basename(link),'SKILL.md');}
  assert.match(entry,/Do not preload/);
  assert.match(entry,/Bound search output/);
@@ -70,7 +70,7 @@ test('specialists and decomposition answer questions instead of manufacturing ro
  /not shard a bounded one-unit change just to create handoffs/,
  /explicit question and deliverable/,/security-lead.*actual trust\/security triggers/,
  /product-manager.*uncertain user outcome/,/architect.*architecture uncertainty/,
- /Each child runs the small delivery loop/,/isolated (?:git )?worktree/);
+ /Each child implements and checks its assigned unit/,/isolated (?:git )?worktree/);
 });
 test('evidence example remains parseable and records observed costs and completion',()=>{
  const match=refs[0].match(/```json\n([\s\S]*?)\n```/);assert.ok(match);
@@ -99,4 +99,21 @@ const retiredRequirements = [
 
 test("delivery does not restore retired role, model-pin, or review-count requirements",()=>{
  for(const pattern of retiredRequirements)assert.doesNotMatch(all,pattern);
+});
+
+
+test('product agreement survives plan/build/deliver boundaries without mandatory crews',()=>{
+ const agreement=refs[3];
+ assert.match(agreement,/PR\/FAQ/);assert.match(agreement,/PRD and architecture/);
+ assert.match(agreement,/authorizing|authorized/);assert.match(agreement,/Existing approval persists/);
+ assert.match(agreement,/plan-only request ends/);assert.match(agreement,/Autonomy is explicit/);
+ for(const name of ['plan','build']) {
+  const skill=fs.readFileSync(path.join(root,'..',name,'SKILL.md'),'utf8');
+  assert.ok(Buffer.byteLength(skill)<4000,`${name} must remain a small entry point`);
+  assert.match(skill,/product-agreement\.md/);
+  assert.doesNotMatch(skill,/AUTO-GATED|crew still runs in full|Full crew is the default/);
+ }
+ requires(/must read actual desktop\/mobile screenshots/,/Planned checks are not completed checks/,
+ /Tests must fail if a required production module is missing/,
+ /Delegation is optional/,/truncated or empty final output/);
 });

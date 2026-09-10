@@ -34,6 +34,11 @@ and the known failure set is unchanged or reduced. Never report that as all gree
 
 ## State and cost
 
+README and final completion claims must be derived from recorded check results
+and reviewer disposition for the current candidate. Never prewrite a passing
+verification claim while scaffolding a product. A missing, interrupted or truncated
+result is pending/blocked; retain partial work without declaring release complete.
+
 At framing, write `.pi-agent/deliver/<slug>/status.json`; update after each stage.
 Keep contracts and logs nearby, referenced rather than copied into every record.
 This is a minimal schema; arrays hold real records, not invented zero-cost results:

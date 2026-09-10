@@ -29,7 +29,7 @@ const REQUIRED_PHRASES = [
 	{ id: "dependency-dag", phrase: "dependency dag" },
 	{ id: "one-worktree-per-unit", phrase: "worktree per concurrent unit" },
 	{ id: "one-parallel-call", phrase: "whole ready wave in one parallel" },
-	{ id: "merge-after-collection", phrase: "merge reviewed commits after collecting results" },
+	{ id: "merge-after-collection", phrase: "integrate worker commits after collecting results" },
 	{ id: "serialize-real-edges-only", phrase: "real dependency edge or file-conflict edge" },
 ];
 
