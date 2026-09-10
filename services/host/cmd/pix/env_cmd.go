@@ -1,10 +1,10 @@
-// env_cmd.go — `pix env`: list | add | show | default | trust (docs/design/
+// env_cmd.go — `pix env`: list | add | upgrade | show | default | trust (docs/design/
 // pix-v2-surface.md §3.4). An environment IS a directory under
 // ~/.pix/envs/<name>/; there is no registration database and no
 // edit/use/forget mutation path — those verbs are gone in v2. `add` (add.go)
-// is the one narrow exception: it adopts an EXISTING source (a local
+// adopts an EXISTING source (a local
 // directory or a git URL), never edits, registers by name alone, or
-// replaces one that is already there. Selection
+// replaces one that is already there. Upgrade pulls a clean checkout and runs setup. Selection
 // and listing come from workflow/env's pixhome-based ResolveIn/List
 // (home.go). `default` reads/writes the one config.toml field config.Config
 // owns (DefaultEnvironment, the sole config.toml schema). `trust` is the
@@ -41,12 +41,13 @@ func (c *envCmd) Help() string {
 	return `A named environment: a directory under ~/.pix/envs/<name>/ declaring
 .sbxenv.yaml (native sbx grammar) and an optional pix.toml sidecar.
 
-Five verbs: list, show, add, default, trust. There is no edit/use/forget:
+Six verbs: list, show, add, upgrade, default, trust. There is no edit/use/forget:
 edit, move, and remove an environment with ordinary filesystem and Git
-tools under ~/.pix/envs. 'add' is the one narrow exception — it ADOPTS an
+tools under ~/.pix/envs. 'add' ADOPTS an
 existing source (a local directory already on disk, or a git URL) as a
 new environment; it never overwrites, merges, or replaces one that is
-already there. 'pix setup' may scaffold a default one.
+already there. 'upgrade' fast-forwards a clean Git checkout and runs setup.
+'pix setup' may scaffold a default one.
 
 An environment that runs host code or handles a credential must be
 approved with 'pix env trust NAME' before a launch will use it.`
@@ -55,6 +56,7 @@ approved with 'pix env trust NAME' before a launch will use it.`
 // envCmd's field ORDER is the v2 verb surface; bare 'pix env' is
 // 'env list'.
 type envCmd struct {
+	Upgrade envUpgradeCmd `cmd:"" help:"Pull a Git environment forward and run setup."`
 	List    envListCmd    `cmd:"" default:"1" help:"List environments under ~/.pix/envs, the default, and trust state."`
 	Add     envAddCmd     `cmd:"" help:"Adopt a git URL or local directory as a new environment."`
 	Show    envShowCmd    `cmd:"" help:"What NAME is: files, resolved root, trust state. --path/--effective/--json."`

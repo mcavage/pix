@@ -243,10 +243,18 @@ derived from SOURCE. It never overwrites, merges, or replaces an existing
 `envs/<name>` entry; a missing or invalid `.sbxenv.yaml` after adoption rolls
 back only the symlink or clone this call itself created, never a pre-existing
 directory. It selects no default, trusts nothing, runs no setup, and launches
-nothing. This is the one narrow exception to "no general environment create,
+nothing. This is a narrow exception to "no general environment create,
 edit, add, forget, update, or delete commands" below: it can only ADOPT a
 source that already exists, never scaffold, edit, or register a bare name
 against config state the way v1's config-backed `pix env add` did.
+
+`pix env upgrade NAME [--verbose]` resolves the named environment, requires a
+clean Git checkout root on a tracking branch, pulls with `--ff-only`, and runs
+the same `pix setup --env NAME` flow. Linked local checkouts are updated in place.
+Dirty checkouts, detached HEADs, missing upstreams, and failed pulls stop before
+setup. Git hooks are disabled during the pull. Setup retains its connection and
+trust behavior; if it fails, the updated checkout remains and setup can be retried.
+Success tells the user to restart their session. There is no automatic pull.
 
 `pix env default` prints the machine default. `pix env default NAME` changes it.
 The command does not run setup, reconcile MCP, start a service, or mutate a
@@ -259,7 +267,7 @@ change receipt. `--yes` suppresses the prompt, never the fingerprint check.
 Interactive first use may offer this same approval; non-interactive launches
 never grant it. An environment without host access needs no approval screen.
 
-Beyond `add`'s narrow adopt-an-existing-source case, Pix does not provide
+Beyond `add` and `upgrade`, Pix does not provide
 general environment create, edit, forget, update, or delete commands. Users
 create, clone, edit, move, and remove directories with filesystem and Git
 tools. `pix setup` may scaffold the built-in default environment as a

@@ -222,6 +222,7 @@ elsewhere is represented by a symlink under `~/.pix/envs`.
 ```
 pix env [NAME] [--path|--effective|--json]     # detail includes resolved model + agent overrides
 pix env add SOURCE [NAME]                      # adopt an existing local dir or git URL as a new one
+pix env upgrade NAME [--verbose]                # fast-forward its Git checkout, then run setup
 pix env default [NAME]                          # print, or set, the machine default
 pix env trust NAME [--yes] [--verbose]                      # read and accept what NAME runs on your host
 ```

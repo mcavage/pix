@@ -15,15 +15,15 @@ import (
 // D20/D24: `pix doctor --recreates` is a flag on the existing `doctor`
 // verb, not a new `pix env` verb. envCmd's dispatchable field count must
 // stay exactly the accepted v2 verb surface (docs/design/
-// pix-v2-surface.md §3.4): List/Add/Show/Default/Trust. `Add` is the one
+// pix-v2-surface.md §3.4): List/Add/Upgrade/Show/Default/Trust. `Add` is the one
 // narrow, adopt-an-existing-source exception the surface doc names
 // explicitly; there is still no edit/use/forget and no hidden `Rm`
 // pointer — `pix env rm` is simply not a field at all, an unknown
 // subcommand gets the ordinary dispatch error.
 func TestDoctorRecreatesDoesNotAddAnEnvVerb(t *testing.T) {
 	typ := reflect.TypeOf(envCmd{})
-	if got, want := typ.NumField(), 5; got != want {
-		t.Fatalf("envCmd has %d fields, want %d (List/Add/Show/Default/Trust): %v", got, want, typ)
+	if got, want := typ.NumField(), 6; got != want {
+		t.Fatalf("envCmd has %d fields, want %d (List/Add/Upgrade/Show/Default/Trust): %v", got, want, typ)
 	}
 	for i := 0; i < typ.NumField(); i++ {
 		f := typ.Field(i)
