@@ -184,20 +184,8 @@ function short(desc: string, max = 88): string {
 	return oneLine.slice(0, max - 1).trimEnd() + "…";
 }
 
-// notify("info") routes to the interactive showStatus(), which wraps the ENTIRE
-// message in theme.fg("dim", ...) — and in the default dracula theme `dim` is
-// `selection` (#44475a), nearly invisible on the #282a36 background. That is why
-// the old plain-text /help read as "faint": with no inline color codes the whole
-// block rendered at that dim color. The fix is to give every visible token its
-// own readable color so nothing falls through to the dim wrapper:
-//   • head  — bold + accent (purple): the title, section, and group headers
-//   • accent— accent (purple): command names, inline markers, labels
-//   • desc  — muted (comment blue-gray, readable): secondary detail only
-//   • text  — forces the terminal DEFAULT foreground (\x1b[39m) so body prose and
-//             skill/agent NAMES render bright/normal instead of inheriting dim
-// theme.fg() THROWS on an unknown/empty color key, so every call is guarded and
-// degrades to the raw string when a theme isn't available.
-const RESET_FG = "\x1b[39m";
+// Info notifications have a dim outer style. Apply semantic palette colors
+// to help content explicitly so it stays legible in both light and dark themes.
 function painter(ctx: any) {
 	const theme = safe(() => ctx?.ui?.theme);
 	const wrap = (color: string, s: string): string => {
@@ -213,9 +201,7 @@ function painter(ctx: any) {
 		accent: (s: string) => wrap("accent", s),
 		desc: (s: string) => wrap("muted", s),
 		warn: (s: string) => wrap("warning", s),
-		// Prefix with an explicit reset-to-default so the text is drawn at the
-		// terminal's normal foreground (readable) rather than the dim wrapper.
-		text: (s: string) => RESET_FG + s,
+		text: (s: string) => wrap("text", s),
 	};
 }
 
@@ -470,7 +456,7 @@ function maybeNudge(ctx: any): void {
 		if (!claimed) return;
 		safe(() =>
 			ctx?.ui?.notify?.(
-				"New here? Type /help for the map.",
+				"Pix · Ask anything, or type /help for commands.",
 				"info",
 			),
 		);

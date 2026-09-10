@@ -1,0 +1,31 @@
+
+// Paint default cells while preserving explicit message/selection backgrounds.
+// Color operands must be skipped: a zero RGB channel is not an SGR reset.
+export function pixThemeSurface(line, width, surface) {
+    const parameters = (ansi) => /^\x1b\[([\d;]+)m$/.exec(ansi)?.[1] ?? "";
+    const fg = parameters(surface.fg);
+    const bg = parameters(surface.bg);
+    const defaults = `${surface.fg}${surface.bg}`;
+    const painted = line.replace(/\x1b\[([\d;]*)m/g, (_escape, body) => {
+        const codes = body === "" ? ["0"] : body.split(";");
+        const result = [];
+        for (let i = 0; i < codes.length; i++) {
+            const code = Number(codes[i]);
+            if ((code === 38 || code === 48 || code === 58) && (codes[i + 1] === "2" || codes[i + 1] === "5")) {
+                const count = codes[i + 1] === "2" ? 5 : 3;
+                result.push(...codes.slice(i, i + count));
+                i += count - 1;
+            } else if (code === 0) {
+                result.push("0", fg, bg);
+            } else if (code === 39) {
+                result.push(fg);
+            } else if (code === 49) {
+                result.push(bg);
+            } else {
+                result.push(codes[i]);
+            }
+        }
+        return `\x1b[${result.filter(Boolean).join(";")}m`;
+    });
+    return defaults + painted + defaults + " ".repeat(Math.max(0, width - visibleWidth(line)));
+}

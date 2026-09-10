@@ -14,29 +14,37 @@ function capture(contextDir) {
 	return commands;
 }
 
-function fakeContext(action, calls, notices) {
+function fakeContext(action, calls, notices, previews = []) {
 	const themes = new Map(["pix", "dracula", "host"].map((name) => [name, {
 		name,
 		fg: (_color, text) => text,
 		bg: (_color, text) => text,
 		bold: (text) => text,
 	}]));
-	return {
+	const ctx = {
 		mode: "tui",
 		ui: {
 			theme: { name: "pix", fg: (_color, text) => text, bold: (text) => text },
+			beginThemePreview: () => {
+				const original = ctx.ui.theme;
+				return {
+					preview: (name) => { previews.push(name); ctx.ui.theme = themes.get(name); return { success: true }; },
+					restore: () => { previews.push("restore"); ctx.ui.theme = original; },
+				};
+			},
 			getAllThemes: () => [...themes.keys()].map((name) => ({ name })),
 			getTheme: (name) => themes.get(name),
 			setTheme: (value) => { calls.push(value); return { success: true }; },
 			notify: (text, level) => notices.push({ text, level }),
-			custom: async (factory) => new Promise((resolve) => {
+			custom: async (factory, options) => { assert.equal(options.overlay, true); return new Promise((resolve) => {
 				const tui = { requestRender() {} };
 				const component = factory(tui, fakeContextTheme(), {}, resolve);
 				component.handleInput("down");
 				component.handleInput(action);
-			}),
+			}); },
 		},
 	};
+	return ctx;
 }
 
 function fakeContextTheme() {
@@ -55,12 +63,16 @@ test("/theme NAME applies and durably records an exact built-in", async (t) => {
 	assert.match(notices.at(-1).text, /Dracula/);
 });
 
-test("theme browser previews without switching live state and Escape persists nothing", async (t) => {
+test("theme browser previews the live interface and Escape restores without persisting", async (t) => {
 	const contextDir = fs.mkdtempSync(path.join(os.tmpdir(), "pix-theme-picker-"));
 	t.after(() => fs.rmSync(contextDir, { recursive: true, force: true }));
 	const commands = capture(contextDir);
 	const calls = [];
-	await commands.get("theme").handler("", fakeContext("escape", calls, []));
+	const previews = [];
+	const ctx = fakeContext("escape", calls, [], previews);
+	await commands.get("theme").handler("", ctx);
+	assert.deepEqual(previews, ["pix", "dracula", "restore"]);
+	assert.equal(ctx.ui.theme.name, "pix");
 	assert.deepEqual(calls, []);
 	assert.equal(fs.existsSync(path.join(contextDir, "themes", "active")), false);
 });
@@ -75,4 +87,13 @@ test("theme browser Enter commits the previewed theme and hides the host safety 
 	assert.equal(fs.readFileSync(path.join(contextDir, "themes", "active"), "utf8"), "dracula\n");
 	await commands.get("theme").handler("host", fakeContext("escape", calls, []));
 	assert.ok(!calls.includes("host"));
+});
+
+
+test("theme preview is restored when the picker throws", async () => {
+	const previews = [];
+	const ctx = fakeContext("escape", [], [], previews);
+	ctx.ui.custom = async () => { throw new Error("render failed"); };
+	await assert.rejects(capture(null).get("theme").handler("", ctx), /render failed/);
+	assert.deepEqual(previews, ["restore"]);
 });

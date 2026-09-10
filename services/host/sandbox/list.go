@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // State is the sandbox liveness state: a parsed listing row resolves to
@@ -97,7 +98,7 @@ const v38WrapperKey = "sandboxes"
 // otherwise pristine.
 var legacyAliasWrapperKeys = []string{"items", "boxes"}
 
-// v38RowKeys are the allowed row keys observed in sbx v0.38/v0.39:
+// v38RowKeys are the allowed row keys observed in sbx v0.38/v0.39/v0.42:
 // name, id (a UUID), agent (string), status (a recognized value), workspaces
 // (optional array since v0.39), ports (optional array), and workspace_missing
 // (optional bool). Unlike the legacy profile's nameKeys/
@@ -105,7 +106,7 @@ var legacyAliasWrapperKeys = []string{"items", "boxes"}
 // a legacy alias (e.g. "instance_id" instead of "id") is a key outside the
 // selected profile, which this package treats the same as any other
 // undocumented key: never silently accepted as canonical.
-var v38RowKeys = []string{"name", "id", "agent", "status", "workspaces", "workspace_missing", "ports"}
+var v38RowKeys = []string{"name", "id", "agent", "status", "workspaces", "workspace_missing", "ports", "last_used_at"}
 
 // v38UUIDPattern is the shape check for the v0.38 row's "id" field: canonical
 // 8-4-4-4-12 hyphenated hex, the documented UUID form. It does not pin a
@@ -377,6 +378,18 @@ func parseRowV38(m map[string]any) (Entry, error) {
 					return Entry{}, fmt.Errorf("port field %q is not a valid port number", key)
 				}
 			}
+		}
+	}
+
+	// Observed on sbx v0.42.1-758-gdf5c96ba6. This timestamp is
+	// listing metadata, never an ownership or liveness proof.
+	if value, present := m["last_used_at"]; present {
+		stamp, ok := value.(string)
+		if !ok {
+			return Entry{}, fmt.Errorf("field %q is not a string", "last_used_at")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, stamp); err != nil {
+			return Entry{}, fmt.Errorf("field %q is not an RFC3339 timestamp", "last_used_at")
 		}
 	}
 

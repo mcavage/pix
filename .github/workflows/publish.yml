@@ -235,6 +235,10 @@ jobs:
           node scripts/patches/apply-tui-bottom-pin.mjs | tee /tmp/tui-2.log
           grep -q 'already patched' /tmp/tui-2.log
           node --check "$TUI_JS"
+          node scripts/test-theme-surface-runtime.mjs
+          ln -sf ../lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js "$NPM_CONFIG_PREFIX/bin/pi"
+          chmod +x "$NPM_CONFIG_PREFIX/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
+          python3 scripts/test-pi-interface-pty.py
           PI_TUI_INDEX="$TUI_INDEX" node docs/upstream/tui-bottom-pin/test.mjs
           PI_TUI_INDEX="$TUI_INDEX" node docs/upstream/tui-bottom-pin/edge.mjs
           PI_TUI_INDEX="$TUI_INDEX" node docs/upstream/tui-bottom-pin/integrity.mjs

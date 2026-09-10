@@ -1,6 +1,7 @@
 {
   "defaultProjectTrust": "always",
   "enableInstallTelemetry": false,
+  "quietStartup": true,
   "theme": "dracula",
   "hideThinkingBlock": true,
   "tuiMode": "fullscreen",

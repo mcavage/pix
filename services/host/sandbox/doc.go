@@ -77,6 +77,10 @@
 // values in 1..65535. Missing mounts on an unrelated sandbox must not make
 // the host-global listing unreadable. See list_v39_test.go.
 //
+// sbx v0.42.1-758-gdf5c96ba6 also emits optional last_used_at timestamps.
+// These must be RFC3339 strings (fractional seconds accepted) and never
+// serve as identity or liveness evidence. See list_v42_test.go.
+//
 // Leniency does not imply trust. Under the legacy profile, a row is
 // IdentityVerified only when every field it supplied used the CANONICAL key
 // (not a fallback alias) and carried no key outside the fully documented

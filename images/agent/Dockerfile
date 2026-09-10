@@ -79,7 +79,11 @@ ENV PATH=/home/agent/.local/bin:/usr/local/share/npm-global/bin:$PATH
 RUN mkdir -p "$NPM_CONFIG_PREFIX"
 
 # --- pi coding agent ----------------------------------------------------------
+# Use the module CLI so the launcher, extensions, and vendored patches share
+# one runtime. The upstream bundled CLI embeds separate, unpatched modules.
 RUN npm install -g --ignore-scripts "${PI_PACKAGE}" \
+ && ln -sf ../lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js "$NPM_CONFIG_PREFIX/bin/pi" \
+ && chmod +x "$NPM_CONFIG_PREFIX/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js" \
  && pi --version
 
 # pi runs inside the sandbox, but its terminal belongs to the host launcher.
@@ -107,6 +111,11 @@ RUN node /usr/local/share/pix/patches/apply-hide-host-state.mjs
 # future pi version moves the anchor it warns and leaves the file unpatched
 # rather than failing the build. Full writeup: docs/upstream/tui-bottom-pin.md.
 RUN node /usr/local/share/pix/patches/apply-tui-bottom-pin.mjs
+
+# Apply theme foreground/background to the complete live TUI, including blank cells.
+RUN node /usr/local/share/pix/patches/apply-theme-surface.mjs
+RUN node /usr/local/share/pix/patches/apply-editor-palette.mjs
+RUN node /usr/local/share/pix/patches/apply-theme-preview.mjs
 
 # --- build toolchain (native npm modules + dev typecheck) ---------------------
 # build-essential + python3 so native npm modules (node-pty etc.) compile;

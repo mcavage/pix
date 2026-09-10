@@ -185,6 +185,8 @@ The surviving responsibilities are:
     AGENTS.md
     skills/
     output-styles/
+    themes/
+      active
   runtime/<pix-version>/
   .state/
     effective/<sandbox>/effective.sbxenv.yaml

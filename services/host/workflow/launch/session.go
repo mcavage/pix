@@ -634,6 +634,9 @@ func spawnCreate(deps SessionDeps) func(argv []string) *exec.Cmd {
 }
 
 func startEnvCreateTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, error) {
+	if err := retirePreviousCreation(deps.Env, spec.Key, spec.Name); err != nil {
+		return nil, &SessionRefused{Err: err}
+	}
 	creator, err := StartSbxSession(spawnCreate(deps)(spec.EnvCreateArgs), deps.Poll, true, spec.Name)
 	if err != nil {
 		return nil, err
@@ -693,6 +696,8 @@ func startSessionTransition(spec SessionSpec, deps SessionDeps) (*SessionChild, 
 		// undefined (sbx may error, or silently attach with stale flags).
 		if state := ProbeTaskSandbox(deps.Env, spec.Name); sandboxAppeared(state) {
 			return nil, &SessionRefused{Err: fmt.Errorf("%q appeared while this launch was preparing (another `pix run` won the race) — nothing was created or removed; re-run to attach to it", spec.Name)}
+		} else if state == SbxUnknown {
+			return nil, &SessionRefused{Err: fmt.Errorf("could not check whether %q exists; no sandbox was created", spec.Name)}
 		}
 	} else {
 		// An attach whose sandbox is gone must not fall through to a create

@@ -224,10 +224,11 @@
       }
     },
     "pix/host/lease": {
-      "prod_loc": 904,
+      "_absent_lifetime_note": "Before create, retire a stale instance record only under lifecycle exclusion, zero reference locks, and a fresh positive absence probe. Preserve held lock inodes and clear the old keep marker. Real RunSession tests cover create, attach, cleanup, retained new keep, and refusal on held/present/unknown state. Exact measured growth.",
+      "prod_loc": 942,
       "test_loc": 3166,
-      "exports": 20,
-      "exports_used_externally": 12,
+      "exports": 21,
+      "exports_used_externally": 13,
       "exits": 0,
       "streams": 0,
       "globals": 12,
@@ -306,8 +307,9 @@
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port."
     },
     "pix/host/sandbox": {
+      "_sbx_v42_timestamp_note": "Observed sbx v0.42 last_used_at metadata support validates RFC3339 timestamps without using them as identity or liveness evidence. Exact 17-line growth; full session regression covers create, exec, and stopped-sandbox removal.",
       "_session_resume_fix_note": "Observed sbx v0.39 listing support adds optional workspaces and validated port metadata. Exact growth; parser and creation receipt tests preserve identity enforcement.",
-      "prod_loc": 1154,
+      "prod_loc": 1171,
       "test_loc": 1156,
       "exports": 32,
       "exports_used_externally": 10,
@@ -437,7 +439,7 @@
     },
     "pix/host/workflow/launch": {
       "_prod_loc_note": "Review round 1 blocker #2 fix: FindPositivelyIdentified (the running-or-stopped identity check DecideEnvAttach's reattach gate now uses) and DecideEnvAttach's relaxed running-or-stopped gate. Real new logic (a stopped sandbox used to be refused outright by this gate), not accumulation. Round-7 adds EffectiveInferenceConfig: the production merge of a selected environment's pix.toml [inference.*] over machine config into an ephemeral, never-persisted snapshot for SynthesizeInferenceKit/CallableRuntimeModels/roster validation. Coexistence review fix (INFO): RemoveScopedPixSandbox, now the ONLY exported forced-removal seam, validates a RECORDED sandbox name against this stack's id before any argv is composed; the unscoped form is unexported, so no package outside launch can reach it.",
-      "prod_loc": 5054,
+      "prod_loc": 5069,
       "test_loc": 7443,
       "exports": 187,
       "exports_used_externally": 63,
@@ -456,7 +458,8 @@
       "_explicit_inference_setup_note": "Explicit Inference Setup, environment-contract unit: pix.toml [inference.backends.*] now carries the three sbx-session credential_* fields (envinfo), passes them through the per-run merge and makes [models].exclusive narrow the callable set (workflow/launch), fingerprints and renders them as review facts (workflow/env, cmd/pix), and [pi].skills finally reaches pi --skill (cmd/pix). Rebaselined by hand to the EXACT grown metrics, no slack.",
       "_uat_note": "The selected Ollama model is written to the existing bridge hint, fixing the UAT-observed false unknown-model warning. No additional state or process is introduced.",
       "_host_tools_note": "Exact measured capability growth: Gateway-owned Pix environment tools and explicit --dev host jobs, with fixed launch authority, live instance/holder checks, bounded execution and output, cancellation, and scoped reset. Tests drive the compiled CLI through MCP and reject privilege escalation and stale instances. No second registry or resident supervisor.",
-      "_workspace_identity_note": "Exact +5 production lines: canonical workspace composition and reuse in host-tool session fingerprints; guard authority remains instance- and holder-bound."
+      "_workspace_identity_note": "Exact +5 production lines: canonical workspace composition and reuse in host-tool session fingerprints; guard authority remains instance- and holder-bound.",
+      "_absent_lifetime_note": "Before create, retire a stale instance record only under lifecycle exclusion, zero reference locks, and a fresh positive absence probe. Preserve held lock inodes and clear the old keep marker. Real RunSession tests cover create, attach, cleanup, retained new keep, and refusal on held/present/unknown state. Exact measured growth."
     },
     "pix/host/workflow/models": {
       "prod_loc": 862,

@@ -392,6 +392,8 @@ Pix keeps all user-owned files under one root:
     AGENTS.md
     skills/
     output-styles/
+    themes/
+      active
   runtime/
   .state/
 ```
@@ -469,9 +471,12 @@ sharing workflow from inside Pi.
 ### 4.3 User-owned content and sharing
 
 `context/` is the user's one global writable content layer. Pix mounts its
-root into every sandbox and loads `context/skills/`; `context/AGENTS.md` and
-`context/output-styles/` live beside those skills. There are no duplicate
-root-level `skills/`, `agents/`, `output-styles/`, or `pi/` trees.
+root into every sandbox and loads `context/skills/`; `context/AGENTS.md`,
+`context/output-styles/`, and the selected theme pointer in
+`context/themes/active` live beside those skills. The pointer is global personal
+content; Pi's theme browser updates it and every launch reuses it. There are no
+duplicate root-level `skills/`, `agents/`, `output-styles/`, `themes/`, or `pi/`
+trees.
 
 Content precedence is environment-local content, personal `context/`, then
 shipped runtime content. To customize a shipped skill, copy it into

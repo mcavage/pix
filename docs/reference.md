@@ -70,14 +70,15 @@ In a Pix checkout it also uses the locally loaded image and live skills.
 An installed launcher can use `--dev` without a checkout.
 
 **Themes.** Run `/theme` inside an interactive session to browse the shipped
-catalog. Use Up/Down to preview a styled palette sample, press Enter to keep a
-theme, or Escape to leave the current theme untouched. Pix offers
-16 choices, including Catppuccin, Dracula, Gruvbox, Kanagawa, Nord, One Dark,
+catalog. Use Up/Down to preview the whole interface, press Enter to save a
+theme, or Escape to restore the previous appearance and automatic-theme mode. Pix offers
+16 choices, including Catppuccin, Dracula, Gruvbox, Kanagawa Wave, Nord, One Dark,
 Rosé Pine, Solarized, Tokyo Night, and light variants. The selected name is
 stored in `~/.pix/context/themes/active` and passed to Pi on every create or
 attach, so disposable sandboxes keep the same look. `/theme NAME` switches
-directly. Pi cannot change the terminal's own background, so light themes still
-need a light terminal profile for correct contrast. The red `host` palette is
+directly. Pix paints the complete interface, including light-theme backgrounds,
+without changing the terminal profile. Kanagawa uses the
+[Wave palette](https://github.com/rebelot/kanagawa.nvim/blob/master/lua/kanagawa/themes.lua). The red `host` palette is
 reserved as the `--dev` safety cue and does not appear in the cosmetic picker.
 
 The shipped `environments` skill authors environment directories in your mounted
