@@ -128,3 +128,29 @@ test('truncated nonempty responses fail single/parallel and never advance a chai
   Object.assign(process.env,saved);fs.rmSync(dir,{recursive:true,force:true});
  }
 });
+
+test('a failed child keeps observed author and usage visible in every caller mode', async () => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pix-partial-author-'));const saved={...process.env};
+ try {
+  fs.mkdirSync(path.join(dir,'agents'));
+  fs.writeFileSync(path.join(dir,'agents/engineer.md'),'---\ndescription: fixture engineer\ntools: read,write,edit\n---\nImplement the assigned change.\n');
+  const child=path.join(dir,'child.mjs');
+  fs.writeFileSync(child,`import fs from 'node:fs';
+const argv=process.argv;const prompt=fs.readFileSync(argv[argv.indexOf('--append-system-prompt')+1],'utf8');fs.writeFileSync('received-prompt.txt',prompt);
+fs.writeFileSync('existing.txt','repaired');
+console.log(JSON.stringify({type:'message_end',message:{role:'assistant',provider:'actual',model:'author',content:[{type:'text',text:'Implemented; verification pending.'}],usage:{input:12,output:3,cost:{total:0.25}},stopReason:'toolUse'}}));
+console.log(JSON.stringify({type:'message_end',message:{role:'assistant',provider:'actual',model:'author',content:[],stopReason:'error',errorMessage:'402 evaluation budget admission refused'}}));`);
+  process.env.PI_TEST_AGENT_DIR=dir;process.env.PI_SUBAGENT_PI_COMMAND=`${process.execPath} ${child}`;
+  delete process.env.PI_SUBAGENT_DISABLED;delete process.env.PI_SUBAGENT_DEPTH;
+  const mod=await import('../extensions/subagents.ts?partial-author');let tool;mod.default({on(){},registerCommand(){},registerTool(t){tool=t;}});
+  for(const params of [{agent:'engineer',task:'Repair existing.txt.'},{tasks:[{agent:'engineer',task:'Repair existing.txt.'}]},{chain:[{agent:'engineer',task:'Repair existing.txt.'},{agent:'engineer',task:'Must not run.'}]}]){
+   fs.writeFileSync(path.join(dir,'existing.txt'),'base');
+   const r=await tool.execute('partial',params,new AbortController().signal,()=>{},{cwd:dir});
+   assert.equal(r.isError,true);assert.equal(r.details.results.length,1);
+   assert.equal(fs.readFileSync(path.join(dir,'existing.txt'),'utf8'),'repaired');
+   const text=r.content.map(x=>x.text||'').join('\n');
+   assert.match(text,/model observed: actual\/author/);assert.match(text,/"cost":0.25/);assert.match(text,/Elapsed: \d+ ms/);assert.match(text,/402 evaluation budget/);assert.match(text,/failure does not prove an unchanged workspace/);
+   const prompt=fs.readFileSync(path.join(dir,'received-prompt.txt'),'utf8');assert.match(prompt,/edit existing source/);assert.match(prompt,/Read-only roles remain read-only/);assert.doesNotMatch(prompt,/NEVER overwrite or edit a file you did not create/);
+  }
+ }finally{for(const k of Object.keys(process.env))if(!(k in saved))delete process.env[k];Object.assign(process.env,saved);fs.rmSync(dir,{recursive:true,force:true});}
+});

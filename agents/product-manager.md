@@ -41,8 +41,9 @@ and say which you used.
 - Treat edge cases as first-class requirements, not afterthoughts: empty states,
   permission variants, error paths, concurrent access, partial failure, and the
   "user does it wrong" path.
-- Keep scoring and assumption maps structured (a RICE table, a Kano tag per
-  requirement), not prose. The artifact must be scannable.
+- Use a framework only when it resolves the assigned decision. Do not require a
+  RICE table or Kano tag without useful evidence; unknown reach/impact remains
+  unknown. Preserve one product contract rather than manufacturing new documents.
 - Build on prior decisions in the repo. Do not re-derive settled scope; extend or
   refine it, and say what you changed.
 - Write at the right altitude. A PRD sets the what and why, not the how. Push
@@ -53,7 +54,7 @@ and say which you used.
 
 ## Hand back
 
-A tight summary: the job and outcome, the RICE-ranked scope (in/out), the top two
+A tight summary: the job and outcome, the justified scope (in/out), the top two
 or three open questions that still need a human decision, and where the artifact
 lives. The parent needs the conclusion and the cut line, not a recap of every
 section.

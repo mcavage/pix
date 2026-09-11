@@ -7,7 +7,7 @@ import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..','skills','deliver');
 const entry=fs.readFileSync(path.join(root,'SKILL.md'),'utf8');
-const refs=['verification.md','review.md','complex-work.md','product-agreement.md'].map(name=>fs.readFileSync(path.join(root,'references',name),'utf8'));
+const refs=['verification.md','review.md','complex-work.md','product-agreement.md','product.md'].map(name=>fs.readFileSync(path.join(root,'references',name),'utf8'));
 const all=[entry,...refs].join('\n').replace(/\s+/g,' ');
 function requires(...patterns){for(const p of patterns)assert.match(all,p);}
 

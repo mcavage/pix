@@ -23,7 +23,7 @@
 // Never a direct connection to the memory container or host.docker.internal.
 
 import { basename, join } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createMcpGatewayClient, MEMORY_TOOL } from "../lib/mcp-gateway-client.ts";
@@ -120,7 +120,7 @@ function currentProject(ctx: any): string | null {
 	if (_project !== undefined) return _project;
 	const cwd = (typeof ctx?.cwd === "string" && ctx.cwd) || process.cwd();
 	try {
-		const url = execSync(`git -C ${JSON.stringify(cwd)} remote get-url origin`, {
+		const url = execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], {
 			encoding: "utf8",
 			timeout: 1500,
 			stdio: ["ignore", "pipe", "ignore"],

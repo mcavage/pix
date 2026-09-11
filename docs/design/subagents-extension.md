@@ -254,3 +254,12 @@ the pre-fix extension.
 </content>
 
 </invoke>
+
+## Scoped implementation and failed outcomes
+
+The output contract protects unique report paths while permitting changes to
+existing source within a task-assigned worktree and scope. Read-only presets retain
+their tool restrictions. Failed single, parallel and chain results expose observed
+model identity, elapsed time and available usage to the parent as well as retaining
+full structured details. Inspect partial candidate work before retrying; failure
+is not evidence of an unchanged workspace.

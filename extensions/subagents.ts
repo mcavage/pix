@@ -742,11 +742,13 @@ export function clarifyRoutedModelFailure(r: SingleResult, agent: AgentConfig): 
 
 function resultOutput(r: SingleResult): string {
 	if (isFailed(r)) {
+		const usageKnown = r.messages.some((m) => m?.role === "assistant" && m.usage);
+		const evidence = `${modelEvidence(r)}\nElapsed: ${r.durationMs ?? "unavailable"} ms; observed usage: ${usageKnown ? JSON.stringify(r.usage) : "unavailable"}.\nPartial work and response metadata remain in tool details; failure does not prove an unchanged workspace. Inspect the candidate before retrying.\n`;
 		if (r.timedOut === "idle")
-			return `Timed out: no output for ${Math.round((r.idleMs ?? IDLE_MS) / 1000)}s (killed). Partial output:\n${partialText(r.messages) || r.stderr || "(none)"}`;
+			return evidence + `Timed out: no output for ${Math.round((r.idleMs ?? IDLE_MS) / 1000)}s (killed). Partial output:\n${partialText(r.messages) || r.stderr || "(none)"}`;
 		if (r.timedOut === "wall")
-			return `Timed out: exceeded ${Math.round((r.wallMs ?? WALL_MS) / 1000)}s wall-clock (killed). Partial output:\n${partialText(r.messages) || r.stderr || "(none)"}`;
-		return r.errorMessage || r.stderr || finalText(r.messages) || "(no output)";
+			return evidence + `Timed out: exceeded ${Math.round((r.wallMs ?? WALL_MS) / 1000)}s wall-clock (killed). Partial output:\n${partialText(r.messages) || r.stderr || "(none)"}`;
+		return evidence + (r.errorMessage || r.stderr || finalText(r.messages) || "(no output)");
 	}
 	const text = `${modelEvidence(r)}\n\n${finalText(r.messages) || "(no output)"}`;
 	return r.fallbackFrom
@@ -1805,7 +1807,7 @@ async function runSingle(
 		const outSlug = `${agent.name}-${Date.now().toString(36)}-${Math.random()
 			.toString(36)
 			.slice(2, 6)}`;
-		systemPrompt += `\n\n## Output contract (parent-enforced, overrides any conflicting instruction above)\nYou may be ONE of several subagents running in PARALLEL. To avoid clobbering a sibling's file:\n- Return your findings in your FINAL MESSAGE. That is the primary channel the parent reads.\n- Write a file ONLY if the task explicitly asks for one, or the output is too large to inline.\n- When you do write, use EXACTLY this unique path unless the task gave you an explicit one:\n    .pi-agent/subagents/${outSlug}.md\n- NEVER write to a shared or guessable path (e.g. docs/design/<topic>.md, README.md, a fixed report name) — a sibling may be writing there this instant.\n- NEVER overwrite or edit a file you did not create during THIS run.\n- Always state the path of anything you wrote in your final message.`;
+		systemPrompt += `\n\n## Output contract (parent-enforced, overrides any conflicting instruction above)\nYou may be ONE of several subagents running in PARALLEL. To avoid clobbering a sibling's file:\n- Return your findings in your FINAL MESSAGE. That is the primary channel the parent reads.\n- Write a file ONLY if the task explicitly asks for one, or the output is too large to inline.\n- When you do write, use EXACTLY this unique path unless the task gave you an explicit one:\n    .pi-agent/subagents/${outSlug}.md\n- For implementation tasks, edit existing source and create new source only within the task-assigned scope and worktree. Preserve unrelated user and sibling changes.\n- For reports, use the unique artifact path above unless the task assigns another. Do not overwrite another worker's report.\n- Read-only roles remain read-only; this output contract grants no additional tool or write authority.\n- Always state the path of anything you wrote in your final message.`;
 		if (systemPrompt.trim()) {
 			const t = await writePrompt(agent.name, systemPrompt);
 			tmpDir = t.dir;

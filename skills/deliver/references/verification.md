@@ -56,6 +56,28 @@ Keep baseline-red failures explicit: no new failures, affected/new checks pass,
 and the known failure set is unchanged or reduced. Never report that as all green.
 
 
+## Product journeys
+
+For UI work, use an isolated browser profile against the actual candidate before
+final review. Use the available authorized browser tooling; do not borrow personal
+sessions, expand trust/network access, or install a new browser stack silently.
+If access is unavailable, continue useful implementation and checks, but record
+the missing journey as unverified and report the concrete capability needed.
+A DOM shim, source inspection, or passing unit tests cannot close that gap.
+
+Exercise the user outcome, not just page load. For persistent UI work, create,
+save, reload, revise, and reload again. Where sharing exists, open the result in a
+fresh recipient context, revise it if supported, then reload. Confirm actual values
+and recovery behavior, not just a success toast. Wait for the advertised save
+completion; also check interruption if the contract promises durability. Cover
+relevant narrow-screen and keyboard paths. Use synthetic inputs and isolate
+clipboard, downloads, storage, and external side effects from personal state.
+
+Record actions, expected/observed state, candidate identity, and useful screenshots
+or traces with the existing evidence. Mark inapplicable steps with a reason; do
+not manufacture sharing or persistence features to satisfy a checklist. Reuse
+unchanged journey evidence; repeat affected paths after fixes.
+
 ## State and cost
 
 README and final completion claims must be derived from recorded check results

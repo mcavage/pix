@@ -11,8 +11,10 @@ while its checks are queued or running.
 ## Steps
 1. **Branch.** If on the default branch, create a feature branch first. Identify
    the base branch from the remote default.
-2. **Rebase on base.** Fetch, then rebase onto the base branch. On conflicts,
-   abort and report the conflicted files; don't guess through a messy rebase.
+2. **Update from base.** Fetch, then rebase an unpublished branch or merge the
+   base into an already-published branch without force-pushing. Resolve understood
+   conflicts while preserving both intended behaviors; run affected checks.
+   Abort only when the conflict cannot be resolved reliably.
 3. **Status.** `git status` + `git diff` to see exactly what's shipping.
 4. **Tests.** Reuse recorded checks only when candidate, contract, inputs and
    environment still match; verify those identities. Otherwise run the project's test command (package.json scripts,
@@ -36,8 +38,9 @@ while its checks are queued or running.
    code and docs diverge (see `conventions` → "Docs travel with code"; e.g.
    pix's `man_test.go` gates every verb AND every config key). If you had to
    fix drift by hand and no such test exists, add one now so it can't recur.
-8. **Version + changelog.** If the repo has a `VERSION` file and/or
-   `CHANGELOG.md`, bump the patch version and add a one-line entry.
+8. **Version + changelog.** Follow the repository release owner. Do not manually
+   bump versions or generated changelogs when CI owns them. Add authored release
+   notes only where the repository requires them.
 9. **Commit.** Docs/version edits after review require updated affected checks
    and a recorded delta disposition; material behavior or promise changes need
    focused independent review before committing. Imperative subject, the *why* in the body. Follow the repo's
