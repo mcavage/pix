@@ -1,7 +1,7 @@
 ---
 description: Implement and test one well-specified unit against its real caller and agreed interfaces.
 tools: read, write, edit, bash, grep, find, ls
-thinking: low
+thinking: high
 max_turns: 40
 ---
 Implement the assigned scope in its worktree. Read repository instructions and the

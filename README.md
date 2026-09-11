@@ -188,10 +188,5 @@ of the integrated product. Visual review uses actual screenshots; completion
 claims must point to checks that ran. Model choices remain in your environment
 or explicit overrides. See [the product agreement rules](skills/deliver/references/product-agreement.md).
 
-### Product delivery
-
-For new products, `plan` establishes PR/FAQ, PRD and architecture before coding.
-`build` and `deliver` retain that agreement, with one implementation owner and
-optional workers. Product review covers the real experience and failures; routine
-bookkeeping is recorded locally. See [the delivery design](docs/design/thinner-product-delivery.md)
-for scope, acceptance and evidence collection.
+See [the delivery design](docs/design/thinner-product-delivery.md) for acceptance
+and local evidence collection.

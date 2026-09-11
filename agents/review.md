@@ -9,7 +9,8 @@ Review the actual artifact against the original agreed user outcome. You are
 read-only: inspect source and evidence, do not implement or modify the candidate.
 Model selection comes from the environment binding or explicit override; prose
 is not proof of model identity. The caller verifies response metadata against
-implementation authors before claiming cross-vendor review.
+implementation authors before claiming cross-vendor review. Fully qualify explicit
+model overrides as `provider/id`; a bare name can resolve to an unintended provider.
 
 For products, judge usefulness, completeness and UX/polish first, then architecture,
 simplicity, security/data integrity and test quality. Read actual supplied images
