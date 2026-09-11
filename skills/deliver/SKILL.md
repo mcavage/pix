@@ -1,24 +1,31 @@
 ---
 name: deliver
-description: Adaptive delivery with a small implementation loop, executable proof, and one independent review. Use for "cook and deliver" or "full send".
+description: Adaptive product and patch delivery with framing, architecture, scoped workers, real-user checks and independent review. Use for "cook and deliver" or "full send".
 ---
 # deliver
 
 Deliver an accepted patch or explicit blocker. The main agent owns framing,
-implementation, verification, and reporting. Product thinking is mandatory;
+integration, verification, and reporting. Product thinking is mandatory;
 separate PM and specialist invocations are conditional.
+
+## Choose the outcome
+
+For a new product, idea-to-release request, or feature spanning user journeys,
+load [product.md](references/product.md) before implementation. Product mode owns
+framing, architecture, delegated work and release acceptance. A small diff does
+not turn a product request into a bug fix. For one understood patch, use the
+small loop below. Risk classification applies in either mode.
 
 ## Start small
 
 Read repository instructions, then locate the real caller with a targeted symbol
 search. Bound search output; read relevant ranges and tests. Do not dump whole
 files or inventories first. Expand only to resolve a named question.
-Do not preload `plan`, `build`, `ship`, `delegation-guide`, or all the references
-below. `deliver` overrides their unconditional crew, authorship, and review-count rules.
+Do not preload every skill or reference. `deliver` owns the loop; `plan`, `build`,
+and `ship` are stage entry points, not additional review pipelines.
 
-During deliver, do not auto-load `conventions`, `git-conventions`, `tdd`, `verify`, or
-`anti-slop`. The rules here cover routine delivery. Load additional guidance only
-for a named uncovered requirement or an explicit user request.
+Load conventions or specialist guidance only for an uncovered requirement or
+explicit user request; do not recursively expand the skill catalog.
 Keep scratch in `.pi-agent/` or `/tmp/`. Preserve user work; use an isolated branch
 or worktree for changes. Never force-push or rewrite shared history. Update affected
 docs with code. Write concise, factual reports; honor the active output style.
@@ -41,7 +48,7 @@ a fixed crew size or automatic handoffs.
 
 ## Implement one coherent outcome
 
-The default is one implementer (you) and one independent reviewer. Do not shard a
+For a bounded patch, the default is one implementer (you) and one independent reviewer. Do not shard a
 bounded one-unit change just to create handoffs. The implementer cannot weaken
 the contract to fit the patch. Contract changes require explicit rationale,
 invalidate affected evidence, and must be challenged in independent review;
@@ -89,8 +96,7 @@ candidate, evidence, review identity/verdict, findings, and decision; link logs.
 Accept only when all criteria have current candidate-bound proof and review is
 clean. Errors, timeouts, empty final output, or exhausted supplied budgets are
 blocked outcomes even if a subprocess exits 0. Report partial patch correctness
-separately from workflow completion. After two distinct failed hypotheses, seek
-a focused specialist or report the blocker.
+separately from workflow completion. After two distinct failed hypotheses, seek a focused specialist or report the blocker.
 
 Respect no-commit and no-push requests; commit or `ship` only when in scope.
 Report outcome, contract/candidate, checks, review, findings, limitations, and logs.

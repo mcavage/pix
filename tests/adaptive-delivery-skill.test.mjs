@@ -7,16 +7,16 @@ import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..','skills','deliver');
 const entry=fs.readFileSync(path.join(root,'SKILL.md'),'utf8');
-const refs=['verification.md','review.md','complex-work.md'].map(name=>fs.readFileSync(path.join(root,'references',name),'utf8'));
+const refs=['verification.md','review.md','complex-work.md','product.md'].map(name=>fs.readFileSync(path.join(root,'references',name),'utf8'));
 const all=[entry,...refs].join('\n').replace(/\s+/g,' ');
 function requires(...patterns){for(const p of patterns)assert.match(all,p);}
 
 test('entry has a bounded byte budget and references resolve without extra discovered skills',()=>{
- assert.ok(Buffer.byteLength(entry)<=6000,'keep startup instructions under 6 KB');
+ assert.ok(Buffer.byteLength(entry)<=7000,'keep entry instructions under 7 KB with explicit product routing');
  assert.match(entry,/^---\nname: deliver\ndescription: .*Adaptive.*\n---/);
  assert.match(entry,/cook and deliver/);
  const links=[...entry.matchAll(/\]\((references\/[^)]+)\)/g)].map(m=>m[1]);
- assert.deepEqual(links.sort(),['references/complex-work.md','references/review.md','references/verification.md']);
+ assert.deepEqual(links.sort(),['references/complex-work.md','references/product.md','references/review.md','references/verification.md']);
  for(const link of links){assert.ok(fs.statSync(path.join(root,link)).isFile());assert.notEqual(path.basename(link),'SKILL.md');}
  assert.match(entry,/Do not preload/);
  assert.match(entry,/Bound search output/);
@@ -27,7 +27,7 @@ test('default is one implementer and independent review; early challenge is cond
  assert.match(entry,/one implementer \(you\) and one independent reviewer/);
  assert.match(entry,/If a concrete uncertainty prevents a credible acceptance check/);
  assert.match(entry,/Otherwise let the final reviewer challenge both tests and implementation/);
- assert.match(entry,/overrides their unconditional crew, authorship, and review-count rules/);
+ assert.match(entry,/owns the loop/);
  assert.doesNotMatch(all,/require an independent pre-implementation test challenge|behavior, security, concurrency, and recovery work goes to an implementation subagent/i);
 });
 test('compact framing keeps risky caller behavior and non-weakenable criteria',()=>{

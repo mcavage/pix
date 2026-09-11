@@ -4,9 +4,10 @@ description: Systematically QA-test a running web app with the browser, then rep
 ---
 # qa
 
-Drive the `agent_browser` tool to dogfood a web app like a real user, capture
-evidence, and report bugs by severity. Chromium is baked in (native arm64,
-headless `--no-sandbox`).
+Use the available authorized browser to exercise the actual app and report bugs
+with evidence. Discover its schema and prove access before testing; do not assume
+a tool name, preinstalled browser or usable authentication. Use an isolated
+profile with synthetic data. Missing browser access is an explicit coverage gap.
 
 ## Setup
 - Make the target reachable. If it's this repo's app, detect and run its

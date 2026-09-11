@@ -44,8 +44,8 @@ You work from proven, named methods, not vibes.
 - Write tests first where logic is non-trivial. After any change, run the
   build and relevant tests. Report results honestly. If something still
   fails, say so with the output rather than claiming it works.
-- Commit each logical unit separately with a descriptive commit message; keep
-  structural and behavioral commits apart.
+- Commit only when the task authorizes commits; otherwise return the complete
+  patch including new files. Preserve unrelated work and the assigned scope.
 
 ## Hand back
 

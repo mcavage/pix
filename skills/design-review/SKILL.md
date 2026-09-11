@@ -4,7 +4,7 @@ description: Designer's-eye visual audit of a running web UI, screenshot each vi
 ---
 # design-review
 
-Use the `agent_browser` tool to actually SEE the UI, then critique it like a
+Use an available authorized browser in an isolated profile to SEE the UI, then critique it like a
 senior designer: specific and actionable, not vibes.
 
 ## Steps
@@ -15,8 +15,9 @@ senior designer: specific and actionable, not vibes.
    consistency, and motion. Flag AI-slop tells: generic gradients, emoji
    headers, center-everything, identical card grids, default shadows.
 3. **Score** each dimension 0-10 with one line on "what would make it a 10".
-4. **Fix.** Apply the highest-impact changes in source (respect `DESIGN.md` if
-   present), re-screenshot before/after to prove it, commit atomically.
+4. **Disposition.** In an independent acceptance role, return findings without
+   editing source. When explicitly assigned implementation, fix the highest-impact
+   issues, re-screenshot and send the changed candidate for independent review.
 
 Prioritize the few changes that most raise perceived quality over a long nitpick
 list.

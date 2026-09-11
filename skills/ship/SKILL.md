@@ -11,16 +11,19 @@ while its checks are queued or running.
 ## Steps
 1. **Branch.** If on the default branch, create a feature branch first. Identify
    the base branch from the remote default.
-2. **Rebase on base.** Fetch, then rebase onto the base branch. On conflicts,
-   abort and report the conflicted files; don't guess through a messy rebase.
+2. **Rebase on base.** Fetch, then rebase onto the base branch. Resolve understood conflicts while preserving both intended behaviors; run
+   affected checks. Abort only when the conflict cannot be resolved reliably.
 3. **Status.** `git status` + `git diff` to see exactly what's shipping.
-4. **Tests.** Detect and run the project's test command (package.json scripts,
-   Makefile, `pytest`, `cargo test`, …). If tests fail, **STOP** and report;
-   never ship red. `verify` the result from real output, not a remembered run.
+4. **Tests.** Reuse current candidate-bound evidence from `deliver` when source,
+   contract, inputs and environment match. Run missing repository checks and
+   affected checks after rebasing or changes. Fix new failures within scope;
+   preserve baseline failures explicitly. Never claim a failing check passed.
 5. **Lint.** Run the linter if the repo has one. Warnings don't block unless the
    repo treats them as errors. If there's no linter, say so.
-6. **Review gate.** Run `code-review` on the diff. If it returns `BLOCK`, fix it
-   or surface it before continuing.
+6. **Review gate.** Reuse a clean independent review covering this exact candidate.
+   Otherwise use `code-review`; address findings and verify affected paths before
+   follow-up review. New source edits require current review, not a second review
+   simply because execution moved from build to ship.
 7. **Docs gate (no drift ships).** If the diff changes any user-facing surface,
    the docs that describe it MUST change in the SAME PR, never "later":
    - CLI verbs/subcommands, flags, config keys, env vars, defaults → man page,
@@ -33,8 +36,9 @@ while its checks are queued or running.
    code and docs diverge (see `conventions` → "Docs travel with code"; e.g.
    pix's `man_test.go` gates every verb AND every config key). If you had to
    fix drift by hand and no such test exists, add one now so it can't recur.
-8. **Version + changelog.** If the repo has a `VERSION` file and/or
-   `CHANGELOG.md`, bump the patch version and add a one-line entry.
+8. **Version + changelog.** Follow the repository release owner. Do not manually
+   bump versions or generated changelogs when CI owns them. Add authored release
+   notes only where that repository requires them.
 9. **Commit.** Imperative subject, the *why* in the body. Follow the repo's
    existing commit convention.
 10. **PR.** Push the branch (`-u` if it has no upstream) and `gh pr create` with a

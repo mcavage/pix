@@ -16,7 +16,7 @@
 //                              wait longer than the silent per-turn auto-recall)
 
 import { basename, join } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createRecallChannel } from "../lib/recall-message.ts";
 import { createMcpGatewayClient, MEMORY_TOOL } from "../lib/mcp-gateway-client.ts";
 import { readFileSync } from "node:fs";
@@ -76,7 +76,7 @@ function currentProject(ctx: any): string | null {
 	if (_project !== undefined) return _project;
 	const cwd = (typeof ctx?.cwd === "string" && ctx.cwd) || process.cwd();
 	try {
-		const url = execSync(`git -C ${JSON.stringify(cwd)} remote get-url origin`, {
+		const url = execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], {
 			encoding: "utf8",
 			timeout: 1500,
 			stdio: ["ignore", "pipe", "ignore"],
