@@ -19,43 +19,26 @@ Independent investigations may run concurrently. Do not schedule extra roles to
 make a small change look rigorous; do not omit a needed role to keep it "bounded".
 
 
-## Plan decisions before distributing edits
-
-The main model owns product intent and architecture. In the existing contract,
-record the user journey, why the chosen scope solves it, the simplest coherent
-design, shared data/interface contracts, error behavior, and acceptance checks.
-Choose among material alternatives; do not produce a separate PRD/RFC by default.
-Resolve an interface uncertainty before delegating code that depends on it.
-
-Use the configured `engineer` for implementation and report the actual model; do not
-claim cheaper execution from a role name. Do not silently change model bindings.
-Keep the main model on consequential decisions and integration, rather than
-writing all implementation while workers merely research. Escalate a specific
-failed hypothesis with its evidence; avoid restarting the entire task on a
-stronger model. Workers must flag contradictions and missing acceptance cases.
-
 ## Parallel units, not manufactured handoffs
 
-Decompose by independently testable caller outcomes with owned files, stable
-interfaces and integration checks. Each child runs the small delivery loop: implement its contract slice and prove it through its caller. Children do not
-recursively launch planning/review crews; one independent review covers the full
-integrated patch and every author's observed vendor.
+When useful, decompose independently testable outcomes with owned callers. Each
+child implements and checks its assigned unit, without its own planning/review crew.
+The main agent retains product judgment, integration and the independent review
+of the combined candidate. Delegation is optional; do not require a worker count.
+A work order includes the agreed product excerpt, exact interfaces/examples,
+owned files, real caller, executable acceptance and return artifact. Workers must
+raise material interface contradictions rather than invent a different product.
+Tests must fail if a required production module is missing, not create a dummy
+module or silently substitute a fallback that hides the integration failure.
 
-Do not shard a bounded one-unit change just to create handoffs. Identify the full
-dependency DAG, including shared-file conflicts. Independent units are PARALLEL
-BY DEFAULT: a shared working tree is never a reason to serialize. Create one
-isolated git worktree per concurrent unit; launch the whole ready wave in one
-parallel `{tasks:[...]}` call in the same turn. Serialize only a real dependency
-edge or file-conflict edge. Give each worker the contract slice, interface
-examples, owned files/caller, tests and return path. Do not give every worker the
-whole planning transcript. Reserve shared composition files for the integrator.
-
-Collect patches and evidence. Merge reviewed commits after collecting results
-when current review already exists and commits are authorized; otherwise integrate
-returned patches without committing for the combined review. Do not require a
-separate review for every unit. Preserve unrelated work.
-Remove worktrees only after changes and evidence have been preserved. Child
-evidence proves its child candidate, not the merged tree: execute real integrated
-journeys and relevant regressions, then obtain one cross-vendor independent review.
-Include planning, worker retries, integration, review and blocked time in elapsed
-and cost reporting; parallel worker durations must not be added as wall time.
+Do not shard a bounded one-unit change just to create handoffs. When there really
+are independent units, identify the full dependency DAG, including shared-file
+conflicts. Independent units are PARALLEL BY DEFAULT: a shared working tree is
+never a reason to serialize. Create one isolated git worktree per concurrent unit;
+launch the whole ready wave in one parallel `{tasks:[...]}` call in the same turn.
+Serialize only a real dependency edge or file-conflict edge. Collect results, then
+integrate worker commits after collecting results when commits are authorized;
+otherwise integrate returned patches without committing. Preserve unrelated work.
+Remove worktrees only after accepted changes and evidence have been preserved.
+Child evidence proves its child candidate, not the merged tree. Verify affected
+integration paths and review new integration seams, not the entire epic process.

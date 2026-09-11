@@ -14,6 +14,11 @@ v1 configuration and removed commands are not translated automatically. See
 
 ### Delivery instructions
 
+- Keep PR/FAQ, PRD and architecture agreement with one product owner, optional
+  workers and product-first independent review. Capture local execution evidence
+  with the shipped recorder; nonblocking nits no longer require another review.
+- Truncated subagent output is incomplete and stops dependent chain steps.
+
 - Review handoffs supply a readable shipping diff and prior findings; read-only
   reviewers are no longer instructed to run shell commands they cannot access.
 

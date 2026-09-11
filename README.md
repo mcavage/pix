@@ -174,12 +174,19 @@ sandbox-scoped credentials rather than host-global sbx secrets.
 
 MIT. See [LICENSE](LICENSE).
 
-### Product delivery
 
-Ask Pix to take an idea or substantial feature through product framing, architecture,
-scoped implementation workers and independent acceptance. The `deliver` skill uses
-a product path for that request and a smaller loop for an understood patch.
-`plan`, `build` and `ship` reuse the same contract and current evidence. Release
-claims distinguish a working local artifact, a green PR and a verified deployment.
-See [the delivery loop](docs/design/product-delivery-loop.md) for responsibilities
-and the boundary between workflow instructions and runtime enforcement.
+## From product idea to implementation
+
+Use `plan` to agree on the PR/FAQ, PRD and architecture before building a new
+product or material feature. `build` and `deliver` reuse that agreement; a
+brainstorm does not authorize production code. Existing approvals persist, and
+explicitly delegated product decisions can proceed autonomously.
+
+One main agent owns the product and can implement directly. Ready independent
+units can run in parallel workers, followed by verification and independent review
+of the integrated product. Visual review uses actual screenshots; completion
+claims must point to checks that ran. Model choices remain in your environment
+or explicit overrides. See [the product agreement rules](skills/deliver/references/product-agreement.md).
+
+See [the delivery design](docs/design/thinner-product-delivery.md) for acceptance
+and local evidence collection.

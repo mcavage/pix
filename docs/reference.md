@@ -158,8 +158,8 @@ description. The spine you will use most:
 
 | skill | what it does |
 | --- | --- |
-| `plan` | idea to eng-ready plan: discovery, PR/FAQ, PRD, design, architecture, with a review gate |
-| `build` | ship a feature with the crew: story files, parallel worktrees, code review, QA, verification |
+| `plan` | agree on the product through PR/FAQ, PRD and architecture before implementation |
+| `build` | implement the agreed product with one owner, optional parallel workers, verification and independent review |
 | `ship` | working tree to open PR: rebase, tests, lint, review, version bump, push |
 | `debug` | root-cause-first: reproduce, form a falsifiable hypothesis, verify it, then fix |
 | `code-review` | review the current diff, then get a cross-vendor second opinion |
@@ -695,8 +695,9 @@ pix reset
 2. Do the task. Say what you want in plain language. A skill loads on its
    own when the conversation matches one (`debug` on a bug report, `build`
    on "implement X").
-3. Let the crew show up uninvited. If you ask for a code review, a
-   cross-vendor subagent checks it without you naming a model.
+3. Agree on the product before a material feature is built. The owner can
+   implement directly or delegate ready units; an independent cross-vendor
+   reviewer checks the result using the configured review binding.
 4. When you catch yourself repeating a preference across sessions, `/recall`
    first to see what memory already captured, then `/remember` the rest.
 

@@ -19,4 +19,7 @@ customer?"). This is for builders, not fundraising.
 4. **Write.** Save a `DESIGN.md`: problem, chosen approach, MVP scope,
    architecture sketch, open questions. Tight and buildable, not a treatise.
 
-Bias toward building. The output is a doc, not a deck.
+The output is a reviewable product direction, not implementation authorization.
+Do not start production code from brainstorming alone. Continue through `plan`
+for PR/FAQ and PRD agreement when requested; honor an already approved proposal
+and explicit authorization for autonomous product decisions.

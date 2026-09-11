@@ -20,10 +20,11 @@ This is one review stage, not an extra pipeline after a valid delivery review.
 4. Verify the reviewer's actual vendor from response metadata against all authors.
    Missing or same-vendor identity is not independent review. A role name or model
    self-description is not identity evidence.
-5. Preserve findings and dispositions. Fix real defects, rerun affected checks and
-   obtain follow-up review of the changed candidate. A refutation needs independent
-   validation. Do not rerun a clean review because a workflow stage changed.
+5. Preserve findings and dispositions under the linked delivery review contract.
+   Fix material defects, rerun affected checks and obtain focused delta review.
+   A disputed blocking finding needs independent validation. Record nonblocking
+   dispositions without another full review or automatic approval pause.
 
-Emit BLOCK for defects or incomplete review, CONCERNS for documented unresolved
-quality issues, or LGTM for complete clean coverage. Do not let CONCERNS silently
-become product acceptance. Formatting enforced by tools is not a useful finding.
+Emit BLOCK for material defects or incomplete review, CONCERNS with explicit
+approval when only nonblocking suggestions remain, or LGTM for complete clean
+coverage. Ambiguous CONCERNS are not approval. Formatting enforced by tools is not a useful finding.

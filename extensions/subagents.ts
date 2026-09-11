@@ -695,6 +695,7 @@ function isFailed(r: SingleResult): boolean {
 		r.exitCode !== 0 ||
 		r.stopReason === "error" ||
 		r.stopReason === "aborted" ||
+		r.stopReason === "length" ||
 		Boolean(r.timedOut)
 	);
 }

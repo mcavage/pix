@@ -23,7 +23,7 @@ function artifact(root, name) {
  requireThat(fs.statSync(p).isFile(), 'Reference must be a file');
  return {path: name, sha256: hash(fs.readFileSync(p))};
 }
-function source(root, ignoredShipping = []) {
+export function source(root, ignoredShipping = [], includeManifest = false) {
  const names = new Set(git(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard').toString().split('\0').filter(Boolean));
  for (const name of ignoredShipping) { local(root, name); names.add(name); }
  const entries = [...names].filter(n => !n.startsWith('.pi-agent/')).sort().map(name => {
@@ -39,6 +39,7 @@ function source(root, ignoredShipping = []) {
  return {
   identity: hash(encode([git(root, 'rev-parse', 'HEAD').toString().trim(), hash(git(root, 'diff', '--cached', '--binary')), entries])),
   content: hash(encode(entries)),
+  ...(includeManifest ? {manifest: entries} : {}),
  };
 }
 function readJSON(p) {

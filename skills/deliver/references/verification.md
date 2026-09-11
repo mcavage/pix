@@ -2,12 +2,36 @@
 
 ## Candidate and checks
 
-Record base and head SHAs plus a candidate digest. Compute SHA-256 over
-length-delimited base/head records, staged and unstaged binary diffs, and a sorted
-manifest of untracked shipping files including paths, types, modes, symlink targets,
-and content bytes. Include ignored shipping files explicitly; never omit a new
-shipping test because Git has not tracked it. Exclude logs/status under `.pi-agent/`,
-not shipping inputs. Keep the shipping inventory with the evidence.
+Use the shipped `scripts/capture-evidence.mjs` beside this skill for local Git
+checks instead of writing a new recorder. Run it from the candidate repository
+with a small JSON spec and a fresh output directory under `.pi-agent/`:
+
+```json
+{"contract":".pi-agent/deliver/example/contract.md","criteria":["AC-1"],"command":["npm","test"],"environment":"declared Node/toolchain and profile identity, no secrets","inputs":["package-lock.json"],"ignoredShipping":[]}
+```
+
+```sh
+node /path/to/deliver/scripts/capture-evidence.mjs check-spec.json .pi-agent/deliver/example/checks/test-1
+```
+
+The recorder uses the repair helper's SHA-256 candidate identity: HEAD, staged
+binary diff, and a sorted manifest of tracked/untracked working bytes, deletions,
+modes and symlink targets. Staged and unstaged binary diffs are thereby covered
+(the unstaged state is represented by final content). It includes untracked shipping files
+and explicitly listed ignored shipping files. The manifest records paths, types,
+modes, symlink targets, and content bytes via their hashes. `.pi-agent/` is excluded.
+Keep generated build outputs ignored unless they ship; list ignored shipping inputs
+explicitly. Base/head SHAs and the complete release diff still belong in the review
+packet; this command does not infer a release base, scan secrets or dispatch agents.
+
+It fingerprints before and after each command, records the contract digest, input
+hashes, command, cwd (root), declared environment/profile, test inputs, start/end timestamps,
+exit code and separate stdout/stderr log paths. A changing candidate/input or nonzero
+exit cannot pass. `commandPassed` only describes execution and stability: read the
+actual result and criterion evidence. It never sets product acceptance. Environment
+is an explicit redacted description, not proof of external service state.
+Use existing runtime metadata for model identity/cost; never manufacture it here.
+For non-Git/external checks record the same evidence through the actual tool caller.
 
 Every check binds candidate digest + contract digest to criterion IDs, exact
 command, cwd, relevant environment/profile, test inputs, start/end timestamps,
@@ -56,6 +80,11 @@ unchanged journey evidence; repeat affected paths after fixes.
 
 ## State and cost
 
+README and final completion claims must be derived from recorded check results
+and reviewer disposition for the current candidate. Never prewrite a passing
+verification claim while scaffolding a product. A missing, interrupted or truncated
+result is pending/blocked; retain partial work without declaring release complete.
+
 At framing, write `.pi-agent/deliver/<slug>/status.json`; update after each stage.
 Keep contracts and logs nearby, referenced rather than copied into every record.
 This is a minimal schema; arrays hold real records, not invented zero-cost results:
@@ -83,8 +112,8 @@ This is a minimal schema; arrays hold real records, not invented zero-cost resul
 }
 ```
 
-Copy subagent timing (`startedAt`, `endedAt`, `durationMs`), usage, and model
-metadata from `details.results[]`; retain result references for single, parallel,
+Reference the existing tool result rather than retyping its metadata. Subagent timing (`startedAt`, `endedAt`, `durationMs`), usage, and model
+metadata comes from `details.results[]`; retain result references for single, parallel,
 and chain calls, including failures/retries. Do not infer duration from log order.
 Use the existing usage/cost accounting; there is no separate rate table.
 

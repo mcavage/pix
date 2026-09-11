@@ -1,93 +1,53 @@
 ---
 name: delegation-guide
-description: Context-passing and delegation rules for multi-stage subagent workflows. Use when orchestrating fanout/deep/review subagents, planning wave execution, or handing work off to subagents.
+description: Prepare bounded work orders and parallel isolated workers when delegation is useful; retain main-agent product ownership.
 ---
 # delegation-guide
 
-The main agent owns product intent, architecture and integration. Delegate concrete
-implementation or investigation units when that separation helps the outcome.
-`deliver` owns stage and review policy; this guide describes handoffs, not another
-pipeline. Keeping workers busy is not a goal by itself.
+The main agent owns product decisions, architecture and integration and can
+implement directly. Delegate when ready units have clear boundaries, not to keep
+a crew busy. Do not manufacture shards or another planning/review team.
 
-## Context-passing rules
+## A useful work order
 
-1. **Decisions inline, evidence by reference.** Include the task, acceptance
-   criteria, owned scope and key interfaces inline. Supply accessible artifact
-   paths for source and detailed evidence; do not copy the full prior transcript.
-2. **Disk bridges stages.** Stage N writes its output to disk. You read it. You
-   include the relevant parts in Stage N+1's prompt.
-3. **Return relevant findings.** A failed integration or acceptance check goes
-   back to the owning worker with its evidence, not the whole downstream transcript.
-4. **Minimize context, maximize relevance.** Extract the sections that matter.
-   Don't dump entire documents into a prompt.
-5. **Large raw data goes to a subagent first.** Never pull a large raw dataset
-   into your context window. Delegate to a `fanout` subagent that reads it and
-   returns a concise summary; pass the summary forward.
+Include the agreed product excerpt, exact interfaces/examples, owned files and
+real caller, acceptance checks, constraints, and required return artifact. Inline
+small decisions; give accessible paths for large source/spec/evidence and require
+the worker to read the relevant ranges. A path the child cannot access is not
+context. Do not paste entire histories or raw datasets into every handoff.
 
-## Delegation rules
+Workers make routine choices within scope. A material product/interface
+contradiction is a useful escalation, not a reason to retry a vague order blindly.
+Specify writable scope and whether commits are authorized. Coding workers write
+real code in their assigned worktree; reviewers stay read-only. Tests must not
+synthesize missing production modules to obtain a green result.
 
-- **Be prescriptive.** Specify the exact deliverable: format, length, structure.
-  Tell the subagent to return the full result in one shot.
-- **Bound the question.** Include the acceptance criterion and needed interfaces.
-  If a worker exposes missing context, resolve that gap before retrying dependent
-  work. A well-founded question is not automatically an agent failure.
-- **Parallelize aggressively.** Launch independent subagents in ONE parallel call:
-  the `subagent` tool with `{tasks:[...]}`. Up to 16 tasks per call, 8 run at once
-  (`PI_SUBAGENT_MAX_PARALLEL` / `_MAX_CONCURRENCY`). Prefer `{tasks:[...]}` over
-  `{chain:[...]}` — use `chain` ONLY when stage N literally consumes stage N-1's
-  output or candidate artifacts. Prefer artifact references to a full `{previous}`
-  transcript. Serialize only on a real data dependency.
-- **File discipline.** Assign the implementation workspace and owned source files.
-  For investigation, request a final report or a unique scratch artifact. Do not
-  apply report-only restrictions to a worker assigned to change existing code.
-- **Escalation.** Max 2 retries per stage. On the third failure, stop and surface
-  the blocker to the user; don't keep looping.
+## Optional parallel implementation
 
-## Model identity
+Once delegated units are ready, independent units are PARALLEL BY DEFAULT.
+Identify the dependency DAG, including shared-file conflicts. Create one isolated
+git worktree per concurrent unit. Launch the whole ready wave in one parallel
+`{tasks:[...]}` call in the same turn. Serialize only a real dependency edge or
+file-conflict edge; a shared working tree is never a reason to serialize.
+Respect the tool's configured concurrency limits rather than assuming a number.
+Use `chain` only when a step consumes its predecessor's actual output.
 
-Use the existing named presets and explicit environment bindings. Role names do
-not establish model identity or price. Verify observed model metadata on success
-and failure; unknown usage is not zero. Never silently switch to a cheaper or
-stronger model. A worker's question can expose a missing interface contract;
-resolve it instead of treating every question as an agent failure.
+Collect results, then integrate worker commits after collecting results when
+commits are authorized; otherwise integrate returned patches without committing.
+Preserve partial work and attribution. Remove worktrees only after their useful
+patches and evidence are preserved. The main owner verifies affected integration
+paths and obtains independent review of the combined product. Unit checks do not
+prove the merged tree or require another full review crew per unit.
 
-## Wave execution pattern
+## Models and evidence
 
-Plans group work into waves by dependency. Independent units are PARALLEL BY
-DEFAULT, through isolated git worktrees — a shared working tree is never a
-reason to run them one at a time. Within a wave, all units run in parallel (one
-`deep`, `fanout`, or `engineer` subagent per unit, each in its own worktree).
-The main agent orchestrates waves and owns integration; workers own their assigned units.
+Use the existing `engineer`, `fanout`, `deep` or `review` presets as appropriate.
+Model selection follows explicit frontmatter, environment bindings, then inherited
+context; a role name is not a vendor guarantee. Verify observed identities from
+response metadata. Do not switch vendors or bypass a supplied spending cap.
 
-1. Identify units and their full dependency DAG: not just wave order, but which
-   unit's output actually feeds which other unit's input, and which pairs would
-   touch the same file.
-2. Group into waves (units with no unmet dependency or file-conflict edge to
-   each other go in the current wave, regardless of how many share a working
-   tree today). Create one isolated git worktree per concurrent unit in the
-   wave (`git worktree add`) so each subagent edits its own tree.
-3. Launch the whole ready wave in one parallel `{tasks:[...]}` call (up to 8 run
-   at once; split a wider wave into back-to-back parallel calls). Mirror the
-   wave in the todo list: mark every unit in the wave `in-progress` at dispatch,
-   `completed` as each returns (the todo tool allows many in-progress at once
-   for exactly this).
-4. Merge reviewed commits after collecting results when current review already
-   exists; otherwise integrate the preserved unit patches into the candidate for
-   the combined review. Respect commit authority. Remove unit worktrees only
-   after source and evidence are preserved.
-5. Serialize ONLY units joined by a real dependency edge or file-conflict edge
-   (one consumes the other's output, or both must edit the same file) — never
-   because they happen to share a working tree.
-6. Collect unit proof, then verify the integrated candidate and get independent
-   review. Do not impose full product review per unit and again per unchanged
-   wave. Preserve the actual evidence before marking a unit complete.
-
-## Quality gates
-
-Use these sibling skills as gates, not afterthoughts:
-
-- `code-review` before shipping any code wave.
-- `verify` before any completion claim or handoff.
-- `build` to produce the story files that make each `deep` unit context-complete.
-- `debug` if a unit fails and the root cause is not obvious.
-- `qa` after implementation, before `ship`.
+Record actual returned checks, usage, timing, stop reason and partial artifacts.
+Truncation, empty output and errors remain incomplete even with process exit zero.
+Do not accept an author's assertion as proof of successful integration or review.
+For release evidence and focused repair/review, use the existing `deliver` loop;
+do not restart unchanged gates or claim a planned check already passed.
