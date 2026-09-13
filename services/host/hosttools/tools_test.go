@@ -3,6 +3,7 @@ package hosttools
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,6 +103,30 @@ func TestJobsOutputExitRedactionAndEnvironment(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"job_id": started["job_id"]})
 	if _, err := other.Call("pix_job_status", raw); err == nil {
 		t.Fatal("cross-session job visible")
+	}
+}
+
+func TestCompletedJobsRotateWithinHistoryLimit(t *testing.T) {
+	s := service(t, true)
+	s.jobs = make(map[string]*job, jobHistoryLimit)
+	for i := 0; i < jobHistoryLimit; i++ {
+		id := fmt.Sprintf("job-%d", i)
+		s.jobs[id] = &job{done: true, exit: 0, cancel: func() {}}
+		s.order = append(s.order, id)
+	}
+	started := call(t, s, "pix_host_exec", map[string]any{"argv": []string{"/usr/bin/true"}})
+	newest := started["job_id"].(string)
+	waitJob(t, s, newest)
+	if len(s.jobs) != jobHistoryLimit {
+		t.Fatalf("retained jobs = %d, want %d", len(s.jobs), jobHistoryLimit)
+	}
+	raw, _ := json.Marshal(map[string]any{"job_id": "job-0"})
+	if _, err := s.Call("pix_job_status", raw); err == nil || !strings.Contains(err.Error(), "unknown job") {
+		t.Fatalf("oldest completed job was not evicted: %v", err)
+	}
+	result := call(t, s, "pix_job_status", map[string]any{"job_id": newest})
+	if result["status"] != "finished" {
+		t.Fatalf("newest job status = %v, want finished", result["status"])
 	}
 }
 func TestCancelTimeoutAndClose(t *testing.T) {

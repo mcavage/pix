@@ -13,12 +13,17 @@ import (
 	"time"
 )
 
-const outputLimit = 64 * 1024
+const (
+	outputLimit     = 64 * 1024
+	jobHistoryLimit = 64
+	runningJobLimit = 4
+)
 
 type Service struct {
 	Config Config
 	mu     sync.Mutex
 	jobs   map[string]*job
+	order  []string
 	closed bool
 	wg     sync.WaitGroup
 }
@@ -49,9 +54,6 @@ func (s *Service) start(argv []string, cwd string, timeout time.Duration, trial 
 	if s.closed {
 		return "", errors.New("host tools session has ended")
 	}
-	if len(s.jobs) >= 64 {
-		return "", errors.New("session job limit reached")
-	}
 	running := 0
 	for _, j := range s.jobs {
 		j.mu.Lock()
@@ -60,8 +62,31 @@ func (s *Service) start(argv []string, cwd string, timeout time.Duration, trial 
 		}
 		j.mu.Unlock()
 	}
-	if running >= 4 {
+	if running >= runningJobLimit {
 		return "", errors.New("four host jobs are already running; wait or cancel one")
+	}
+	// Keep job output bounded without turning the retained history bound into a
+	// lifetime execution quota. Once the history is full, forget the oldest
+	// completed job before accepting another one. Running jobs are never evicted.
+	if len(s.jobs) >= jobHistoryLimit {
+		for i, id := range s.order {
+			j := s.jobs[id]
+			if j == nil {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+			j.mu.Lock()
+			done := j.done
+			j.mu.Unlock()
+			if done {
+				delete(s.jobs, id)
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+		}
+	}
+	if len(s.jobs) >= jobHistoryLimit {
+		return "", errors.New("session job history limit reached")
 	}
 	var idBytes [16]byte
 	if _, err := rand.Read(idBytes[:]); err != nil {
@@ -101,6 +126,7 @@ func (s *Service) start(argv []string, cwd string, timeout time.Duration, trial 
 		s.jobs = map[string]*job{}
 	}
 	s.jobs[id] = j
+	s.order = append(s.order, id)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()

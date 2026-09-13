@@ -45,10 +45,12 @@ tools. Pi JSON output supplies actual response metadata for model tests. Trial
 workspace files remain available as evidence; ordinary Pix session teardown
 removes its sandbox when it can prove safe removal.
 
-Each server permits four running jobs and 64 jobs total. Jobs capture at most
-64 KiB of output in memory, with truncation reported. No resolved credentials
-are deliberately inherited; the environment passes only ordinary host runtime
-settings and the fixed `PIX_HOME`. The existing diagnostic redactor runs before
+Each server permits four running jobs and retains the 64 most recent jobs.
+Starting another job evicts the oldest completed job; running jobs are never
+evicted. Jobs capture at most 64 KiB of output in memory, with truncation
+reported. No resolved credentials are deliberately inherited; the environment
+passes only ordinary host runtime settings and the fixed `PIX_HOME`. The
+existing diagnostic redactor runs before
 output is disclosed. This is defense in depth, not a confidentiality guarantee
 against a development command deliberately reading the host user's files.
 
