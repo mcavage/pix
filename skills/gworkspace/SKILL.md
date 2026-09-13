@@ -1,6 +1,6 @@
 ---
 name: gworkspace
-description: Read Gmail, Drive, Docs, Sheets, Slides, and Calendar, and use narrowly declared Google write tools. Use for "read my email", "find that doc", "read this deck", "draft an email", or "what's on my calendar".
+description: Read Gmail, Drive, Docs, Sheets, Slides, and Calendar; use limited Google write tools. Use for "read my email", "find that doc", "read this deck", "draft an email", or "what's on my calendar".
 ---
 # gworkspace
 
