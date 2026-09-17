@@ -98,15 +98,16 @@ const v38WrapperKey = "sandboxes"
 // otherwise pristine.
 var legacyAliasWrapperKeys = []string{"items", "boxes"}
 
-// v38RowKeys are the allowed row keys observed in sbx v0.38/v0.39/v0.42:
+// v38RowKeys are the allowed row keys observed in sbx v0.38/v0.39/v0.42/v0.43:
 // name, id (a UUID), agent (string), status (a recognized value), workspaces
-// (optional array since v0.39), ports (optional array), and workspace_missing
-// (optional bool). Unlike the legacy profile's nameKeys/
+// (optional array since v0.39), ports (optional array), workspace_missing
+// (optional bool), and the optional last_used_at/created_at timestamps.
+// Unlike the legacy profile's nameKeys/
 // stateKeys/idKeys, this profile has NO key aliases — a v38-wrapped row using
 // a legacy alias (e.g. "instance_id" instead of "id") is a key outside the
 // selected profile, which this package treats the same as any other
 // undocumented key: never silently accepted as canonical.
-var v38RowKeys = []string{"name", "id", "agent", "status", "workspaces", "workspace_missing", "ports", "last_used_at"}
+var v38RowKeys = []string{"name", "id", "agent", "status", "workspaces", "workspace_missing", "ports", "last_used_at", "created_at"}
 
 // v38UUIDPattern is the shape check for the v0.38 row's "id" field: canonical
 // 8-4-4-4-12 hyphenated hex, the documented UUID form. It does not pin a
@@ -381,15 +382,20 @@ func parseRowV38(m map[string]any) (Entry, error) {
 		}
 	}
 
-	// Observed on sbx v0.42.1-758-gdf5c96ba6. This timestamp is
-	// listing metadata, never an ownership or liveness proof.
-	if value, present := m["last_used_at"]; present {
+	// last_used_at observed on sbx v0.42.1-758-gdf5c96ba6; created_at on
+	// v0.43.0-829-gf749bb121. Both are listing metadata, never an ownership
+	// or liveness proof, so they are type-checked and then ignored.
+	for _, key := range []string{"last_used_at", "created_at"} {
+		value, present := m[key]
+		if !present {
+			continue
+		}
 		stamp, ok := value.(string)
 		if !ok {
-			return Entry{}, fmt.Errorf("field %q is not a string", "last_used_at")
+			return Entry{}, fmt.Errorf("field %q is not a string", key)
 		}
 		if _, err := time.Parse(time.RFC3339Nano, stamp); err != nil {
-			return Entry{}, fmt.Errorf("field %q is not an RFC3339 timestamp", "last_used_at")
+			return Entry{}, fmt.Errorf("field %q is not an RFC3339 timestamp", key)
 		}
 	}
 
