@@ -41,6 +41,9 @@ can work with the files in that folder. Inside the session, `/getting-started`
 shows the main features. Ask it to review a code change, summarize documents,
 research a question, or draft a plan with supporting evidence.
 
+Use `/btw <question>` when you want a quick explanation without interrupting
+the main task or adding the side exchange to its context.
+
 The workspace is writable. Edits remain on your computer when the session ends.
 Conversations are stored under `.pi-sessions` in that workspace. The temporary
 sandbox is normally removed after its final session exits; `pix run --keep`

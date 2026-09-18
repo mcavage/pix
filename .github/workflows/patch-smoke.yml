@@ -5,7 +5,8 @@ on:
   workflow_call: {}
 
 jobs:
-  # Real npm-resolution smoke for the two vendored runtime patches
+  # Real npm-resolution smoke for the vendored runtime patches and curated
+  # packages whose load path must stay compatible with the pinned Pi runtime
   # (scripts/patches/*.mjs). tests/pi-patches.test.mjs (the PR gate) proves the
   # patch logic against LOCAL fixtures — zero network, fast on every push/PR.
   # This job is the other half of AC-P0-006: install the ACTUAL pinned npm
@@ -29,14 +30,17 @@ jobs:
           set -euo pipefail
           PI_PACKAGE="$(grep -oP '^ARG PI_PACKAGE=\K\S+' images/agent/Dockerfile)"
           TODO_PACKAGE="$(grep -oP 'pi-manage-todo-list@\S+' images/agent/Dockerfile | head -1)"
-          test -n "$PI_PACKAGE" && test -n "$TODO_PACKAGE"
+          BTW_PACKAGE="$(grep -oP 'pi-mono-btw@\S+' images/agent/Dockerfile | head -1)"
+          test -n "$PI_PACKAGE" && test -n "$TODO_PACKAGE" && test -n "$BTW_PACKAGE"
           echo "pi_package=$PI_PACKAGE" >> "$GITHUB_OUTPUT"
           echo "todo_package=$TODO_PACKAGE" >> "$GITHUB_OUTPUT"
+          echo "btw_package=$BTW_PACKAGE" >> "$GITHUB_OUTPUT"
 
-      - name: npm install (real registry resolution) — pi + pi-manage-todo-list
+      - name: npm install (real registry resolution) — pi + curated packages
         env:
           PI_PACKAGE: ${{ steps.pins.outputs.pi_package }}
           TODO_PACKAGE: ${{ steps.pins.outputs.todo_package }}
+          BTW_PACKAGE: ${{ steps.pins.outputs.btw_package }}
         run: |
           set -euxo pipefail
           export HOME="$RUNNER_TEMP/patch-smoke-home"
@@ -44,6 +48,15 @@ jobs:
           mkdir -p "$HOME" "$HOME/.pi/agent/npm"
           npm install --global --ignore-scripts "$PI_PACKAGE"
           npm install --prefix "$HOME/.pi/agent/npm" --ignore-scripts "$TODO_PACKAGE"
+          ln -sf ../lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js "$NPM_CONFIG_PREFIX/bin/pi"
+          chmod +x "$NPM_CONFIG_PREFIX/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
+          "$NPM_CONFIG_PREFIX/bin/pi" install "npm:$BTW_PACKAGE"
+          "$NPM_CONFIG_PREFIX/bin/pi" list | tee /tmp/pi-package-list.txt
+          grep -Fq "$BTW_PACKAGE" /tmp/pi-package-list.txt
+          printf '{"type":"get_state"}\n' | timeout 20s "$NPM_CONFIG_PREFIX/bin/pi" --mode rpc --no-session >/tmp/btw-rpc.out 2>/tmp/btw-rpc.err
+          cat /tmp/btw-rpc.err
+          ! grep -Eiq 'failed to load|error loading' /tmp/btw-rpc.err
+          grep -q '"command":"get_state","success":true' /tmp/btw-rpc.out
           # DISCOVER the renderer file, never hardcode its name: pi-tui 0.84.0
           # moved the main-screen doRender() out of dist/tui.js into
           # dist/tui-main-screen.js, and a pinned path silently pointed this smoke

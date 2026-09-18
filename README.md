@@ -109,6 +109,10 @@ project files and `.pi-sessions` conversations are kept; tools or files stored
 only inside the sandbox are discarded. Use `--keep` when you need those too.
 In scripts, use the explicit `pix run` command; bare `pix` requires a terminal.
 
+Inside a session, `/btw <question>` asks a quick side question without
+interrupting the main task or adding the exchange to its context. The answer
+appears in a dismissible panel while the main agent keeps working.
+
 ## Remember useful context
 
 Inside a session:

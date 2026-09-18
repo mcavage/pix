@@ -142,7 +142,16 @@ profile. A future multi-user deployment adds real tenant authentication
 rather than treating a profile argument as authorization. Full detail,
 including the on-disk schema and the capture budget: `docs/memory.md`.
 
-## 3. Skills (the flows)
+## 3. Side questions
+
+Inside a Pix session, `/btw <question>` starts an immediate side-model request
+using the active model and recent session transcript. It works while the main
+agent is idle or busy, does not interrupt that task, and keeps the question and
+answer out of the visible transcript and future model context. The answer is
+shown in a dismissible panel; use the arrow keys to scroll and Enter or Escape
+to close it. `Ctrl+Shift+B` asks the text currently in the editor.
+
+## 4. Skills (the flows)
 
 Skills are named, tested workflows for the moments that recur. Each is a
 `SKILL.md` with tight steps, invoked automatically when the conversation
@@ -180,7 +189,7 @@ live outside the agent image (mounted at run time from
 `skills/<name>/SKILL.md` under `~/.pix/skills/` or an environment's own
 `skills/` directory, which shadows the shipped copy of the same name.
 
-## 4. The crew
+## 5. The crew
 
 pix is not one model. Providers rotate (Claude, GPT, Gemini, plus llmman or
 Ollama), and specialist subagents (architect, engineer, qa-lead,
@@ -212,7 +221,7 @@ of them and ranks none of them. Subagents run headless
 watchdog kills it after an idle or wall-clock timeout and reports the failure
 instead of hanging forever.
 
-## 5. Environments
+## 6. Environments
 
 An environment is a directory under `~/.pix/envs/<name>/`, `PIX_HOME` may
 replace `~/.pix`. Pix does not maintain an environment registration database:
@@ -332,7 +341,7 @@ defaults to No; `--yes` suppresses the prompt, never the fingerprint check.
 Normal review explains the requested actions and access in plain language.
 `--verbose` prints the detailed bill and changes since the previous approval.
 
-## 6. Setup
+## 7. Setup
 
 For a basic environment such as the generated `default`, interactive setup
 first offers optional Anthropic, OpenAI, Google, Parallel web-search, and GitHub
@@ -493,7 +502,7 @@ Nothing else executes a hook. `pix run`, `pix doctor`, and every implicit
 launch never do, there is no hook registry outside the environment
 directory that declares one, and no other environment can contribute one.
 
-## 7. Doctor
+## 8. Doctor
 
 `pix doctor` is read-only. It checks Docker and sbx availability and version,
 the pinned images/kit/runtime-data identity, environment schema and trust
@@ -521,7 +530,7 @@ to fail doctor. Nothing in v2 makes launchd or a pack a required check:
 there is no `pix-host serve` supervision tree and no pack system left to
 check at all (`docs/design/pix-v2-architecture.md` §14).
 
-## 8. Tasks
+## 9. Tasks
 
 A task is an isolated Git checkout plus a recorded pix environment, created
 with `git clone --local`: a self-contained checkout whose `.git` directory
@@ -554,7 +563,7 @@ uncommitted work or unpushed commits unless you supply `--force`. Before
 deleting a checkout, forced removal preserves otherwise unreachable commits
 under a recovery ref in the source repository.
 
-## 9. `pix ls` and `pix rm`
+## 10. `pix ls` and `pix rm`
 
 `pix ls` reports pix-owned sandboxes, their environment, project, holder
 count, and task association. It does not report readiness; health belongs to
@@ -577,7 +586,7 @@ sandbox. `--all` discovers through the same stack-scoped listing, so a
 second `PIX_HOME` running on this host is never a candidate. `--keep NAME`
 excludes a named sandbox from a bulk operation.
 
-## 10. Secrets
+## 11. Secrets
 
 `pix secret` manages 1Password `op://` references, never values.
 
@@ -594,7 +603,7 @@ its own supported secret interfaces. Missing `op` is fatal only when the
 selected environment needs direct 1Password resolution: keyless and
 Gateway-authenticated backends never trigger the flow.
 
-## 11. MCP and host capabilities
+## 12. MCP and host capabilities
 
 Pix has one sandbox-facing integration path: the sbx MCP Gateway. There is no
 pix-owned `mcp` command, no Pix-owned registration database, and no built-in vendor
@@ -672,7 +681,7 @@ capability to a concrete provider (an `mcp` server, a `cli` on PATH, an
 `http` service, a `files` bundle, or `none` if unwired). See the
 `capability-routing` skill for the resolution and fan-out rules.
 
-## 12. Reset
+## 13. Reset
 
 `pix reset` is the safe clean-slate recovery command. It removes THIS stack's
 pix-owned sandboxes through the normal proof-gated removal path, stops and
@@ -688,7 +697,7 @@ are never moved.
 pix reset
 ```
 
-## 13. Your first hour
+## 14. Your first hour
 
 1. `pix run` in a real project directory: not a toy repo, the thing you
    actually need to get done today.

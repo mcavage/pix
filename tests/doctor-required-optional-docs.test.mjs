@@ -13,10 +13,10 @@
 // (workflow/doctor/probes.go), so there is nothing left to assert never-
 // required about either.
 //
-// The Pix v2 doc rewrite moved this content from the old "## 9. Status and
-// doctor" section (a status/doctor combined narrative) to "## 7. Doctor" in
-// the rewritten docs/reference.md (docs/design/pix-v2-surface.md §3.7); there
-// is no top-level `pix status` verb left to combine it with.
+// The Pix v2 doc rewrite moved this content from the old combined Status and
+// doctor narrative to a dedicated numbered Doctor section. Locate that section
+// by its semantic heading, not its current number: inserting an earlier section
+// must not silently blind this guard.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -30,20 +30,28 @@ const probes = fs.readFileSync(
 	"utf8",
 );
 
+function referenceSection(startName, endName) {
+	const start = reference.search(new RegExp(`^## \\d+\\. ${startName}$`, "m"));
+	const end = reference.search(new RegExp(`^## \\d+\\. ${endName}$`, "m"));
+	assert.notEqual(start, -1, `missing ${startName} section in docs/reference.md`);
+	assert.ok(end > start, `missing ${endName} section after ${startName} in docs/reference.md`);
+	return reference.slice(start, end);
+}
+
 test("probes.go's Required() set matches what this test expects to guard (fitness function pins itself against drift)", () => {
 	assert.match(probes, /func \(SbxProbe\) Required\(\) bool\s*\{\s*return true/);
 	assert.match(probes, /func \(ProviderKeyProbe\) Required\(\) bool\s*\{\s*return true/);
 });
 
 test("docs/reference.md's doctor exit-code section names sbx among the required checks", () => {
-	const section = reference.slice(reference.indexOf("## 7. Doctor"), reference.indexOf("## 8. Tasks"));
+	const section = referenceSection("Doctor", "Tasks");
 	assert.match(section, /Required, always:.*sbx CLI/is);
 	assert.match(section, /provider key/i);
 	assert.doesNotMatch(section, /only when a core requirement\s*\n?\(a model provider key, or the config file itself\)/i);
 });
 
 test("docs/reference.md does not claim launchd or pack are required", () => {
-	const section = reference.slice(reference.indexOf("## 7. Doctor"), reference.indexOf("## 8. Tasks"));
+	const section = referenceSection("Doctor", "Tasks");
 	assert.doesNotMatch(section, /\*\*launchd\*\*/i);
 	assert.doesNotMatch(section, /\*\*pack\*\*/i);
 });

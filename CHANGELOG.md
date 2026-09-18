@@ -68,6 +68,9 @@ v1 configuration and removed commands are not translated automatically. See
 
 ### Runtime and credentials
 
+- `/btw <question>` opens an ephemeral side answer while the main agent keeps
+  working. It uses the active model and recent transcript for context without
+  adding the exchange to the main conversation.
 - The sbx MCP Gateway is the only sandbox-facing integration path. Memory runs
   as a separate Docker container, with persistent storage under `PIX_HOME`.
 - Each home has scoped runtime resources, its own memory port and cleanup
