@@ -18,7 +18,7 @@ test("the Pix runtime pins /btw and its license ledger to the same exact package
 
 test("real-registry CI installs and starts Pi with the pinned /btw package", () => {
 	assert.match(workflow, /BTW_PACKAGE="\$\(grep -oP 'pi-mono-btw@\\S\+'/);
-	assert.match(workflow, /pi install "npm:\$BTW_PACKAGE"/);
-	assert.match(workflow, /pi --mode rpc --no-session/);
+	assert.match(workflow, /"\$NPM_CONFIG_PREFIX\/bin\/pi" install "npm:\$BTW_PACKAGE"/);
+	assert.match(workflow, /"\$NPM_CONFIG_PREFIX\/bin\/pi" --mode rpc --no-session/);
 	assert.match(workflow, /"command":"get_state","success":true/);
 });

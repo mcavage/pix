@@ -50,10 +50,10 @@ jobs:
           npm install --prefix "$HOME/.pi/agent/npm" --ignore-scripts "$TODO_PACKAGE"
           ln -sf ../lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js "$NPM_CONFIG_PREFIX/bin/pi"
           chmod +x "$NPM_CONFIG_PREFIX/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
-          pi install "npm:$BTW_PACKAGE"
-          pi list | tee /tmp/pi-package-list.txt
+          "$NPM_CONFIG_PREFIX/bin/pi" install "npm:$BTW_PACKAGE"
+          "$NPM_CONFIG_PREFIX/bin/pi" list | tee /tmp/pi-package-list.txt
           grep -Fq "$BTW_PACKAGE" /tmp/pi-package-list.txt
-          printf '{"type":"get_state"}\n' | timeout 20s pi --mode rpc --no-session >/tmp/btw-rpc.out 2>/tmp/btw-rpc.err
+          printf '{"type":"get_state"}\n' | timeout 20s "$NPM_CONFIG_PREFIX/bin/pi" --mode rpc --no-session >/tmp/btw-rpc.out 2>/tmp/btw-rpc.err
           cat /tmp/btw-rpc.err
           ! grep -Eiq 'failed to load|error loading' /tmp/btw-rpc.err
           grep -q '"command":"get_state","success":true' /tmp/btw-rpc.out
