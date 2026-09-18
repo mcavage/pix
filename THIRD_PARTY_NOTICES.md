@@ -83,6 +83,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | @juanibiapina/pi-extension-settings | 0.9.1 | MIT |
 | pi-manage-todo-list | 0.4.0 | MIT |
 | pi-mcp-adapter | 2.13.0 | MIT |
+| pi-mono-btw | 1.7.4 | MIT |
 | pi-plan | 0.1.1 | MIT |
 | pi-simplify | 0.2.3 | MIT |
 | pi-usage | 0.3.0 | MIT |

@@ -425,6 +425,7 @@ function gettingStartedText(): string {
 		"  /skill:<name>         run a workflow directly (try /skill:healthcheck)",
 		"  /model                inspect or switch the active model",
 		"  /status               session, context, tools, and host-service health",
+		"  /btw <question>        ask a side question without interrupting the main task",
 		"  /recall <query>       inspect relevant persistent memory",
 		"",
 		"Ask normally for ordinary work. For a rigorous feature, say ‘plan this’,",

@@ -194,6 +194,14 @@
       "verifiedVia": "package.json \"license\" field, installed image"
     },
     {
+      "name": "pi-mono-btw",
+      "version": "1.7.4",
+      "license": "MIT",
+      "author": "Emanuel Casco",
+      "role": "pinned pi extension (Dockerfile) — ephemeral /btw side questions",
+      "verifiedVia": "LICENCE.md in the pi-mono-btw@1.7.4 npm tarball (sha512-UARg8OWQ5SJeG+YL6i1nBTDgN2HdELSAQpaDXP8mdnkTP8ZDMhC7dvQHecsbFAwtqHyiZMt/uZHk7+JKP4HWiA==)"
+    },
+    {
       "name": "pi-simplify",
       "version": "0.2.3",
       "license": "MIT",

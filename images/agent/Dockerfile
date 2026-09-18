@@ -300,7 +300,7 @@ USER agent
 # (extensions/subagents.ts, baked via the COPY extensions/ below); the off-the-
 # shelf @tintinweb/pi-subagents stays DISABLED — see the notes below.
 # plan mode (pi-plan), MCP adapter (wire servers per-project), todo list,
-# simplify, web access, usage. (powerbar removed: its session-shutdown handler
+# side questions (/btw), simplify, web access, usage. (powerbar removed: its session-shutdown handler
 # uses a stale ctx after ctx.reload(), which wedges /reload. pi-lens removed: its
 # inline LSP diagnostics were not pulling their weight.)
 #
@@ -335,7 +335,8 @@ USER agent
 # docs/design/subagents-extension.md. Do NOT restore the @tintinweb line.
 RUN set -eux; for p in \
       pi-plan@0.1.1 pi-mcp-adapter@2.21.1 \
-      pi-manage-todo-list@0.4.0 pi-simplify@0.2.3 pi-web-access@0.13.0 \
+      pi-manage-todo-list@0.4.0 pi-mono-btw@1.7.4 \
+      pi-simplify@0.2.3 pi-web-access@0.13.0 \
       @juanibiapina/pi-extension-settings@0.9.1 \
       pi-usage@0.3.0; do \
       pi install "npm:$p"; \
