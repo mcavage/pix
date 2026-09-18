@@ -308,9 +308,10 @@
       "_wave_d_note": "Wave D coexistence integration: rebaselined ONCE to the EXACT current values, with no slack. The growth is the coexistence feature itself: stack-scoped resource names and their validators (stack, sandbox, container, workspace), the Pix-managed PIX_LAUNCHER_VERSION/PIX_STACK_ID env facts and their recreation-safe classification (envinfo), the refs-file provider evidence that replaced the host-global sbx store (health, secret, workflow/doctor), the per-home memory port (workflow/launch), and the version identity threaded through RunOpts. New edges are all onto pix/host/stack or pix/host/container, the two packages that own the scoped names and the per-home port."
     },
     "pix/host/sandbox": {
+      "_sbx_v43_created_at_note": "Observed sbx v0.43 created_at metadata support accepts and validates the new RFC3339 field without using it as identity or liveness evidence. Exact 8-line production growth; parser tests cover valid, malformed, and non-string values.",
       "_sbx_v42_timestamp_note": "Observed sbx v0.42 last_used_at metadata support validates RFC3339 timestamps without using them as identity or liveness evidence. Exact 17-line growth; full session regression covers create, exec, and stopped-sandbox removal.",
       "_session_resume_fix_note": "Observed sbx v0.39 listing support adds optional workspaces and validated port metadata. Exact growth; parser and creation receipt tests preserve identity enforcement.",
-      "prod_loc": 1171,
+      "prod_loc": 1179,
       "test_loc": 1156,
       "exports": 32,
       "exports_used_externally": 10,

@@ -61,6 +61,10 @@ v1 configuration and removed commands are not translated automatically. See
 - Terminal input supports editing, backspace, pasted references and Ctrl-C,
   including in Ghostty. Normal output explains progress; `--verbose` exposes
   redacted diagnostics and trust details.
+- `pix run` attaches on sbx v0.43, which adds a `created_at` field to every
+  `sbx ls --json` row. An undocumented listing field no longer leaves a
+  freshly created sandbox unverifiable and refused with "reports no
+  verifiable instance id".
 
 ### Runtime and credentials
 
