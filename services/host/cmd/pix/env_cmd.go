@@ -21,9 +21,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -320,11 +321,7 @@ func (c *envShowCmd) Run(d *cli.Deps) error {
 		if len(agentModels) == 0 {
 			fmt.Fprintln(d.Out, "agents:      inherit main model")
 		} else {
-			names := make([]string, 0, len(agentModels))
-			for name := range agentModels {
-				names = append(names, name)
-			}
-			sort.Strings(names)
+			names := slices.Sorted(maps.Keys(agentModels))
 			fmt.Fprintln(d.Out, "agents:")
 			for _, name := range names {
 				fmt.Fprintf(d.Out, "  %s -> %s\n", name, agentModels[name])

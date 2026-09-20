@@ -106,6 +106,16 @@ func SetRef(home pixhome.Paths, key, value string) error {
 	// one in a spaced 1Password field name), same as v1's RunSecretSetLocked.
 	value = strings.ReplaceAll(value, "%20", " ")
 
+	return upsertLineLocked(home, key, value)
+}
+
+// upsertLineLocked is the ONE locked read-modify-write behind SetRef and
+// SetPlainValue: under the secrets.env lock, read the current file (absent is
+// an empty file), upsert KEY=value as a single line, and replace the file
+// atomically at mode 0600 inside a 0700 directory. Validation of key and
+// value is each caller's own job BEFORE taking the lock; this helper only
+// persists what it is handed.
+func upsertLineLocked(home pixhome.Paths, key, value string) error {
 	return sys.Lock(secretsEnvLockPath(home), func() error {
 		path := RefsEnvPath(home)
 		content := ""
@@ -114,7 +124,6 @@ func SetRef(home pixhome.Paths, key, value string) error {
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("read %s: %w", path, err)
 		}
-
 		newContent := upsertOpRef(content, key, value)
 		dir := filepath.Dir(path)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -178,21 +187,7 @@ func SetPlainValue(home pixhome.Paths, key, value string) error {
 	if i := strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }); i >= 0 {
 		return fmt.Errorf("pix setup: %s value contains a control character at byte %d; secrets.env is one entry per line", key, i)
 	}
-	return sys.Lock(secretsEnvLockPath(home), func() error {
-		path := RefsEnvPath(home)
-		content := ""
-		if data, err := os.ReadFile(path); err == nil {
-			content = string(data)
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("read %s: %w", path, err)
-		}
-		newContent := upsertOpRef(content, key, value)
-		dir := filepath.Dir(path)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("create %s: %w", dir, err)
-		}
-		return atomicWriteSecrets(dir, path, []byte(newContent), 0o600)
-	})
+	return upsertLineLocked(home, key, value)
 }
 
 // PlainValue reads key's current literal value from <home>/secrets.env, if

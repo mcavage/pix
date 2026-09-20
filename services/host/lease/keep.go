@@ -77,16 +77,7 @@ func withKeepGuard(dir string, fn func() error) error {
 }
 
 func readKeepFile(path string) (*KeepState, error) {
-	f, err := openNoFollow(path, syscall.O_RDONLY, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	var state KeepState
-	if err := json.NewDecoder(f).Decode(&state); err != nil {
-		return nil, fmt.Errorf("lease: corrupt keep state at %s: %w", path, err)
-	}
-	return &state, nil
+	return readJSONNoFollow[KeepState](path, "keep state")
 }
 
 // writeKeepFile writes state to path via a 0600 temp file + rename, so a

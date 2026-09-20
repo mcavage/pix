@@ -495,48 +495,13 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 	if d.Interactive && (len(missingSecrets)+len(missingPlain)) > 0 {
 		fmt.Fprintln(d.Out, "Let's connect your accounts. Leave an answer blank to finish it later.")
 
-		var stillMissingSecrets []string
-		for _, k := range missingSecrets {
-			// cli.Deps.Ask is the shared prompt: ONE stdin buffer for the
-			// whole command, and a rejected answer is re-asked in place
-			// instead of falling through to "go run three other commands
-			// and start over". secret.SetRef is the SAME validated, locked
-			// write `pix secret set` performs (op:// prefix, no control
-			// characters, one atomic upsert), so the retry loop validates
-			// against the real persistence path, never a copy of its rules.
-			if _, ok := d.Ask(cli.Question{
-				Label:   valueLabel(bom, k),
-				Detail:  describeDeclaredValue(bom, k, true),
-				Example: valueExample(bom, k, true),
-				Accept: func(v string) error {
-					if serr := secret.SetRef(home, k, v); serr != nil {
-						return fmt.Errorf("could not record %s: %v", k, serr)
-					}
-					return nil
-				},
-			}); !ok {
-				stillMissingSecrets = append(stillMissingSecrets, k)
-			}
-		}
-		missingSecrets = stillMissingSecrets
-
-		var stillMissingPlain []string
-		for _, k := range missingPlain {
-			if _, ok := d.Ask(cli.Question{
-				Label:   valueLabel(bom, k),
-				Detail:  describeDeclaredValue(bom, k, false),
-				Example: valueExample(bom, k, false),
-				Accept: func(v string) error {
-					if serr := secret.SetPlainValue(home, k, v); serr != nil {
-						return fmt.Errorf("could not record %s: %v", k, serr)
-					}
-					return nil
-				},
-			}); !ok {
-				stillMissingPlain = append(stillMissingPlain, k)
-			}
-		}
-		missingPlain = stillMissingPlain
+		// secret.SetRef is the SAME validated, locked write `pix secret
+		// set` performs (op:// prefix, no control characters, one atomic
+		// upsert), and secret.SetPlainValue its non-secret sibling in the
+		// same file, so each retry loop validates against the real
+		// persistence path, never a copy of its rules.
+		missingSecrets = askDeclaredValues(d, bom, missingSecrets, true, func(k, v string) error { return secret.SetRef(home, k, v) })
+		missingPlain = askDeclaredValues(d, bom, missingPlain, false, func(k, v string) error { return secret.SetPlainValue(home, k, v) })
 	}
 
 	// A value's own [host.values.NAME] metadata can mark it `required =
@@ -566,6 +531,37 @@ func validateDeclaredEnvironmentValues(d *cli.Deps, home pixhome.Paths, bom nati
 		fmt.Fprintf(d.Out, "  %s is a non-secret value; re-run `pix setup --env NAME` on a terminal to be prompted for it, or record it directly: printf '%s=<value>\\n' >> %s\n", k, k, home.SecretsEnv)
 	}
 	return fmt.Errorf("%d requirement(s) not recorded; see the exact commands above", len(requiredMissingSecrets)+len(requiredMissingPlain))
+}
+
+// askDeclaredValues prompts for each missing declared name in turn and
+// returns the names still missing afterwards (a blank answer, or a value the
+// record function rejected past the prompt's own retries). cli.Deps.Ask is
+// the shared prompt: ONE stdin buffer for the whole command, and a rejected
+// answer is re-asked in place instead of falling through to "go run three
+// other commands and start over". Each prompt's Label/Detail/Example are the
+// environment's own [host.values.<NAME>] metadata when it declared any, so a
+// well-authored environment asks for "Google Workspace account email"
+// instead of a bare "GOG_ACCOUNT". record is the owning secret writer for
+// the kind being asked (SetRef for env_keys, SetPlainValue for plain_keys);
+// this loop never persists anything itself.
+func askDeclaredValues(d *cli.Deps, bom nativeenv.BillOfMaterials, keys []string, isSecret bool, record func(key, value string) error) []string {
+	var stillMissing []string
+	for _, k := range keys {
+		if _, ok := d.Ask(cli.Question{
+			Label:   valueLabel(bom, k),
+			Detail:  describeDeclaredValue(bom, k, isSecret),
+			Example: valueExample(bom, k, isSecret),
+			Accept: func(v string) error {
+				if serr := record(k, v); serr != nil {
+					return fmt.Errorf("could not record %s: %v", k, serr)
+				}
+				return nil
+			},
+		}); !ok {
+			stillMissing = append(stillMissing, k)
+		}
+	}
+	return stillMissing
 }
 
 // splitByRequired partitions keys by each name's own [host.values.NAME]

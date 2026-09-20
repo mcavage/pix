@@ -28,9 +28,10 @@ package launch
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"pix/host/config"
@@ -40,7 +41,6 @@ import (
 	"pix/host/hosttrust"
 	"pix/host/inference"
 	"pix/host/lease"
-	"pix/host/pixhome"
 	"pix/host/recreatelog"
 	"pix/host/sandbox"
 	"pix/host/stack"
@@ -409,7 +409,7 @@ func resolveInterpolation(lookupEnv func(string) (string, bool), varName string,
 	// in the undefined-variable refusal and in the argv expansion: three
 	// consumers, one set of names, or a fingerprint would key a value no
 	// launch ever used.
-	if value, ok := envinfo.LookupPixManaged(pixManagedVars(), lookupEnv)(varName); ok {
+	if value, ok := envinfo.LookupPixManaged(envinfo.CurrentPixManagedVars(), lookupEnv)(varName); ok {
 		return value
 	}
 	if def != nil {
@@ -693,11 +693,7 @@ func EffectiveInferenceConfig(cfg *config.Config, sc *envinfo.Sidecar) (*config.
 		return &eff, nil
 	}
 
-	backendNames := make([]string, 0, len(sc.Inference.Backends))
-	for name := range sc.Inference.Backends {
-		backendNames = append(backendNames, name)
-	}
-	sort.Strings(backendNames)
+	backendNames := slices.Sorted(maps.Keys(sc.Inference.Backends))
 	for _, name := range backendNames {
 		b := sc.Inference.Backends[name]
 		driver := strings.TrimSpace(b.Driver)
@@ -957,18 +953,6 @@ func EnvExtraKits(cfg *config.Config, o RunOpts, version string) []string {
 		kits = append(kits, cfg.Kits.Stack...)
 	}
 	return kits
-}
-
-// pixManagedVars resolves the Pix-defined interpolation variables for this
-// host's home (envinfo.PixManagedVars). An unresolvable home yields none,
-// so `${PIX_HOME}` stays undefined rather than becoming "" — the same
-// fail-closed choice workflow/env's loader makes.
-func pixManagedVars() map[string]string {
-	home, err := pixhome.Dir()
-	if err != nil {
-		return nil
-	}
-	return envinfo.PixManagedVars(home)
 }
 
 // ComposeMCPServerFacts folds the host-global server names this create

@@ -1,13 +1,12 @@
 package models
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
+	"maps"
 	"os"
 	"path/filepath"
-	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -32,11 +31,6 @@ var (
 	OllamaLocalProbeBudget  = 300 * time.Second
 )
 
-// ollamaTagsTimeout bounds the /api/tags request so a wedged daemon can never
-// hang setup. A var, not a const, so a hermetic test can shrink it (an
-// unreachable-daemon test must fail fast, not wait out a production budget).
-var ollamaTagsTimeout = 5 * time.Second
-
 // backends lazily creates the backend map, so no caller has to.
 func backends(cfg *config.Config) map[string]config.InferenceBackend {
 	if cfg.Inference.Backends == nil {
@@ -60,28 +54,10 @@ func bind(cfg *config.Config, model, backend, upstream string) {
 // says nothing about what the subscription may CALL.
 type OllamaSelection struct{ Local, Cloud bool }
 
-// ollamaTagNamePattern is Ollama's OWN legal name grammar — namespace/model:tag,
-// alphanumerics plus `. _ / : -`, never a leading `-` — and the ingestion
-// boundary for every tag this package ever renders or persists. A rogue
-// listener on the Ollama port, or a redirected OLLAMA_HOST, controls every
-// byte of m.Name in the /api/tags response; without this check a name
-// carrying \r, \n, or an ANSI erase sequence could forge a "bound ... as LOCAL
-// (free and private)" line or erase the "could not be classified, not bound"
-// refusal — defeating the exact honesty the fail-closed path exists to
-// provide. Checked ONCE, here, at the boundary: a non-conforming row is
-// dropped before any downstream renderer (terminal output, config.toml) ever
-// sees it, rather than trusting every renderer to re-derive the same check.
-var ollamaTagNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:-]*$`)
-
-// validOllamaTagName additionally caps length: a daemon has no reason to name a
-// tag anywhere near this long, and an unbounded name is its own small DoS
-// against every renderer downstream.
-func validOllamaTagName(name string) bool {
-	return name != "" && len(name) <= 256 && ollamaTagNamePattern.MatchString(name)
-}
-
 // ollamaTagInfo is what ONE row of the daemon's /api/tags response tells us
-// about a pulled tag that the shipped catalog does not know. RemoteHost is the
+// about a pulled tag that the shipped catalog does not know — the SAME row
+// inference.ListOllamaModels (the one /api/tags reader in this module) hands
+// every other caller, aliased here for the classifier below. RemoteHost is the
 // field docs.ollama.com/api/tags documents as "URL of the upstream Ollama host,
 // if the model is remote" — non-empty is Ollama's OWN cloud/local answer, on
 // any daemon new enough to report it. Size is the on-disk byte count: a real
@@ -90,10 +66,7 @@ func validOllamaTagName(name string) bool {
 // glm-5.2:cloud: 290, kimi-k3:cloud: 308) versus a real local model's actual
 // weights (qwen3.5:9b: 6.6GB, the smallest embedding model on the same host:
 // 274MB) — see the classification note below.
-type ollamaTagInfo struct {
-	RemoteHost string
-	Size       int64
-}
+type ollamaTagInfo = inference.OllamaModelInfo
 
 // ollamaLocalSizeFloor is the fallback size classifier: comfortably above any
 // Ollama Cloud manifest stub (hundreds of bytes) and comfortably below the
@@ -102,17 +75,6 @@ type ollamaTagInfo struct {
 // daemon old enough to omit both — without being fooled by a manifest-sized
 // cloud row into calling it local.
 const ollamaLocalSizeFloor = 1 << 20 // 1 MiB
-
-// ollamaTagsResponse is /api/tags' documented shape. It is intentionally a
-// narrow slice of the real schema (digest/details/etc. carry nothing this
-// package classifies on).
-type ollamaTagsResponse struct {
-	Models []struct {
-		Name       string `json:"name"`
-		RemoteHost string `json:"remote_host"`
-		Size       int64  `json:"size"`
-	} `json:"models"`
-}
 
 // classifyOllamaTag decides local vs cloud for a tag the daemon listed that the
 // shipped catalog does not know. The distinction is load-bearing: a cloud model
@@ -207,67 +169,19 @@ func (p ollamaPlan) LocalBoundTags() []string {
 	return out
 }
 
-// ollamaListing calls the daemon's /api/tags on the RESOLVED endpoint —
-// PREFERRED over parsing `ollama list` text, which carries none of the
-// daemon's own remote/local metadata (no remote_host, no size), forcing every
-// cloud/local decision onto a naming guess alone. It doubles as the daemon
-// readiness probe, so "is Ollama up" has exactly one spelling. Bounded by
-// ollamaTagsTimeout so a wedged or absent daemon can never hang setup — an
-// unreachable daemon reports the SAME "could not list" error a text-parsing
-// failure would, so a user who has simply not started Ollama yet sees the one
-// message that tells them what to do, and nothing upstream (RequireOllamaReady,
-// ConfigureOllamaInference) has to know the transport changed.
-// ollamaTagsBodyCap bounds how much of the /api/tags response this package
-// will read. It still exists to bound memory against a wedged or malicious
-// listener (DoS: an unbounded read is an unbounded allocation), but it is sized
-// for real Ollama installs, not against them: a real row runs a few hundred
-// bytes (name, digest, modified_at, size, details{format,family,families,
-// parameter_size,quantization_level}), so this holds tens of thousands of
-// pulled tags before ever truncating a genuine listing. The 1 MiB cap this
-// replaces truncated comfortably inside four figures of tags — well within
-// reach for a real user with a large local library — and the decode failure
-// that truncation caused was reported by RequireOllamaReady as "the daemon did
-// not answer": a healthy, fully-responsive daemon relabeled as unreachable.
-const ollamaTagsBodyCap = 16 << 20 // 16 MiB
-
+// ollamaListing is inference.ListOllamaModels — the daemon's own /api/tags on
+// the RESOLVED endpoint, PREFERRED over parsing `ollama list` text, which
+// carries none of the daemon's own remote/local metadata (no remote_host, no
+// size) — keyed by tag for the classifier. It doubles as the daemon readiness
+// probe, so "is Ollama up" has exactly one spelling: an unreachable daemon
+// reports the SAME "could not list" error a text-parsing failure would, so a
+// user who has simply not started Ollama yet sees the one message that tells
+// them what to do, and nothing upstream (RequireOllamaReady,
+// ConfigureOllamaInference) has to know the transport. The timeout and body
+// cap are inference.OllamaTagsTimeout / inference.OllamaTagsBodyCap; the tag
+// grammar boundary is inference's too, applied once at the read.
 func ollamaListing(env hostenv.Env) (map[string]ollamaTagInfo, error) {
-	endpoint := strings.TrimRight(inference.OllamaEndpointFor(env).URL, "/")
-	req, err := http.NewRequest(http.MethodGet, endpoint+"/api/tags", nil)
-	if err != nil {
-		return nil, fmt.Errorf("could not list Ollama models")
-	}
-	resp, err := (&http.Client{Timeout: ollamaTagsTimeout}).Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("could not list Ollama models")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("could not list Ollama models (HTTP %d)", resp.StatusCode)
-	}
-	// Read one byte past the cap so a body that is EXACTLY at the cap and a body
-	// that OVERFLOWS it are distinguishable: a plain io.LimitReader-into-Decoder
-	// can't tell "truncated, otherwise valid" from "actually malformed", which is
-	// exactly how a large-but-healthy daemon got relabeled unreachable before.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, ollamaTagsBodyCap+1))
-	if err != nil {
-		return nil, fmt.Errorf("could not list Ollama models (could not read the response)")
-	}
-	if len(raw) > ollamaTagsBodyCap {
-		return nil, fmt.Errorf("the Ollama daemon answered, but its tag listing exceeded the %dMiB safety cap — this is a cap, not a sign the daemon is down", ollamaTagsBodyCap>>20)
-	}
-	var body ollamaTagsResponse
-	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, fmt.Errorf("the Ollama daemon answered, but its tag listing was not valid JSON")
-	}
-	seen := map[string]ollamaTagInfo{}
-	for _, m := range body.Models {
-		// The ingestion boundary: a name this daemon reports that fails Ollama's own
-		// grammar is dropped HERE, once — see ollamaTagNamePattern.
-		if validOllamaTagName(m.Name) {
-			seen[m.Name] = ollamaTagInfo{RemoteHost: m.RemoteHost, Size: m.Size}
-		}
-	}
-	return seen, nil
+	return inference.ListOllamaModels(env)
 }
 
 // ConfigureOllamaInference binds CANDIDATES, never verified models. It splits
@@ -605,11 +519,7 @@ func checkRosterReferences(facts EnvironmentRosterFacts, known map[string]bool) 
 	if err := check("[models].main", facts.Roster.Main); err != nil {
 		return err
 	}
-	names := make([]string, 0, len(facts.Roster.Agents))
-	for n := range facts.Roster.Agents {
-		names = append(names, n)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(facts.Roster.Agents))
 	for _, n := range names {
 		if err := check("[agents]."+n, facts.Roster.Agents[n]); err != nil {
 			return err

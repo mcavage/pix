@@ -22,11 +22,11 @@
 // injected Gateway endpoint pi-mcp-adapter uses — see ../lib/mcp-gateway-client.ts.
 // Never a direct connection to the memory container or host.docker.internal.
 
-import { basename, join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createMcpGatewayClient, MEMORY_TOOL } from "../lib/mcp-gateway-client.ts";
+import { createProjectResolver, readActiveProfile } from "../lib/memory-context.ts";
 
 const safe = async <T>(fn: () => Promise<T>): Promise<T | undefined> => {
 	try {
@@ -96,41 +96,14 @@ const CAPTURE_MODE: "explicit" | "experimental-auto" = (() => {
 })();
 
 // The active profile stamps captures (recall then scopes to {profile}∪{default}).
-// The launcher writes it to <cwd>/.pix/profile per run, mirroring the
-// knowledge scope file; absent => "default" (shared bucket).
-//
-// Read EXACTLY ONCE at extension load and frozen immutably — the same value
-// memory-recall.ts reads — so a second sandbox overwriting the file mid-session
-// can't make capture stamp a different profile than recall queries. Never throws
-// at load (try/catch).
-const ACTIVE_PROFILE: string = (() => {
-	try {
-		const raw = readFileSync(join(process.cwd(), ".pix", "profile"), "utf8").trim();
-		return raw || "default";
-	} catch {
-		return "default"; // missing file is the normal, un-scoped case
-	}
-})();
+// Read EXACTLY ONCE at extension load and frozen — the SAME reader
+// memory-recall.ts uses (../lib/memory-context.ts) — so a second sandbox
+// overwriting <cwd>/.pix/profile mid-session can't make capture stamp a
+// different profile than recall queries.
+const ACTIVE_PROFILE: string = readActiveProfile();
 
-// Inside the sandbox every project mounts at /home/agent/workspace, so the dir
-// name is useless. Use the git remote (stable across machines). Cached per
-// process; null when we can't tell (treated as global).
-let _project: string | null | undefined;
-function currentProject(ctx: any): string | null {
-	if (_project !== undefined) return _project;
-	const cwd = (typeof ctx?.cwd === "string" && ctx.cwd) || process.cwd();
-	try {
-		const url = execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], {
-			encoding: "utf8",
-			timeout: 1500,
-			stdio: ["ignore", "pipe", "ignore"],
-		}).trim();
-		const name = url.replace(/\.git$/, "").split(/[/:]/).filter(Boolean).pop();
-		if (name) return (_project = name);
-	} catch {}
-	const base = basename(cwd);
-	return (_project = base && base !== "workspace" && base !== "/" ? base : null);
-}
+// The project this exchange belongs to; shared resolver with memory-recall.ts.
+const currentProject = createProjectResolver();
 
 // pi's session entries are { type: "message", message: { role, content: [blocks] } }
 // where each block is { type: "text" | "thinking", text }. getBranch() returns the

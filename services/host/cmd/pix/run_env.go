@@ -7,16 +7,13 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 
 	"pix/host/config"
-	"pix/host/container"
 	"pix/host/envinfo"
 	"pix/host/pixhome"
 	"pix/host/sandbox"
-	"pix/host/stack"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/models"
 
@@ -89,10 +86,11 @@ func resolveRunEnvironment(explicit string) (launch.EnvSelection, envTrustSnapsh
 // `--dev`'s checkout kit with its live skill arguments. Every value is one
 // this launch already decided; nothing is re-derived here.
 func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelection, version string) (launch.EffectiveInput, error) {
-	home, err := pixhome.Dir()
+	paths, err := pixhome.Resolve()
 	if err != nil {
 		return launch.EffectiveInput{}, err
 	}
+	home := paths.Home
 	template := o.Template
 	// Without an explicit/local override, the selected kit owns its image pin.
 	// An untagged repository here overrides that pin with cached :latest.
@@ -122,7 +120,7 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 		// the stamped launcher build and this PIX_HOME's stack id, composed
 		// by the SAME producer `pix env --effective` uses so a preview and a
 		// real create can never show different env blocks.
-		PixEnvVars: envinfo.PixManagedEnvVars(o.LauncherVersion, currentStackID()),
+		PixEnvVars: envinfo.PixManagedEnvVars(o.LauncherVersion, nativeenv.HomeStackID(paths)),
 	}
 	// `sbx env create` reads ONLY this document, so every mount and kit the
 	// pre-cutover `sbx run` argv carried has to travel inside it. Both lists
@@ -151,80 +149,15 @@ func runEffectiveInput(cfg *config.Config, o launch.RunOpts, sel launch.EnvSelec
 	if err != nil {
 		return launch.EffectiveInput{}, err
 	}
+	// Pix's two reserved built-ins come from the SAME producer `pix env
+	// --effective` previews with (nativeenv.BuiltinMCPFacts), so a preview
+	// and a real create can never show different built-in declarations.
 	in.MCPServers = envinfo.WithBuiltinMCPServers(
 		launch.ComposeMCPServerFacts(in.EnvMCPServers, o.StaticMCP),
-		envinfo.WithHostTools(builtinMCPFacts(), home, primary.Path, o.Name, o.Dev, os.Getenv("PIX_HOST_TOOLS_DISABLED") == "1"),
+		nativeenv.BuiltinMCPFacts(paths, primary.Path, o.Name, o.Dev),
 	)
 	return in, nil
 }
-
-// builtinMCPFacts resolves docs/design/pix-v2-architecture.md §10's two
-// reserved built-ins for THIS host: pix-memory, the loopback Streamable
-// HTTP endpoint `pix setup` reconciles and registers with the sbx Gateway
-// (the SAME URL homeContainerSpec/container.MemoryMCPURL compose for that
-// registration — never a second, independently-derived one that could
-// silently disagree), and pix-session, the Gateway-launched host stdio
-// command that names this SAME running `pix` binary.
-//
-// Either half degrades to "omit that built-in" rather than failing the
-// launch: an unresolved PIX_HOME or an unresolvable running executable is
-// an environment problem doctor already surfaces, not a reason to refuse
-// every `pix run` outright. pix-session's actual in-sandbox behavior is not
-// yet implemented — see this repo's host-UAT tracking for that gap; this
-// function only emits the reserved declaration a future implementation
-// fills in.
-// currentStackID resolves THIS PIX_HOME's stack id for the Pix-managed
-// `PIX_STACK_ID` environment fact, degrading to "" (the fact is omitted,
-// never rendered empty) exactly as builtinMCPFacts degrades to omitting a
-// built-in it cannot name. It never falls back to a placeholder id: a
-// wrong stack id in a sandbox's environment is worse than an absent one.
-func currentStackID() string {
-	home, err := pixhome.Resolve()
-	if err != nil {
-		return ""
-	}
-	id, err := stack.ID(home.Home)
-	if err != nil {
-		return ""
-	}
-	return id
-}
-
-func builtinMCPFacts() envinfo.BuiltinMCPFacts {
-	var facts envinfo.BuiltinMCPFacts
-	if home, err := pixhome.Resolve(); err == nil {
-		// This PIX_HOME's own scoped built-in names (Wave B coexistence): a
-		// stack id that cannot be derived degrades to omitting BOTH
-		// built-ins, never a bare legacy-name fallback.
-		if id, ierr := stack.ID(home.Home); ierr == nil {
-			facts.MemoryName, _ = stack.MCPMemoryName(id)
-			facts.SessionName, _ = stack.MCPSessionName(id)
-		}
-		// Read-only: a launch never GENERATES the token (that is `pix setup`'s
-		// job alone, container.EnsureMemoryAuthToken) — a missing token here
-		// degrades the same way an unresolvable session command already does,
-		// by omitting the built-in rather than failing the launch.
-		token, _ := container.ReadMemoryAuthToken(home)
-		facts.MemoryURL = container.MemoryMCPURL(homeContainerSpec(home), token)
-	}
-	if exe, err := os.Executable(); err == nil {
-		if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
-			exe = resolved
-		}
-		facts.SessionCommand = exe
-		facts.SessionArgs = []string{mcpSessionSubcommand}
-	}
-	return facts
-}
-
-// mcpSessionSubcommand is the pix-session built-in's argv[1]: the SAME
-// constant sessionctl.go's dispatch intercepts before kong ever sees argv
-// (hiddenSessionMCPVerb, "__pix-session-mcp"), not an independent literal.
-// A Gateway declaration naming any other token would preload a command
-// that starts, falls straight through kong's ordinary verb parser as an
-// unknown command, and never reaches runSessionMCP at all — exactly the
-// bug this alias exists to make unrepeatable.
-const mcpSessionSubcommand = hiddenSessionMCPVerb
 
 // validateRunRoster runs E3.3's roster validation over the environment
 // this run actually selected (not merely the configured default), so a

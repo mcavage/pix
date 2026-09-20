@@ -18,8 +18,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"os/exec"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -144,11 +146,7 @@ func (s Spec) containerName() string {
 // reordering because it hashes an explicit, ordered string, not a JSON
 // encoding of the struct.
 func (s Spec) Fingerprint() string {
-	envKeys := make([]string, 0, len(s.Env))
-	for k := range s.Env {
-		envKeys = append(envKeys, k)
-	}
-	sort.Strings(envKeys)
+	envKeys := slices.Sorted(maps.Keys(s.Env))
 	envParts := make([]string, 0, len(envKeys))
 	for _, k := range envKeys {
 		envParts = append(envParts, k+"="+s.Env[k])
@@ -205,11 +203,7 @@ func (s Spec) CreateArgs() []string {
 	// Env/ExtraHosts are rendered in SORTED key order so CreateArgs (and the
 	// argv a test asserts against) is deterministic across runs, independent
 	// of Go's randomized map iteration.
-	envKeys := make([]string, 0, len(s.Env))
-	for k := range s.Env {
-		envKeys = append(envKeys, k)
-	}
-	sort.Strings(envKeys)
+	envKeys := slices.Sorted(maps.Keys(s.Env))
 	for _, k := range envKeys {
 		args = append(args, "-e", k+"="+s.Env[k])
 	}
