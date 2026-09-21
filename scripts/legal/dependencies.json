@@ -159,17 +159,17 @@
   "npmGlobal": [
     {
       "name": "@earendil-works/pi-coding-agent",
-      "version": "0.85.1",
+      "version": "0.86.1",
       "license": "MIT",
-      "role": "npm install -g (Dockerfile ARG PI_PACKAGE) — the pi CLI itself",
+      "role": "npm install -g (Dockerfile ARG PI_PACKAGE) — the pi CLI itself; PATCHED at image build time by the reviewed scripts/patches/apply-pix-resume-command.mjs, apply-hide-host-state.mjs, apply-theme-surface.mjs, apply-editor-palette.mjs, and apply-theme-preview.mjs",
       "verifiedVia": "package.json \"license\" field, installed image"
     },
     {
       "name": "@earendil-works/pi-tui",
-      "version": "0.85.1",
+      "version": "0.86.1",
       "license": "MIT",
       "author": "Mario Zechner",
-      "role": "transitive dependency of pi-coding-agent; PATCHED at image build time by scripts/patches/apply-tui-bottom-pin.mjs (see docs/upstream/tui-bottom-pin.md). The patch is a narrow, reviewable, idempotent modification to the installed dist/tui.js, not a fork or redistribution of modified source under a different name.",
+      "role": "transitive dependency of pi-coding-agent; PATCHED at image build time by scripts/patches/apply-tui-bottom-pin.mjs and apply-theme-surface.mjs (see docs/upstream/tui-bottom-pin.md and docs/upstream/theme-surface.md). These are narrow, reviewable, idempotent modifications to the installed renderers, not a fork or redistribution of modified source under a different name.",
       "verifiedVia": "package.json \"license\"/\"author\" fields, installed image"
     },
     {
@@ -181,9 +181,9 @@
     },
     {
       "name": "pi-mcp-adapter",
-      "version": "2.13.0",
+      "version": "2.21.1",
       "license": "MIT",
-      "role": "pinned pi extension (Dockerfile)",
+      "role": "pinned pi extension (Dockerfile); PATCHED by scripts/patches/apply-mcp-problems-status.mjs",
       "verifiedVia": "package.json \"license\" field, installed image"
     },
     {
