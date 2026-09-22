@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Pi 0.86.1: paint the complete TUI with the palette, including editor and
+// Pi 0.87.1: paint the complete TUI with the palette, including editor and
 // blank cells. Use SGR per frame, never OSC terminal-global color mutations.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";

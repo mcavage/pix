@@ -579,7 +579,7 @@ main = "anthropic/claude-sonnet-5"
 [agents]
 fanout = "local/qwen3.5-9b"
 review = "google/gemini-3.1-pro-preview"
-deep = "anthropic/claude-opus-5"
+deep = "anthropic/claude-opus-5-5"
 
 [pi]
 skills = ["./skills"]

@@ -145,9 +145,9 @@ test("a native cloud parent becomes the runtime model for an otherwise inheritin
 	const agents = [{ name: "review", model: undefined }];
 	const resolved = reg.mod.inheritActiveParentModel(agents, {
 		provider: "openai",
-		id: "gpt-5.6-sol",
+		id: "gpt-6-sol",
 	});
-	assert.equal(resolved[0].model, "openai/gpt-5.6-sol");
+	assert.equal(resolved[0].model, "openai/gpt-6-sol");
 	const source = fs.readFileSync(
 		new URL("../extensions/subagents.ts", import.meta.url),
 		"utf8",
@@ -241,12 +241,12 @@ test("a custom PROJECT agent's explicit model: wins over BOTH roster.agents[name
 	});
 	writeProjectAgent(projectRoot, "pinned", {
 		description: "custom project agent with its own pin",
-		model: "anthropic/claude-opus-5",
+		model: "anthropic/claude-opus-5-5",
 	});
 	process.env.PI_TEST_AGENT_DIR = agentDir;
 	const reg = await loadSubagents();
 	const listing = await listAgents(reg, projectRoot);
-	assert.match(lineFor(listing, "pinned"), /· anthropic\/claude-opus-5/);
+	assert.match(lineFor(listing, "pinned"), /· anthropic\/claude-opus-5-5/);
 });
 
 test("an explicit parent Ollama model overrides even a resolved roster entry", async () => {
@@ -273,12 +273,12 @@ test("an explicit parent Ollama model overrides even a resolved roster entry", a
 test("absent inference.json degrades to the pre-roster world for every agent (compatibility)", async () => {
 	const { agentDir, projectRoot } = setup();
 	writeUserAgent(agentDir, "engineer", { description: "eng" });
-	writeUserAgent(agentDir, "pinned", { description: "pinned", model: "anthropic/claude-opus-5" });
+	writeUserAgent(agentDir, "pinned", { description: "pinned", model: "anthropic/claude-opus-5-5" });
 	process.env.PI_TEST_AGENT_DIR = agentDir;
 	const reg = await loadSubagents();
 	const listing = await listAgents(reg, projectRoot);
 	assert.match(lineFor(listing, "engineer"), /· model:inherit/);
-	assert.match(lineFor(listing, "pinned"), /· anthropic\/claude-opus-5/);
+	assert.match(lineFor(listing, "pinned"), /· anthropic\/claude-opus-5-5/);
 	assert.match(listing, /roster: off \(no roster in inference\.json; agents use model:\/inherit\)/);
 });
 

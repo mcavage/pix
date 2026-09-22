@@ -97,7 +97,7 @@ require approval again.
 | Start in the current folder | `pix` |
 | Start in another folder | `pix run ~/path/to/project` |
 | Use an environment for this session | `pix run --env team` |
-| Use a particular configured model | `pix run --model openai/gpt-6-astra` |
+| Use a particular configured model | `pix run --model openai/gpt-6-sol` |
 | Keep a sandbox's installed tools between sessions | `pix run --keep` |
 | List your sandboxes | `pix ls` |
 | Remove an idle sandbox | `pix rm NAME` |

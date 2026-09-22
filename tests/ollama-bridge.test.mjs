@@ -31,7 +31,7 @@ test("every ollama model in the manifest is registered, so the --models cycle ma
 			models: [
 				{ id: "ollama/glm-5.2:cloud", backend: "ollama", name: "GLM 5.2", context_window: 200000, max_tokens: 16384 },
 				{ id: "ollama/deepseek-v4-flash:cloud", backend: "ollama", name: "DeepSeek V4 Flash" },
-				{ id: "anthropic/claude-opus-5", backend: "anthropic", name: "Opus 5" },
+				{ id: "anthropic/claude-opus-5-5", backend: "anthropic", name: "Opus 5.5" },
 			],
 		},
 		TAG,

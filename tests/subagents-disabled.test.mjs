@@ -95,7 +95,7 @@ test("an explicit parent Ollama model becomes the subagent availability boundary
 		reg.mod.explicitParentOllamaModel([
 			"pi",
 			"--model",
-			"docker-openai/gpt-5.6-sol",
+			"docker-openai/gpt-6-sol",
 		]),
 		"",
 		"cloud parents retain normal roster resolution",
@@ -286,4 +286,3 @@ test("subagents.ts has no `intent` field on AgentConfig or frontmatter.intent pa
 		"no call site may read an AgentConfig's `.intent` — the field is gone",
 	);
 });
-

@@ -66,7 +66,7 @@ keyword search otherwise. See [memory](memory.md).
 ## Choose models or work in parallel
 
 ```bash
-pix run --env team --model openai/gpt-6-astra
+pix run --env team --model openai/gpt-6-sol
 ```
 
 The model must be available in the selected environment. You can also select

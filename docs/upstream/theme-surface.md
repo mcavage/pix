@@ -1,4 +1,4 @@
-# Complete theme surfaces in Pi 0.86.1
+# Complete theme surfaces in Pi 0.87.1
 
 Pi's JSON palettes define `export.pageBg`, but the live TUI only paints named
 message/tool backgrounds. Editor text, ordinary prose, and blank cells use the

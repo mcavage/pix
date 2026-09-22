@@ -18,7 +18,7 @@ func TestResolveRunModel_ConfiguredAnthropicUsesCurrentCatalogDefault(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model != "anthropic/claude-opus-5" || source != "configured provider default" {
+	if model != "anthropic/claude-opus-5-5" || source != "configured provider default" {
 		t.Fatalf("resolveRunModel = (%q, %q), want current Anthropic default", model, source)
 	}
 }
@@ -34,7 +34,7 @@ func TestResolveRunModel_AllCloudProvidersUsesShippedSessionDefault(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model != "openai/gpt-5.6-sol" {
+	if model != "openai/gpt-6-sol" {
 		t.Fatalf("resolveRunModel with all cloud providers = %q, want shipped session default", model)
 	}
 }
@@ -56,8 +56,8 @@ func TestResolveRunModel_ExplicitAndEnvironmentChoicesStillWin(t *testing.T) {
 	sc := &envinfo.Sidecar{}
 	sc.Models.Main = "google/gemini-3.1-pro-preview"
 
-	model, source, err := resolveRunModel("openai/gpt-5.6-sol", sc, defaultShellEnv())
-	if err != nil || model != "openai/gpt-5.6-sol" || source != "--model" {
+	model, source, err := resolveRunModel("openai/gpt-6-luna", sc, defaultShellEnv())
+	if err != nil || model != "openai/gpt-6-luna" || source != "--model" {
 		t.Fatalf("explicit resolveRunModel = (%q, %q, %v)", model, source, err)
 	}
 	model, source, err = resolveRunModel("", sc, defaultShellEnv())
