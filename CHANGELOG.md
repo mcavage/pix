@@ -80,8 +80,13 @@ v1 configuration and removed commands are not translated automatically. See
   sandbox-scoped secrets on each create/attach. Host-global sbx secrets are
   ignored. Environments using an authenticated gateway or keyless models do not
   trigger an unrelated provider-key interview.
-- Pi is pinned to 0.85.1. GPT-6 Astra and Gemini 3.8 Flash are available; model
-  rates, including cache and context tiers, come from Pi's pinned catalog.
+- Pi is pinned to 0.86.1. The update enables cost-aware prompt-cache warming
+  for supported direct models, adds the `/bug` reporting flow, and fixes
+  provider behavior, compaction, cancellation, shell
+  exit reporting, and clipboard fallback. Environment-authored extensions must
+  account for Pi 0.86's custom-provider transcript API, JSON-only tool values,
+  and fail-closed `user_bash` hooks. Model rates, including cache and context
+  tiers, come from Pi's pinned catalog.
 - Subagent results expose the actual responding provider and model. Harness
   health and repository health are separate skills. Memory checks distinguish
   effective capture mode from backend readiness and probe embeddings after use.

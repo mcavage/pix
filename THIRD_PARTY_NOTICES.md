@@ -78,11 +78,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 | Package | Version | License |
 | --- | --- | --- |
-| @earendil-works/pi-coding-agent | 0.85.1 | MIT |
-| @earendil-works/pi-tui | 0.85.1 | MIT |
+| @earendil-works/pi-coding-agent | 0.86.1 | MIT |
+| @earendil-works/pi-tui | 0.86.1 | MIT |
 | @juanibiapina/pi-extension-settings | 0.9.1 | MIT |
 | pi-manage-todo-list | 0.4.0 | MIT |
-| pi-mcp-adapter | 2.13.0 | MIT |
+| pi-mcp-adapter | 2.21.1 | MIT |
 | pi-mono-btw | 1.7.4 | MIT |
 | pi-plan | 0.1.1 | MIT |
 | pi-simplify | 0.2.3 | MIT |
@@ -92,8 +92,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### Patched at build time
 
-- **@earendil-works/pi-tui@0.85.1** (MIT) — transitive dependency of pi-coding-agent; PATCHED at image build time by scripts/patches/apply-tui-bottom-pin.mjs (see docs/upstream/tui-bottom-pin.md). The patch is a narrow, reviewable, idempotent modification to the installed dist/tui.js, not a fork or redistribution of modified source under a different name.
+- **@earendil-works/pi-coding-agent@0.86.1** (MIT) — npm install -g (Dockerfile ARG PI_PACKAGE) — the pi CLI itself; PATCHED at image build time by the reviewed scripts/patches/apply-pix-resume-command.mjs, apply-hide-host-state.mjs, apply-theme-surface.mjs, apply-editor-palette.mjs, and apply-theme-preview.mjs
+- **@earendil-works/pi-tui@0.86.1** (MIT) — transitive dependency of pi-coding-agent; PATCHED at image build time by scripts/patches/apply-tui-bottom-pin.mjs and apply-theme-surface.mjs (see docs/upstream/tui-bottom-pin.md and docs/upstream/theme-surface.md). These are narrow, reviewable, idempotent modifications to the installed renderers, not a fork or redistribution of modified source under a different name.
 - **pi-manage-todo-list@0.4.0** (MIT) — pinned pi extension (Dockerfile); PATCHED by scripts/patches/apply-todo-durable-clear.mjs
+- **pi-mcp-adapter@2.21.1** (MIT) — pinned pi extension (Dockerfile); PATCHED by scripts/patches/apply-mcp-problems-status.mjs
 - **pi-web-access@0.13.0** (MIT) — pinned pi extension (Dockerfile); PATCHED by scripts/patches/apply-web-access-gateway.mjs
 
 ---

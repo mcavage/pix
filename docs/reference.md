@@ -737,7 +737,7 @@ as their canonical models. These are USD list-price estimates, not invoices or
 routing criteria; gateway contracts and subscription charges may differ.
 Ollama has no per-token charge in this accounting.
 
-Pi 0.85.1 includes [GPT-6 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
+Pi 0.86.1 includes [GPT-6 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
 ($10 input / $50 output per million tokens, with higher rates above 272K input)
 and [Gemini 3.8 Flash pricing](https://ai.google.dev/gemini-api/docs/pricing)
 ($0.75 input / $3.75 output per million tokens). Gemini's introductory rates

@@ -36,7 +36,7 @@ import (
 // execChildStdout is what the fake `sbx exec` prints. The real handoff gives
 // the child the launcher process's own stdout, so a test proves forwarding by
 // capturing that descriptor, not by reading a file the fixture wrote.
-const execChildStdout = "pix 0.85.1"
+const execChildStdout = "child-stdout-sentinel"
 
 // stoppedSbxFixture installs a fake `sbx` on PATH that reports name as an
 // existing, schema-verified sandbox in state, records every invocation's argv
