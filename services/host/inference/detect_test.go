@@ -119,9 +119,9 @@ func TestDetectOllama_CLIAbsent(t *testing.T) {
 }
 
 func TestDetectOllama_UnreachableTimesOutFast(t *testing.T) {
-	orig := ollamaDetectTimeout
-	ollamaDetectTimeout = 50 * time.Millisecond
-	defer func() { ollamaDetectTimeout = orig }()
+	orig := OllamaTagsTimeout
+	OllamaTagsTimeout = 50 * time.Millisecond
+	defer func() { OllamaTagsTimeout = orig }()
 	// An address nothing listens on: 127.0.0.1 with a port test servers never
 	// bind, resolved instantly as "connection refused" rather than a real
 	// timeout — either way DetectOllama must report unreachable, not hang.

@@ -48,10 +48,10 @@
 //     two-file hash.
 //   - effective.go — ComputeEffective/RenderEffectiveDocument: the ONE
 //     preview-side caller of envinfo.RenderEffective (`pix env [NAME]
-//     --effective`), composing the SAME reserved pix-memory/pix-session
-//     built-ins a real launch adds (cmd/pix/run_env.go's own
-//     builtinMCPFacts), so a preview never shows a shape a real create
-//     would then silently add to.
+//     --effective`), and BuiltinMCPFacts, the ONE producer of the reserved
+//     pix-memory/pix-session built-ins that both this preview and a real
+//     launch (cmd/pix/run_env.go's runEffectiveInput) call, so a preview
+//     never shows a shape a real create would then silently add to.
 //   - runhint.go — the one-shot "you have an unregistered .sbxenv.yaml
 //     right here" hint `pix run` prints for a project workspace that
 //     carries a native file Pix was never asked to use (docs/design/

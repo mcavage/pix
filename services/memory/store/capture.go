@@ -340,40 +340,9 @@ func capture(s *Store, user, project string, hasProj bool, profile string) {
 		log.Printf("memory: dropping %d fact(s), user message was question-only, no assertions to extract", len(w.Facts))
 		w.Facts = nil
 	}
-	dropNoise := func(label string, in []string) []string {
-		out := make([]string, 0, len(in))
-		dropped := 0
-		for _, s := range in {
-			if watcherNoise(s) {
-				dropped++
-				continue
-			}
-			out = append(out, s)
-		}
-		if dropped > 0 {
-			log.Printf("memory: dropped %d watcher %s item(s) as session-narration noise", dropped, label)
-		}
-		return out
-	}
-	w.Facts = dropNoise("fact", w.Facts)
-
-	filterSecrets := func(label string, in []string) []string {
-		out := make([]string, 0, len(in))
-		dropped := 0
-		for _, s := range in {
-			if containsSecretShape(s) {
-				dropped++
-				continue
-			}
-			out = append(out, s)
-		}
-		if dropped > 0 {
-			log.Printf("memory: dropped %d watcher %s item(s), secret-shaped content (stage 2)", dropped, label)
-		}
-		return out
-	}
-	w.Facts = filterSecrets("fact", w.Facts)
-	w.Corrections = filterSecrets("correction", w.Corrections)
+	w.Facts = dropWatcherItems("fact", w.Facts, watcherNoise, "as session-narration noise")
+	w.Facts = dropWatcherItems("fact", w.Facts, containsSecretShape, "secret-shaped content (stage 2)")
+	w.Corrections = dropWatcherItems("correction", w.Corrections, containsSecretShape, "secret-shaped content (stage 2)")
 
 	type watchItem struct {
 		content, kind string
@@ -518,6 +487,26 @@ var watcherNoisePrefixes = []string{
 	"user wants to know", "the user wants to know",
 	"user ran", "the user ran",
 	"user executed", "the user executed",
+}
+
+// dropWatcherItems removes every watcher item drop reports true for and
+// logs how many went, by label (fact/correction) and reason, so the capture
+// log names each filter stage's effect without each stage re-implementing
+// the count-and-log loop.
+func dropWatcherItems(label string, in []string, drop func(string) bool, reason string) []string {
+	out := make([]string, 0, len(in))
+	dropped := 0
+	for _, s := range in {
+		if drop(s) {
+			dropped++
+			continue
+		}
+		out = append(out, s)
+	}
+	if dropped > 0 {
+		log.Printf("memory: dropped %d watcher %s item(s), %s", dropped, label, reason)
+	}
+	return out
 }
 
 func watcherNoise(content string) bool {

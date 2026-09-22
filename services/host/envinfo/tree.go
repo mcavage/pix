@@ -2,7 +2,8 @@ package envinfo
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 )
 
 // Tree is the PRE-COMPOSITION semantic tree BuildTree derives from a
@@ -213,21 +214,21 @@ func BuildTree(m *Merged) (*Tree, error) {
 		t.Interpolations = append(t.Interpolations, scanInterpolations(k.Raw, kp)...)
 	}
 
-	for _, key := range sortedStringKeys(m.SandboxOptions) {
+	for _, key := range slices.Sorted(maps.Keys(m.SandboxOptions)) {
 		v := m.SandboxOptions[key]
 		kp := "sandboxOptions." + key
 		t.SandboxOptions = append(t.SandboxOptions, ScalarNode{KeyPath: kp, Value: v.Value, Source: v.Source})
 		t.Interpolations = append(t.Interpolations, scanInterpolations(v.Value, kp)...)
 	}
 
-	for _, key := range sortedStringKeys(m.Env) {
+	for _, key := range slices.Sorted(maps.Keys(m.Env)) {
 		v := m.Env[key]
 		kp := "env." + key
 		t.Env = append(t.Env, ScalarNode{KeyPath: kp, Value: v.Value, Source: v.Source})
 		t.Interpolations = append(t.Interpolations, scanInterpolations(v.Value, kp)...)
 	}
 
-	for _, name := range sortedSecretKeys(m.Secrets) {
+	for _, name := range slices.Sorted(maps.Keys(m.Secrets)) {
 		s := m.Secrets[name]
 		kp := "secrets." + name
 		hasCommand := len(s.Command) > 0
@@ -247,7 +248,7 @@ func BuildTree(m *Merged) (*Tree, error) {
 		}
 	}
 
-	for _, host := range sortedRegistryKeys(m.Registries) {
+	for _, host := range slices.Sorted(maps.Keys(m.Registries)) {
 		r := m.Registries[host]
 		kp := "registries." + host
 		hasCommand := len(r.Command) > 0
@@ -284,7 +285,7 @@ func BuildTree(m *Merged) (*Tree, error) {
 	// emit two BindingDomainNode entries sharing one key path — the exact
 	// "which entry wins" ambiguity doc.go's "Stable identity" section
 	// refuses for mcp.servers and ports.
-	for _, svc := range sortedBindingKeys(m.Bindings) {
+	for _, svc := range slices.Sorted(maps.Keys(m.Bindings)) {
 		domains := m.Bindings[svc].Domains
 		if len(domains) == 0 {
 			return nil, fmt.Errorf("%w: bindings.%s.apiKey.domains", ErrEmptyBindingDomains, svc)
@@ -350,40 +351,4 @@ func BuildTree(m *Merged) (*Tree, error) {
 	}
 
 	return t, nil
-}
-
-func sortedStringKeys(m map[string]MergedScalar) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func sortedSecretKeys(m map[string]MergedSecret) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func sortedRegistryKeys(m map[string]MergedRegistry) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func sortedBindingKeys(m map[string]MergedBinding) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

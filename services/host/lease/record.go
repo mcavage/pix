@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -212,14 +211,5 @@ func ReadRecord(dir string) (*Record, error) {
 }
 
 func readRecordFile(path string) (*Record, error) {
-	f, err := openNoFollow(path, syscall.O_RDONLY, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	var rec Record
-	if err := json.NewDecoder(f).Decode(&rec); err != nil {
-		return nil, fmt.Errorf("lease: corrupt record at %s: %w", path, err)
-	}
-	return &rec, nil
+	return readJSONNoFollow[Record](path, "record")
 }

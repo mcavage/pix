@@ -3,6 +3,8 @@ package envinfo
 import (
 	"regexp"
 	"strings"
+
+	"pix/host/pixhome"
 )
 
 // PixHomeVar is the ONE variable Pix itself defines for an authored
@@ -49,6 +51,22 @@ func PixManagedVars(pixHome string) map[string]string {
 		return map[string]string{}
 	}
 	return map[string]string{PixHomeVar: home}
+}
+
+// CurrentPixManagedVars is PixManagedVars for THIS host's own resolved home
+// (pixhome.Dir). A home Pix cannot resolve yields no variables at all, which
+// leaves `${PIX_HOME}` exactly as undefined as any other unset name rather
+// than defining it as the empty string — the fail-closed direction, and the
+// one that produces the refusal a person can act on instead of a container
+// mounting the filesystem root. The undefined-variable check (workflow/env)
+// and the fingerprint resolver (workflow/launch) both call this ONE
+// resolver, so neither can drift onto a different home than the other.
+func CurrentPixManagedVars() map[string]string {
+	home, err := pixhome.Dir()
+	if err != nil {
+		return nil
+	}
+	return PixManagedVars(home)
 }
 
 // LookupPixManaged layers Pix's own variables OVER a host-environment

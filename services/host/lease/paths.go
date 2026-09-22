@@ -3,6 +3,7 @@
 package lease
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -93,6 +94,24 @@ func ensureSandboxDir(dir string) error {
 		}
 	}
 	return nil
+}
+
+// readJSONNoFollow decodes one JSON state file (a record or a keep marker)
+// opened with O_NOFOLLOW, so a symlink planted at the path is refused at the
+// open itself rather than followed. The open error (including a plain
+// not-exist) is returned unwrapped so callers keep their os.IsNotExist
+// checks; a decode failure names the file and what it was expected to hold.
+func readJSONNoFollow[T any](path, what string) (*T, error) {
+	f, err := openNoFollow(path, syscall.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var v T
+	if err := json.NewDecoder(f).Decode(&v); err != nil {
+		return nil, fmt.Errorf("lease: corrupt %s at %s: %w", what, path, err)
+	}
+	return &v, nil
 }
 
 func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {

@@ -12,7 +12,8 @@ package inference
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -102,11 +103,7 @@ func buildRoster(in RosterInput, models []runtimeModel) (*runtimeRoster, error) 
 		agents[name] = in.Main // shipped agent absent from [agents] maps to main, §6.4
 	}
 
-	names := make([]string, 0, len(in.Agents))
-	for name := range in.Agents {
-		names = append(names, name)
-	}
-	sort.Strings(names) // deterministic validation order: first offending name, always the same one
+	names := slices.Sorted(maps.Keys(in.Agents)) // deterministic validation order: first offending name, always the same one
 	for _, name := range names {
 		model := in.Agents[name]
 		if !known[model] {

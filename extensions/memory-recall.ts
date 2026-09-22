@@ -15,11 +15,9 @@
 //   MEMORY_COMMAND_TIMEOUT_MS  default 10000 (a user-invoked /recall can afford to
 //                              wait longer than the silent per-turn auto-recall)
 
-import { basename, join } from "node:path";
-import { execFileSync } from "node:child_process";
 import { createRecallChannel } from "../lib/recall-message.ts";
 import { createMcpGatewayClient, MEMORY_TOOL } from "../lib/mcp-gateway-client.ts";
-import { readFileSync } from "node:fs";
+import { createProjectResolver, readActiveProfile } from "../lib/memory-context.ts";
 import { Type } from "typebox";
 
 // Named, exported defaults are the timeout/clock seam: production always runs
@@ -52,41 +50,15 @@ async function rpc(method: string, params: any, timeoutMs: number = TIMEOUT_MS):
 }
 
 // The active profile scopes recall/capture (recall sees {profile}∪{default};
-// captures stamp it). The launcher writes it to <cwd>/.pix/profile per run,
-// mirroring knowledge-recall.ts's scope file. Absent => "default" (the shared
-// bucket), so an un-launched sandbox keeps the backward-compatible behavior.
-//
-// Read EXACTLY ONCE at extension load and frozen immutably: if a second sandbox
-// on the same workspace overwrites the file mid-session, recall and capture must
-// NOT diverge onto different profiles. Never throws at load (try/catch).
-const ACTIVE_PROFILE: string = (() => {
-	try {
-		const raw = readFileSync(join(process.cwd(), ".pix", "profile"), "utf8").trim();
-		return raw || "default";
-	} catch {
-		return "default"; // missing file is the normal, un-scoped case
-	}
-})();
+// captures stamp it). Read EXACTLY ONCE at extension load and frozen — the
+// SAME reader memory-capture.ts uses (../lib/memory-context.ts) — so if a
+// second sandbox on the same workspace overwrites <cwd>/.pix/profile
+// mid-session, recall and capture still cannot diverge onto different profiles.
+const ACTIVE_PROFILE: string = readActiveProfile();
 
-// The project you're in now, used to boost its memories. Inside the sandbox every
-// project mounts at /home/agent/workspace, so the dir name is useless; use the git
-// remote (stable across machines). Cached per process; null = global.
-let _project: string | null | undefined;
-function currentProject(ctx: any): string | null {
-	if (_project !== undefined) return _project;
-	const cwd = (typeof ctx?.cwd === "string" && ctx.cwd) || process.cwd();
-	try {
-		const url = execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], {
-			encoding: "utf8",
-			timeout: 1500,
-			stdio: ["ignore", "pipe", "ignore"],
-		}).trim();
-		const name = url.replace(/\.git$/, "").split(/[/:]/).filter(Boolean).pop();
-		if (name) return (_project = name);
-	} catch {}
-	const base = basename(cwd);
-	return (_project = base && base !== "workspace" && base !== "/" ? base : null);
-}
+// The project you're in now, used to boost its memories; shared resolver with
+// memory-capture.ts.
+const currentProject = createProjectResolver();
 
 // The user's submitted text. pi's event shape isn't fully pinned, so try the
 // likely fields, then fall back to the last user entry in session history.

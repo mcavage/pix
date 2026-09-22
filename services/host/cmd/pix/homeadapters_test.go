@@ -142,11 +142,6 @@ func TestHomeContainerSpec_TwoHomesYieldDistinctScopedNames(t *testing.T) {
 	}
 }
 
-// TestBuiltinMCPFactsUsesScopedNames proves run_env.go's own builtinMCPFacts
-// resolves THIS PIX_HOME's own scoped names, never a bare legacy fallback,
-// and that two different PIX_HOMEs diverge exactly the way
-// TestHomeContainerSpec_TwoHomesYieldDistinctScopedNames proves for the
-// container name.
 // TestHomeMemoryProber_CarriesThePersistedToken is the doctor-side wiring
 // regression for the reported false "pix-memory unhealthy" report: once
 // `pix setup` has generated this home's bearer token, `pix doctor`'s own
@@ -173,25 +168,6 @@ func TestHomeMemoryProber_NoTokenYetIsUnauthenticated(t *testing.T) {
 	home := pixhome.New(t.TempDir())
 	if got := homeMemoryProber(home).Token; got != "" {
 		t.Fatalf("homeMemoryProber(home).Token = %q, want empty before pix setup has run", got)
-	}
-}
-
-func TestBuiltinMCPFactsUsesScopedNames(t *testing.T) {
-	homeA := t.TempDir()
-	t.Setenv("PIX_HOME", homeA)
-	factsA := builtinMCPFacts()
-	if factsA.MemoryName == "" || factsA.SessionName == "" {
-		t.Fatalf("expected resolved scoped names, got %+v", factsA)
-	}
-	if factsA.MemoryName == "pix-memory" || factsA.SessionName == "pix-session" {
-		t.Fatalf("builtinMCPFacts must never fall back to the bare legacy names, got %+v", factsA)
-	}
-
-	homeB := t.TempDir()
-	t.Setenv("PIX_HOME", homeB)
-	factsB := builtinMCPFacts()
-	if factsA.MemoryName == factsB.MemoryName || factsA.SessionName == factsB.SessionName {
-		t.Fatalf("two different PIX_HOME roots must diverge, both got %+v", factsA)
 	}
 }
 

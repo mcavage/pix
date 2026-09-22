@@ -18,8 +18,8 @@
 // render.go's own "Renderer/materializer split" section. It still adds
 // Pix's two RESERVED built-in MCP declarations (pix-memory, pix-session:
 // docs/design/pix-v2-architecture.md §10) exactly as a real launch does
-// (cmd/pix's runEffectiveInput/builtinMCPFacts), so `--effective` never
-// shows a shape a real create would then silently add to.
+// (cmd/pix's runEffectiveInput calls the same BuiltinMCPFacts below), so
+// `--effective` never shows a shape a real create would then silently add to.
 package env
 
 import (
@@ -38,12 +38,6 @@ import (
 // Leave the template absent so sbx uses the selected kit's pinned image.
 // A bare image repository would override that pin with a cached :latest.
 const effectivePullPolicyMissing = "missing"
-
-// effectiveSessionSubcommandArg mirrors cmd/pix/run_env.go's
-// mcpSessionSubcommand: pix-session's reserved argv[1]. Kept as a
-// duplicated literal for the same reason as effectiveMemoryHostPort —
-// cmd/pix cannot be imported from here.
-const effectiveSessionSubcommandArg = envinfo.HostToolsSubcommand
 
 // resolveEffectiveName is ComputeEffective's/`env [NAME]`'s shared name
 // resolution: an explicit positional wins; otherwise the machine default
@@ -136,8 +130,8 @@ func ComputeEffective(home pixhome.Paths, explicit, launcherVersion string) (env
 		// running as, and this PIX_HOME's stack id. Composed through the ONE
 		// producer, envinfo.PixManagedEnvVars, so `--effective` never shows an
 		// env block a real create would then silently add to.
-		PixEnvVars: envinfo.PixManagedEnvVars(launcherVersion, previewStackID(home)),
-		MCPServers: envinfo.WithBuiltinMCPServers(servers, envinfo.WithHostTools(builtinMCPFacts(home), home.Home, cwd, sandboxName, false, os.Getenv("PIX_HOST_TOOLS_DISABLED") == "1")),
+		PixEnvVars: envinfo.PixManagedEnvVars(launcherVersion, HomeStackID(home)),
+		MCPServers: envinfo.WithBuiltinMCPServers(servers, BuiltinMCPFacts(home, cwd, sandboxName, false)),
 	}
 	return facts, nil
 }
@@ -179,25 +173,12 @@ func redactBuiltinMemoryToken(facts *envinfo.RuntimeFacts) {
 	}
 }
 
-// builtinMCPFacts resolves docs/design/pix-v2-architecture.md §10's two
-// reserved built-ins for THIS host, mirroring cmd/pix/run_env.go's own
-// builtinMCPFacts exactly (same URL shape — container.ReadMemoryPort is the
-// ONE canonical per-PIX_HOME port both copies now read, QA F4: two
-// independent PIX_HOME instances no longer share one fixed value — same
-// reserved argv) so a preview never disagrees with what a real launch
-// composes. Either half degrades to "omit that built-in" rather than
-// failing the preview: an unresolvable running executable is a `pix
-// doctor`-shaped gap, not a reason `env --effective` should refuse to
-// render anything at all. The bearer token (security re-review HIGH
-// finding) is read-only here, never generated: a preview run before `pix
-// setup` simply omits it, same as an unresolvable session command. The port
-// is read-only too — never allocated here, only `pix setup`'s
-// container.EnsureMemoryPort does that — so a preview before `pix setup`
-// shows container.DefaultMemoryPort, the same "not ready yet" display value.
-// previewStackID is this PIX_HOME's stack id for the preview's own
-// PIX_STACK_ID fact, degrading to "" (the fact is omitted) on the same
-// terms builtinMCPFacts already degrades on — never a guessed id.
-func previewStackID(home pixhome.Paths) string {
+// HomeStackID is this PIX_HOME's stack id for the Pix-managed PIX_STACK_ID
+// environment fact, degrading to "" (the fact is omitted, never rendered
+// empty) on the same terms BuiltinMCPFacts degrades on — never a guessed or
+// placeholder id: a wrong stack id in a sandbox's environment is worse than
+// an absent one. Both the preview and a real launch call this ONE function.
+func HomeStackID(home pixhome.Paths) string {
 	id, err := stack.ID(home.Home)
 	if err != nil {
 		return ""
@@ -205,12 +186,30 @@ func previewStackID(home pixhome.Paths) string {
 	return id
 }
 
-func builtinMCPFacts(home pixhome.Paths) envinfo.BuiltinMCPFacts {
+// BuiltinMCPFacts resolves docs/design/pix-v2-architecture.md §10's two
+// reserved built-ins for THIS host: pix-memory, the loopback Streamable HTTP
+// endpoint `pix setup` reconciles and registers with the sbx Gateway (the
+// SAME URL container.MemoryMCPURL composes for that registration — never a
+// second, independently-derived one that could silently disagree), and the
+// host-tools server, the Gateway-launched host stdio command that names this
+// SAME running `pix` binary with envinfo.WithHostTools' argv for workspace,
+// sandbox, and dev authority. `pix env --effective` (ComputeEffective) and a
+// real launch (cmd/pix's runEffectiveInput) both call this ONE function, so
+// a preview can never show a built-in shape a real create would then
+// silently change.
+//
+// Either half degrades to "omit that built-in" rather than failing the
+// caller: a stack id that cannot be derived omits BOTH built-ins (never a
+// bare legacy-name fallback), and an unresolvable running executable omits
+// the session command — a `pix doctor`-shaped gap, not a reason to refuse a
+// preview or every `pix run` outright. The bearer token and port are
+// read-only here, never generated or allocated (that is `pix setup`'s job
+// alone: container.EnsureMemoryAuthToken / EnsureMemoryPort), so a call
+// before `pix setup` omits the token and shows container.DefaultMemoryPort,
+// the same "not ready yet" value. PIX_HOST_TOOLS_DISABLED=1 removes the
+// host-tools built-in entirely.
+func BuiltinMCPFacts(home pixhome.Paths, workspace, sandboxName string, dev bool) envinfo.BuiltinMCPFacts {
 	var facts envinfo.BuiltinMCPFacts
-	// This PIX_HOME's own scoped built-in names (Wave B coexistence): a
-	// stack id that cannot be derived degrades to omitting BOTH built-ins
-	// entirely, the same "unresolvable yet" posture an unresolvable running
-	// executable already gets below — never a bare legacy-name fallback.
 	if id, err := stack.ID(home.Home); err == nil {
 		facts.MemoryName, _ = stack.MCPMemoryName(id)
 		facts.SessionName, _ = stack.MCPSessionName(id)
@@ -226,7 +225,9 @@ func builtinMCPFacts(home pixhome.Paths) envinfo.BuiltinMCPFacts {
 			exe = resolved
 		}
 		facts.SessionCommand = exe
-		facts.SessionArgs = []string{effectiveSessionSubcommandArg}
 	}
-	return facts
+	// WithHostTools owns the session argv (envinfo.HostToolsSubcommand plus
+	// its --home/--workspace/--sandbox context); nothing here pre-fills a
+	// different subcommand it would then overwrite.
+	return envinfo.WithHostTools(facts, home.Home, workspace, sandboxName, dev, os.Getenv("PIX_HOST_TOOLS_DISABLED") == "1")
 }

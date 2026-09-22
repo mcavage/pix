@@ -21,8 +21,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -425,7 +427,7 @@ func ComputeBoM(env *Environment, effective EffectiveMounts, lookPath func(strin
 const unboundCredentialDestination = "(unbound)"
 
 func computeSecretsAndCredentials(doc *envinfo.Document, b *BillOfMaterials) error {
-	for _, name := range sortedKeys(doc.Secrets) {
+	for _, name := range slices.Sorted(maps.Keys(doc.Secrets)) {
 		s := doc.Secrets[name]
 		b.Secrets = append(b.Secrets, SecretFact{
 			Name: name, Ref: s.Ref, HasCommand: len(s.Command) > 0,
@@ -459,7 +461,7 @@ func computeSecretsAndCredentials(doc *envinfo.Document, b *BillOfMaterials) err
 			b.CredentialTargets = append(b.CredentialTargets, CredentialTarget{Source: source, Destination: unboundCredentialDestination})
 		}
 	}
-	for _, svc := range sortedKeys(doc.Bindings) {
+	for _, svc := range slices.Sorted(maps.Keys(doc.Bindings)) {
 		domains := append([]string(nil), doc.Bindings[svc].APIKey.Domains...)
 		sort.Strings(domains)
 		b.Bindings = append(b.Bindings, BindingFact{Service: svc, Domains: domains})
@@ -468,7 +470,7 @@ func computeSecretsAndCredentials(doc *envinfo.Document, b *BillOfMaterials) err
 }
 
 func computeRegistries(doc *envinfo.Document, b *BillOfMaterials) {
-	for _, host := range sortedKeys(doc.Registries) {
+	for _, host := range slices.Sorted(maps.Keys(doc.Registries)) {
 		r := doc.Registries[host]
 		b.Registries = append(b.Registries, RegistryFact{
 			Host: host, Ref: r.Ref, HasCommand: len(r.Command) > 0,
@@ -515,16 +517,11 @@ func computeMCP(root string, doc *envinfo.Document, b *BillOfMaterials, lookPath
 			})
 			if RequiresSymlinkCheck(srv.Command) {
 				if resolved, ok := ResolveLocalCommand(root, srv.Command, lookPath); ok {
-					target, err := ResolveSymlinkedReference(fmt.Sprintf("MCP server command %s", srv.Name), resolved, true, nil)
+					var err error
+					fact.Target, fact.SHA, err = fingerprintReference(fmt.Sprintf("MCP server command %s", srv.Name), resolved, true)
 					if err != nil {
-						return fmt.Errorf("mcp server %q: %w (cannot fingerprint the host-exec surface; fail closed)", srv.Name, err)
+						return fmt.Errorf("mcp server %q: %w", srv.Name, err)
 					}
-					sha, err := hashPath(target)
-					if err != nil {
-						return fmt.Errorf("mcp server %q: %w (cannot fingerprint the host-exec surface; fail closed)", srv.Name, err)
-					}
-					fact.Target = target
-					fact.SHA = sha
 				}
 			}
 		}
@@ -548,16 +545,11 @@ func computeKits(doc *envinfo.Document, b *BillOfMaterials) error {
 	for _, k := range doc.Kits {
 		fact := KitFact{Raw: k.Raw, Resolved: k.Resolved, Local: k.Local}
 		if k.Local {
-			target, err := ResolveSymlinkedReference(fmt.Sprintf("kit path %s", k.Raw), k.Resolved, false, nil)
+			var err error
+			fact.Target, fact.SHA, err = fingerprintReference(fmt.Sprintf("kit path %s", k.Raw), k.Resolved, false)
 			if err != nil {
-				return fmt.Errorf("kit %q: %w (cannot fingerprint the host-exec surface; fail closed)", k.Raw, err)
+				return fmt.Errorf("kit %q: %w", k.Raw, err)
 			}
-			sha, err := hashPath(target)
-			if err != nil {
-				return fmt.Errorf("kit %q: %w (cannot fingerprint the host-exec surface; fail closed)", k.Raw, err)
-			}
-			fact.Target = target
-			fact.SHA = sha
 		}
 		b.Kits = append(b.Kits, fact)
 	}
@@ -573,16 +565,11 @@ func computeHostServices(root string, s *envinfo.Sidecar, b *BillOfMaterials, lo
 	for _, svc := range s.Host.Services {
 		item := HostServiceItem{Name: svc.Name, Command: svc.Command, Args: append([]string(nil), svc.Args...), Port: svc.Port, Probe: svc.Probe}
 		if resolved, ok := ResolveLocalCommand(root, svc.Command, lookPath); ok {
-			target, err := ResolveSymlinkedReference(fmt.Sprintf("host service command %s", svc.Name), resolved, true, nil)
+			var err error
+			item.Target, item.SHA, err = fingerprintReference(fmt.Sprintf("host service command %s", svc.Name), resolved, true)
 			if err != nil {
-				return fmt.Errorf("host service %q: %w (cannot fingerprint the host-exec surface; fail closed)", svc.Name, err)
+				return fmt.Errorf("host service %q: %w", svc.Name, err)
 			}
-			sha, err := hashPath(target)
-			if err != nil {
-				return fmt.Errorf("host service %q: %w (cannot fingerprint the host-exec surface; fail closed)", svc.Name, err)
-			}
-			item.Target = target
-			item.SHA = sha
 		}
 		b.HostServices = append(b.HostServices, item)
 	}
@@ -669,7 +656,7 @@ func computeSetupHooks(root string, s *envinfo.Sidecar, b *BillOfMaterials) erro
 // every downstream reader (ValueMeta callers) sees the resolved bool, never
 // a tri-state it has to re-derive itself.
 func computeHostValues(s *envinfo.Sidecar, b *BillOfMaterials) {
-	for _, name := range sortedHostValueMetaKeys(s.Host.Values) {
+	for _, name := range slices.Sorted(maps.Keys(s.Host.Values)) {
 		v := s.Host.Values[name]
 		b.Values = append(b.Values, HostValueFact{
 			Name:     name,
@@ -681,17 +668,8 @@ func computeHostValues(s *envinfo.Sidecar, b *BillOfMaterials) {
 	}
 }
 
-func sortedHostValueMetaKeys(m map[string]envinfo.HostValueMeta) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
 func computeHostMCP(s *envinfo.Sidecar, b *BillOfMaterials) {
-	for _, name := range sortedHostMCPKeys(s.Host.MCP) {
+	for _, name := range slices.Sorted(maps.Keys(s.Host.MCP)) {
 		e := s.Host.MCP[name]
 		envKeys := append([]string(nil), e.EnvKeys...)
 		sort.Strings(envKeys)
@@ -721,7 +699,7 @@ func computeHostMCP(s *envinfo.Sidecar, b *BillOfMaterials) {
 }
 
 func computeInference(s *envinfo.Sidecar, b *BillOfMaterials) {
-	for _, name := range sortedInferenceKeys(s.Inference.Backends) {
+	for _, name := range slices.Sorted(maps.Keys(s.Inference.Backends)) {
 		be := s.Inference.Backends[name]
 		b.Inference = append(b.Inference, InferenceFact{
 			Name: name, Driver: be.Driver, Protocol: be.Protocol, BaseURL: be.BaseURL, Auth: be.Auth, KeyEnv: be.KeyEnv,
@@ -756,18 +734,25 @@ func computeInference(s *envinfo.Sidecar, b *BillOfMaterials) {
 	}
 }
 
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+// fingerprintReference resolves one local host-exec reference's symlink
+// chain (ResolveSymlinkedReference; requireExecutable distinguishes a
+// command, which must be an executable file, from a kit, which legitimately
+// resolves to a DIRECTORY of content) and content-hashes the physical target
+// (hashPath). It is the ONE fingerprinting step every local kit, MCP server
+// command, and host service command in the bill goes through, so all three
+// refuse on identical terms: an unfingerprintable host-exec surface fails the
+// whole bill closed rather than being silently reviewed as absent.
+func fingerprintReference(what, resolved string, requireExecutable bool) (target, sha string, err error) {
+	target, err = ResolveSymlinkedReference(what, resolved, requireExecutable, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("%w (cannot fingerprint the host-exec surface; fail closed)", err)
 	}
-	sort.Strings(out)
-	return out
+	sha, err = hashPath(target)
+	if err != nil {
+		return "", "", fmt.Errorf("%w (cannot fingerprint the host-exec surface; fail closed)", err)
+	}
+	return target, sha, nil
 }
-
-func sortedHostMCPKeys(m map[string]envinfo.HostMCPEntry) []string { return sortedKeys(m) }
-
-func sortedInferenceKeys(m map[string]envinfo.InferenceBackend) []string { return sortedKeys(m) }
 
 // hashPath content-hashes a single path: a regular file directly
 // (hosttrust.HashFile, symlink-refused), or every regular file under a

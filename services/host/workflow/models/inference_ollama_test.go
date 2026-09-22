@@ -20,12 +20,12 @@ import (
 )
 
 // This file closes the QA-flagged test-quality gaps in package models, which
-// had NO test files at all before this pass — so ollamaTagsTimeout's own doc
+// had NO test files at all before this pass — so inference.OllamaTagsTimeout's own doc
 // comment ("a hermetic test can shrink it") named a seam nothing ever
 // exercised. Every test here is white-box (package models), deliberately: the
 // daemon-error surface and the local/cloud classification carry-through both
-// need unexported seams (ollamaListing, classifyOllamaTag, ollamaTagsTimeout,
-// ollamaTagsBodyCap) no external package can reach.
+// need unexported seams (ollamaListing, classifyOllamaTag; the shared
+// inference.OllamaTagsTimeout / OllamaTagsBodyCap seams are exported).
 
 // tagRow is one row this file's fake /api/tags servers emit.
 type tagRow struct {
@@ -122,7 +122,7 @@ func TestOllamaListingRefusesABodyPastTheNewCap(t *testing.T) {
 	env := ollamaEnvServing(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		// A single oversized value blows the cap without needing millions of rows.
-		big := strings.Repeat("a", ollamaTagsBodyCap+1)
+		big := strings.Repeat("a", inference.OllamaTagsBodyCap+1)
 		_, _ = fmt.Fprintf(w, `{"models":[{"name":"x","size":%s0}]}`, big)
 	}, 64)
 	_, err := ollamaListing(env)
@@ -163,13 +163,13 @@ func TestOllamaListingMalformedJSON(t *testing.T) {
 }
 
 // TestOllamaListingHungDaemonRespectsTheShrinkableTimeout is the seam
-// ollamaTagsTimeout's own doc comment promises ("a var, not a const, so a
+// inference.OllamaTagsTimeout's own doc comment promises ("a var, not a const, so a
 // hermetic test can shrink it") and which nothing in this package's test suite
 // exercised before this file existed.
 func TestOllamaListingHungDaemonRespectsTheShrinkableTimeout(t *testing.T) {
-	orig := ollamaTagsTimeout
-	ollamaTagsTimeout = 50 * time.Millisecond
-	defer func() { ollamaTagsTimeout = orig }()
+	orig := inference.OllamaTagsTimeout
+	inference.OllamaTagsTimeout = 50 * time.Millisecond
+	defer func() { inference.OllamaTagsTimeout = orig }()
 
 	block := make(chan struct{})
 	env := ollamaEnvServing(t, func(w http.ResponseWriter, r *http.Request) {

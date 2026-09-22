@@ -31,7 +31,7 @@
       "_env_keys_trust_screen_note": "validateDeclaredEnvironmentValues (env_keys/plain_keys pre-flight) and the concise setup-hook trust screen landed in a prior commit without a budget rebaseline; this rebaseline also folds in the current change (env trust default output collapsed to summary counts plus named risk categories, full per-item detail moved to --verbose; the memory-container replace prompt says only that the service changed and /data is preserved, image refs/fingerprints moved to --verbose), doc-comment and gating changes rather than new accumulation. Rebaselined to the exact current values.",
       "_env_setup_no_personal_interview_note": "`pix setup --env NAME` now returns from setupCredentials right after the refs file is established, so a work environment with its own authenticated backends is never asked for a public-vendor 1Password key and is never told it has \"no model provider key configured\" \u2014 a correctness fix to what setup asks a human, with the reasoning kept next to the guard. Rebaselined to the exact current values (prod_loc +8).",
       "_session_resume_fix_note": "Bare pix -- passthrough routes to run with the implicit-launch TTY guard; exact four-line growth.",
-      "prod_loc": 6216,
+      "prod_loc": 6142,
       "_theme_note": "Global theme persistence adds four command-layer lines: read the personal theme pointer, and force the pinned host safety palette for --dev. Exact measured growth; no new command, package edge, export, or global.",
       "_setup_download_progress_note": "Restore optional provider/Parallel reference onboarding, retain environment-owned auth, expose the full shipped model picker, and announce image pulls. Real setup caller tests cover skips, reruns, credential handling and progress. Exact measured production LOC; no slack.",
       "test_loc": 10844,
@@ -39,7 +39,7 @@
       "exports_used_externally": 0,
       "exits": 1,
       "streams": 6,
-      "globals": 21,
+      "globals": 20,
       "init": 1,
       "edges": 27,
       "parser_families": {
@@ -83,7 +83,7 @@
     },
     "pix/host/container": {
       "_prod_loc_note": "L1 (security re-review): authtoken.go adds RedactMemoryURLToken/RedactedTokenPlaceholder \u2014 the presentation-only redaction `pix env show --effective` uses so the pix-memory bearer token never reaches that display, while the canonical effective document a real launch composes still carries the real value. QA F4 (this round): memoryport.go adds EnsureMemoryPort/AllocateMemoryPortLocked/ReadMemoryPort/SetupLockPath \u2014 per-PIX_HOME port allocation under an advisory lock, replacing the single shared DefaultMemoryPort constant every install used to fight over (globals +1 for setupLockName, edges +1 for the new sys.Lock dependency). Round 5: memoryport.go's MemoryPort storage moved off the deleted pixhome.Machine schema onto config.Config (+1 edge for pix/host/config); container.go adds isDockerPortConflict/removeFailedCreate/dockerPortConflictMarkers so a real `docker create`/`docker start` bind-conflict error is classified into *PortInUseError and the orphaned just-created container is safely removed by ID before Setup's bounded reallocate-and-retry (+1 global for the marker slice, +78 prod_loc). Real capability change (round-5 blocker: port retry previously only worked via the pre-check, never the real docker error), not accumulation.",
-      "prod_loc": 1289,
+      "prod_loc": 1283,
       "test_loc": 1158,
       "exports": 48,
       "exports_used_externally": 15,
@@ -101,16 +101,17 @@
       "_ollama_integration_note": "container.Spec gained Env/ExtraHosts (-e/--add-host, both folded into Fingerprint) so the pix-memory container can be given the translated OLLAMA_HOST (host.docker.internal) the one-Ollama-integration wiring computes. Real capability fix, not accumulation. Rebaselined to the exact current values."
     },
     "pix/host/envinfo": {
+      "_dedupe_note": "De-duplication pass, rebaselined by hand to the EXACT current values, no slack; total launcher production code shrinks in this change. envinfo: +1 export (CurrentPixManagedVars, the ONE resolver of Pix-managed interpolation variables for this host's home, replacing identical private copies in workflow/env and workflow/launch, two sibling workflows that may not import each other) and +1 edge (pixhome, the L0 foundation package it resolves the home through).",
       "_plain_keys_note": "[host.mcp.<name>] gained plain_keys (a declared non-secret name list distinct from env_keys's secrets) in a prior commit without a budget rebaseline; real capability, not accumulation. Rebaselined to the exact current values.",
-      "prod_loc": 3883,
+      "prod_loc": 3816,
       "test_loc": 4247,
-      "exports": 107,
+      "exports": 108,
       "exports_used_externally": 22,
       "exits": 0,
       "streams": 0,
       "globals": 34,
       "init": 0,
-      "edges": 1,
+      "edges": 2,
       "parser_families": {
         "core": 13,
         "test": 13
@@ -189,11 +190,12 @@
       "_prod_loc_note": "ReadVerifiedFile added: HashFile's byte-returning twin (O_NOFOLLOW open, fstat-regular on the already-open descriptor, then read) so envsetup's setup-hook TOCTOU snapshot can hash AND copy the exact bytes it trusts in one read, never a second independent open of the same path. +1 export."
     },
     "pix/host/inference": {
+      "_dedupe_note": "De-duplication pass, rebaselined by hand to the EXACT current values, no slack; total launcher production code shrinks in this change. inference: +2 exports (OllamaTagsTimeout/OllamaTagsBodyCap, the /api/tags timeout and body-cap seams workflow/models' white-box tests shrink and assert against now that its private ollamaListing copy of ListOllamaModels -- same request, same cap, same tag-grammar boundary, same error strings -- is a one-line delegate). prod_loc grows only by the doc comments those seams and the cap-plus-one read carried over from the deleted copy; workflow/models loses ~90 lines.",
       "_env_credential_mode_note": "KeylessInference(cfg) replaced the argument-less ConfiguredKeylessInference(): the question \"does this run need a personal provider key?\" is per-RUN, not per-host, because `pix run` answers it from the effective config (machine config merged with the selected environment's own [inference.*]). Net exports unchanged (one added, one deleted). Rebaselined to the exact current value.",
       "_inference_setup_note": "Explicit Inference Setup item 1: CatalogSourceInfo/RuntimeCatalogPath/DescribeCatalogSource \u2014 which catalog LoadCatalog reads, and where the release-materialized runtime/<version>/models.json snapshot lives \u2014 for `pix env show`'s inspection surface. +3 exports (the struct and its two functions), no new edges.",
-      "prod_loc": 1660,
+      "prod_loc": 1676,
       "test_loc": 1664,
-      "exports": 58,
+      "exports": 60,
       "exports_used_externally": 22,
       "exits": 0,
       "streams": 0,
@@ -330,7 +332,7 @@
       "_prod_loc_note": "SECURITY re-review MEDIUM finding fix: SetRef/RemoveRef in pixhome.go are now lock-protected (secretsEnvLockPath, +1 global for the lock-name const, +1 edge for the new pix/host/sys import) against a concurrent secrets.env writer \u2014 a real correctness fix, not accumulation. Coexistence review fix (MEDIUM): setScopedSbxSecret writes the resolved value to `sbx secret set`'s STDIN instead of passing `-t <value>` in argv, so no `ps` on the host can read a provider credential. The added lines are the seam's doc comment explaining why redaction is now defence in depth rather than the primary control.",
       "_parallel_search_note": "Explicit Inference Setup follow-up: new parallel.go adds ConfiguredParallelSearchRef (mirrors ConfiguredGitHubRef) and OfferParallelSearchKey (mirrors OfferOnePasswordKeys, single-key, TTY-only, default-No) for the optional Parallel web-search tool key, plus the ParallelSearchKeyRef var ToolKeyRefOrder now references instead of duplicating the EnvVar/Name pair \u2014 real capability, not accumulation. Rebaselined to the exact current values, no slack.",
       "_plain_keys_note": "SetPlainValue/PlainValue (a literal, non-op:// line in secrets.env for setup's declared plain_keys collector) landed in a prior commit without a budget rebaseline; real capability, not accumulation. Rebaselined to the exact current values.",
-      "prod_loc": 1625,
+      "prod_loc": 1620,
       "test_loc": 2172,
       "exports": 65,
       "exports_used_externally": 17,
@@ -413,16 +415,17 @@
       "_ollama_integration_note": "probes.go wires health.OllamaProbe into Probes() via ollamaDetect/memoryEmbedModel \u2014 the doctor-visible half of the one Ollama integration. Real capability addition, not accumulation. Rebaselined to the exact current values."
     },
     "pix/host/workflow/env": {
+      "_dedupe_note": "De-duplication pass, rebaselined by hand to the EXACT current values, no slack; total launcher production code shrinks in this change. workflow/env: +2 exports (BuiltinMCPFacts, HomeStackID), the ONE producer of the reserved pix-memory/host-tools built-in declarations and the PIX_STACK_ID fact that both `pix env --effective` and cmd/pix's real launch now call, replacing cmd/pix's mirrored builtinMCPFacts/currentStackID copies (which had already drifted: the preview pre-filled a different session argv than the launch before WithHostTools overwrote both).",
       "_prod_loc_note": "Environment [[setup]] hooks (the v2 replacement for pack-authored install/auth hooks): a real capability addition, not accumulation. bom.go adds computeSetupHooks and the SetupHookFact alias of envsetup.Hook (+1 edge for pix/host/envsetup), so the hook argv and executable content hash a human accepts are the exact value the runner later executes.",
       "_gog_symlink_fix_note": "Fixes the reported blocker: an ordinary symlink (Homebrew's `/opt/homebrew/bin/gog` into its own Cellar keg) named as an `mcp.servers[].command` made `pix env show`/`--effective` refuse to load outright, since RefuseSymlinkedReference blindly refused ANY symlink. resolve.go replaces it with ResolveSymlinkedReference (+ReferenceTargetError/ReferenceRefusalReason exports), which resolves the full chain to its physical target and refuses only a broken, escaping, non-regular, or (for a command) non-executable result; a kit path may resolve to a directory (requireExecutable=false), a command may not. bom.go's computeKits/computeMCP/computeHostServices now resolve and content-hash that PHYSICAL target (KitFact/MCPServerFact/HostServiceItem all grow a Target field alongside their existing SHA), so a symlinked reference fingerprints what it actually runs instead of refusing. A real capability addition (a previously-blocked, ordinary environment now loads and reviews correctly), not accumulation. Rebaselined to the exact current values.",
       "_plain_keys_note": "HostMCPFact gained PlainKeys (rendered as a (host, non-secret value) credential-target line) and Fingerprint bumped 4 -> 5 in a prior commit without a budget rebaseline; real capability, not accumulation. Rebaselined to the exact current values.",
-      "prod_loc": 3278,
+      "prod_loc": 3224,
       "test_loc": 3393,
-      "exports": 73,
+      "exports": 75,
       "exports_used_externally": 15,
       "exits": 0,
       "streams": 0,
-      "globals": 24,
+      "globals": 22,
       "init": 0,
       "edges": 13,
       "parser_families": {
@@ -441,9 +444,9 @@
     },
     "pix/host/workflow/launch": {
       "_prod_loc_note": "Review round 1 blocker #2 fix: FindPositivelyIdentified (the running-or-stopped identity check DecideEnvAttach's reattach gate now uses) and DecideEnvAttach's relaxed running-or-stopped gate. Real new logic (a stopped sandbox used to be refused outright by this gate), not accumulation. Round-7 adds EffectiveInferenceConfig: the production merge of a selected environment's pix.toml [inference.*] over machine config into an ephemeral, never-persisted snapshot for SynthesizeInferenceKit/CallableRuntimeModels/roster validation. Coexistence review fix (INFO): RemoveScopedPixSandbox, now the ONLY exported forced-removal seam, validates a RECORDED sandbox name against this stack's id before any argv is composed; the unscoped form is unexported, so no package outside launch can reach it.",
-      "prod_loc": 5069,
+      "prod_loc": 5053,
       "test_loc": 7443,
-      "exports": 187,
+      "exports": 185,
       "exports_used_externally": 63,
       "exits": 0,
       "streams": 3,
@@ -464,13 +467,13 @@
       "_absent_lifetime_note": "Before create, retire a stale instance record only under lifecycle exclusion, zero reference locks, and a fresh positive absence probe. Preserve held lock inodes and clear the old keep marker. Real RunSession tests cover create, attach, cleanup, retained new keep, and refusal on held/present/unknown state. Exact measured growth."
     },
     "pix/host/workflow/models": {
-      "prod_loc": 862,
+      "prod_loc": 772,
       "test_loc": 697,
       "exports": 9,
       "exports_used_externally": 1,
       "exits": 0,
       "streams": 2,
-      "globals": 8,
+      "globals": 5,
       "init": 0,
       "edges": 4,
       "parser_families": {

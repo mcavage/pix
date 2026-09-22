@@ -212,25 +212,39 @@ func ContainerOllamaHost(s OllamaStatus) string {
 	return fmt.Sprintf("http://host.docker.internal:%d", s.Endpoint.Port)
 }
 
-// ollamaDetectTimeout bounds the /api/tags request so a wedged or absent
-// daemon can never hang a caller. A var, not a const, so a hermetic test can
-// shrink it.
-var ollamaDetectTimeout = 5 * time.Second
+// OllamaTagsTimeout bounds the /api/tags request so a wedged or absent
+// daemon can never hang a caller (setup's listing, doctor's probe). A var,
+// not a const, so a hermetic test can shrink it: an unreachable-daemon test
+// must fail fast, not wait out a production budget. Nothing else may write it.
+var OllamaTagsTimeout = 5 * time.Second
 
-// ollamaDetectBodyCap bounds how much of the /api/tags response this
-// integration will read — generous for a real install (see workflow/models'
-// identical cap for the measurement this is sized from), but never
-// unbounded against a wedged or malicious listener.
-const ollamaDetectBodyCap = 16 << 20 // 16 MiB
+// OllamaTagsBodyCap bounds how much of the /api/tags response
+// ListOllamaModels will read. It exists to bound memory against a wedged or
+// malicious listener (DoS: an unbounded read is an unbounded allocation), but
+// it is sized for real Ollama installs, not against them: a real row runs a
+// few hundred bytes (name, digest, modified_at, size, details{format, family,
+// families, parameter_size, quantization_level}), so this holds tens of
+// thousands of pulled tags before ever truncating a genuine listing. The 1
+// MiB cap this replaced truncated comfortably inside four figures of tags —
+// well within reach for a real user with a large local library — and the
+// decode failure that truncation caused was reported upstream as "the daemon
+// did not answer": a healthy, fully-responsive daemon relabeled as
+// unreachable.
+const OllamaTagsBodyCap = 16 << 20 // 16 MiB
 
 // ollamaTagNamePattern is Ollama's own legal name grammar — namespace/
-// model:tag — and the ingestion boundary for every tag this function ever
+// model:tag — and the ingestion boundary for every tag ListOllamaModels ever
 // returns. A rogue listener, or a redirected OLLAMA_HOST, controls every
 // byte of the response; without this a name carrying \r, \n, or an ANSI
 // erase sequence could forge whatever a caller renders from it. Checked
-// once, here, mirroring workflow/models' identical boundary.
+// ONCE, here, at the boundary: a non-conforming row is dropped before any
+// downstream renderer (terminal output, config.toml) ever sees it, rather
+// than trusting every renderer to re-derive the same check.
 var ollamaTagNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:-]*$`)
 
+// validOllamaTagName additionally caps length: a daemon has no reason to
+// name a tag anywhere near this long, and an unbounded name is its own small
+// DoS against every renderer downstream.
 func validOllamaTagName(name string) bool {
 	return name != "" && len(name) <= 256 && ollamaTagNamePattern.MatchString(name)
 }
@@ -253,7 +267,7 @@ func ListOllamaModels(env hostenv.Env) (map[string]OllamaModelInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not list Ollama models")
 	}
-	resp, err := (&http.Client{Timeout: ollamaDetectTimeout}).Do(req)
+	resp, err := (&http.Client{Timeout: OllamaTagsTimeout}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("could not list Ollama models")
 	}
@@ -261,12 +275,17 @@ func ListOllamaModels(env hostenv.Env) (map[string]OllamaModelInfo, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("could not list Ollama models (HTTP %d)", resp.StatusCode)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, ollamaDetectBodyCap+1))
+	// Read one byte past the cap so a body that is EXACTLY at the cap and a
+	// body that OVERFLOWS it are distinguishable: a plain
+	// io.LimitReader-into-Decoder cannot tell "truncated, otherwise valid"
+	// from "actually malformed", which is exactly how a large-but-healthy
+	// daemon got relabeled unreachable before.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, OllamaTagsBodyCap+1))
 	if err != nil {
 		return nil, fmt.Errorf("could not list Ollama models (could not read the response)")
 	}
-	if len(raw) > ollamaDetectBodyCap {
-		return nil, fmt.Errorf("the Ollama daemon answered, but its tag listing exceeded the %dMiB safety cap — this is a cap, not a sign the daemon is down", ollamaDetectBodyCap>>20)
+	if len(raw) > OllamaTagsBodyCap {
+		return nil, fmt.Errorf("the Ollama daemon answered, but its tag listing exceeded the %dMiB safety cap — this is a cap, not a sign the daemon is down", OllamaTagsBodyCap>>20)
 	}
 	var body ollamaTagsResponse
 	if err := json.Unmarshal(raw, &body); err != nil {

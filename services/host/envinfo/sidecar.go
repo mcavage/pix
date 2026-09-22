@@ -12,9 +12,11 @@ package envinfo
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -517,7 +519,7 @@ func validateHostValues(base, text string, mcp map[string]HostMCPEntry, values m
 			declared[k] = true
 		}
 	}
-	for _, name := range sortedHostValueMetaKeys(values) {
+	for _, name := range slices.Sorted(maps.Keys(values)) {
 		v := values[name]
 		key := fmt.Sprintf("host.values.%s", name)
 		line := locateKeyLines(text)[key]
@@ -534,22 +536,13 @@ func validateHostValues(base, text string, mcp map[string]HostMCPEntry, values m
 	return nil
 }
 
-func sortedHostValueMetaKeys(m map[string]HostValueMeta) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // validateHostMCPKeys refuses a [host.mcp.<name>] entry that lists the same
 // env var name in both env_keys and plain_keys — the two lists are mutually
 // exclusive classifications (a secret that must resolve to an op:// ref, or
 // a plain value that must never be one), so a name in both is an authoring
 // mistake, not something either list's own reader could silently resolve.
 func validateHostMCPKeys(base, text string, mcp map[string]HostMCPEntry) error {
-	for _, name := range sortedHostMCPEntryKeys(mcp) {
+	for _, name := range slices.Sorted(maps.Keys(mcp)) {
 		entry := mcp[name]
 		plain := map[string]bool{}
 		for _, k := range entry.PlainKeys {
@@ -567,15 +560,6 @@ func validateHostMCPKeys(base, text string, mcp map[string]HostMCPEntry) error {
 		}
 	}
 	return nil
-}
-
-func sortedHostMCPEntryKeys(m map[string]HostMCPEntry) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // validateSetupHooks enforces the whole `[[setup]]` grammar at parse time,

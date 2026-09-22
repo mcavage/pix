@@ -53,7 +53,9 @@ package envinfo
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -150,21 +152,21 @@ func ComputeFingerprint(facts RuntimeFacts, resolve InterpolationResolver) (Fing
 	}
 
 	opts := effectiveSandboxOptions(facts)
-	for _, k := range sortedKeys(opts) {
+	for _, k := range slices.Sorted(maps.Keys(opts)) {
 		if err := set("sandboxOptions."+k, opts[k]); err != nil {
 			return nil, err
 		}
 	}
 
 	env := effectiveEnv(facts)
-	for _, k := range sortedKeys(env) {
+	for _, k := range slices.Sorted(maps.Keys(env)) {
 		if err := set("env."+k, env[k]); err != nil {
 			return nil, err
 		}
 	}
 
 	secrets := effectiveSecrets(doc)
-	for _, name := range sortedEffectiveSecretKeys(secrets) {
+	for _, name := range slices.Sorted(maps.Keys(secrets)) {
 		s := secrets[name]
 		if err := set("secrets."+name+".ref", s.Ref); err != nil {
 			return nil, err
@@ -177,7 +179,7 @@ func ComputeFingerprint(facts RuntimeFacts, resolve InterpolationResolver) (Fing
 	}
 
 	registries := effectiveRegistries(doc)
-	for _, host := range sortedEffectiveRegistryKeys(registries) {
+	for _, host := range slices.Sorted(maps.Keys(registries)) {
 		r := registries[host]
 		if err := set("registries."+host+".ref", r.Ref); err != nil {
 			return nil, err
@@ -192,7 +194,7 @@ func ComputeFingerprint(facts RuntimeFacts, resolve InterpolationResolver) (Fing
 		}
 	}
 
-	for _, svc := range sortedBindingMapKeys(doc.Bindings) {
+	for _, svc := range slices.Sorted(maps.Keys(doc.Bindings)) {
 		for _, d := range doc.Bindings[svc].APIKey.Domains {
 			key := fmt.Sprintf("bindings.%s.apiKey.domains[%s]", svc, d)
 			if err := set(key, d); err != nil {
@@ -450,40 +452,4 @@ func findKeyPath(identity []string, composedKey string) (string, bool) {
 		return best, true
 	}
 	return "", false
-}
-
-func sortedKeys(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func sortedEffectiveSecretKeys(m map[string]effectiveSecret) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func sortedEffectiveRegistryKeys(m map[string]effectiveRegistry) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func sortedBindingMapKeys(m map[string]Binding) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
