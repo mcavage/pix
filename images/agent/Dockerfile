@@ -12,7 +12,7 @@
 # nag (pi checks npm at runtime, so a new release always nags until you rebump).
 # When bumping, re-check the vendored tui patch still applies (build logs print
 # "[apply-tui-bottom-pin] patched" vs an "anchor not found" warning).
-ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.86.1
+ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.87.1
 
 # Hardened Node, maintained by Docker (DHI). Debian/glibc, so our entire apt
 # toolchain (clangd, chromium, gh, ruff, build-essential) keeps working — we just
@@ -312,13 +312,13 @@ USER agent
 # compatibility set reviewed with the pinned PI_PACKAGE. When you bump
 # PI_PACKAGE, re-check every package against the new runtime and update pins
 # deliberately; latest is not automatically safest when Pix patches internals.
-# EXCEPTION, deliberate: pi-mcp-adapter remains at 2.21.1 for Pi 0.86.1.
+# EXCEPTION, deliberate: pi-mcp-adapter remains at 2.21.1 for Pi 0.87.1.
 # 2.25.0 moves the startup
 # anchor apply-mcp-problems-status.mjs matches, so the patch throws
 # "startup anchor not found in .../init.ts" and fails the image build. Verified
 # by dry-run against a clean 2.25.0 install. Refreshing that patch is its own
 # change, not a rider on a pi patch bump.
-# EXCEPTION, deliberate: pi-web-access remains at 0.13.0 for Pi 0.86.1.
+# EXCEPTION, deliberate: pi-web-access remains at 0.13.0 for Pi 0.87.1.
 # 0.19.0 upstreamed our gateway seams under DIFFERENT config keys
 # (openaiResponsesUrl / openaiSearchModel vs. our openaiBaseUrl / openaiModel)
 # and dropped the anchors apply-web-access-gateway.mjs matches. That patch is

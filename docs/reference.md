@@ -737,10 +737,16 @@ as their canonical models. These are USD list-price estimates, not invoices or
 routing criteria; gateway contracts and subscription charges may differ.
 Ollama has no per-token charge in this accounting.
 
-Pi 0.86.1 includes [GPT-6 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
-($10 input / $50 output per million tokens, with higher rates above 272K input)
+Pi 0.87.1 includes [Claude Opus 5.5 pricing](https://platform.claude.com/docs/en/models/overview)
+($4 input / $20 output per million tokens),
+[GPT-6 Astra pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
+($10 input / $50 output),
+[GPT-6 Sol pricing](https://developers.openai.com/api/docs/models/gpt-6-sol)
+($2 input / $10 output), and
+[GPT-6 Luna pricing](https://developers.openai.com/api/docs/models/gpt-6-luna)
+($0.10 input / $0.50 output, with higher rates above 272K input)
 and [Gemini 3.8 Flash pricing](https://ai.google.dev/gemini-api/docs/pricing)
 ($0.75 input / $3.75 output per million tokens). Gemini's introductory rates
 expire December 31, 2026; update the pinned Pi catalog before that expiry to
-keep estimates current. Cache rates and Astra's context tiers are preserved,
+keep estimates current. Cache rates and OpenAI's long-context tiers are preserved,
 not flattened into the base rate.

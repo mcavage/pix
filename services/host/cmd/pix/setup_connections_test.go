@@ -44,7 +44,7 @@ func TestSetupDefaultOffersAllConnectionsBeforeOllamaChoice(t *testing.T) {
 			t.Errorf("connection not offered before model: %s", label)
 		}
 	}
-	for _, label := range []string{"GPT-6 Astra", "Claude Fable 5.1", "Gemini 3.8 Flash"} {
+	for _, label := range []string{"GPT-6 Astra", "GPT-6 Sol", "GPT-6 Luna", "Claude Opus 5.5", "Gemini 3.8 Flash"} {
 		if !strings.Contains(out.String(), label) {
 			t.Errorf("picker omitted %s", label)
 		}

@@ -235,8 +235,8 @@ func keylessGatewayConfig() *config.Config {
 		Inference: config.InferenceConfig{
 			Backends: map[string]config.InferenceBackend{"gw-anthropic": backend("anthropic"), "gw-openai": backend("openai")},
 			Models: []config.InferenceModelBinding{
-				{Model: "anthropic/claude-opus-5", Backend: "gw-anthropic", Upstream: "claude-opus-5", Available: true},
-				{Model: "openai/gpt-5.6-sol", Backend: "gw-openai", Upstream: "gpt-5.6-sol", Available: true},
+				{Model: "anthropic/claude-opus-5-5", Backend: "gw-anthropic", Upstream: "claude-opus-5-5", Available: true},
+				{Model: "openai/gpt-6-sol", Backend: "gw-openai", Upstream: "gpt-6-sol", Available: true},
 			},
 		},
 	}

@@ -29,8 +29,8 @@ var (
 // call time).
 func TestCallable(t *testing.T) {
 	probed := config.InferenceModelBinding{
-		Model: "anthropic/claude-opus-5", Backend: "anthropic",
-		Upstream: "anthropic/claude-opus-5", Available: true, Verified: true, VerifiedBy: "probe",
+		Model: "anthropic/claude-opus-5-5", Backend: "anthropic",
+		Upstream: "anthropic/claude-opus-5-5", Available: true, Verified: true, VerifiedBy: "probe",
 	}
 	for _, tc := range []struct {
 		name string
@@ -79,8 +79,8 @@ func unavailable(b config.InferenceModelBinding) config.InferenceModelBinding {
 // describes nothing useful, which is why Configured() gates the narrowing.
 func TestCatalogForBindings_NarrowsOnlyWhatWasBound(t *testing.T) {
 	catalog := &Catalog{Models: []Model{
-		{ID: "anthropic/claude-opus-5", Provider: "anthropic", Available: true},
-		{ID: "openai/gpt-5.6-sol", Provider: "openai", Available: true},
+		{ID: "anthropic/claude-opus-5-5", Provider: "anthropic", Available: true},
+		{ID: "openai/gpt-6-sol", Provider: "openai", Available: true},
 	}}
 
 	empty := &config.Config{}
@@ -94,8 +94,8 @@ func TestCatalogForBindings_NarrowsOnlyWhatWasBound(t *testing.T) {
 	}
 
 	probed := config.InferenceModelBinding{
-		Model: "anthropic/claude-opus-5", Backend: "anthropic",
-		Upstream: "anthropic/claude-opus-5", Available: true, Verified: true, VerifiedBy: "probe",
+		Model: "anthropic/claude-opus-5-5", Backend: "anthropic",
+		Upstream: "anthropic/claude-opus-5-5", Available: true, Verified: true, VerifiedBy: "probe",
 	}
 	cfg := cfgWith(nil, nativeBackends, probed)
 	if !Configured(cfg) {
@@ -106,10 +106,10 @@ func TestCatalogForBindings_NarrowsOnlyWhatWasBound(t *testing.T) {
 	for _, m := range narrowed.Models {
 		got[m.ID] = m.Available
 	}
-	if !got["anthropic/claude-opus-5"] {
+	if !got["anthropic/claude-opus-5-5"] {
 		t.Error("the probed model must stay available")
 	}
-	if got["openai/gpt-5.6-sol"] {
+	if got["openai/gpt-6-sol"] {
 		t.Error("openai has no backend here; leaving it available is the bug that told a keyless host it could call it")
 	}
 	// The catalog the caller passed in must not be mutated: a second reader
@@ -124,10 +124,10 @@ func TestCatalogForBindings_NarrowsOnlyWhatWasBound(t *testing.T) {
 func TestRuntimeID(t *testing.T) {
 	for _, tc := range []struct{ backend, upstream, want string }{
 		{"ollama", "glm-5.2:cloud", "ollama/glm-5.2:cloud"},
-		{"anthropic", "anthropic/claude-opus-5", "anthropic/claude-opus-5"},
+		{"anthropic", "anthropic/claude-opus-5-5", "anthropic/claude-opus-5-5"},
 		// Qualified, but by a DIFFERENT provider: a gateway serving anthropic ids
 		// must still be addressed through the gateway.
-		{"gateway", "anthropic/claude-opus-5", "gateway/anthropic/claude-opus-5"},
+		{"gateway", "anthropic/claude-opus-5-5", "gateway/anthropic/claude-opus-5-5"},
 	} {
 		if got := RuntimeID(Binding{Backend: tc.backend, UpstreamID: tc.upstream}); got != tc.want {
 			t.Errorf("RuntimeID(%s, %s) = %q, want %q", tc.backend, tc.upstream, got, tc.want)
@@ -140,8 +140,8 @@ func TestRuntimeID(t *testing.T) {
 // before, so it is omitted instead.
 func TestBindings_DropsUncallableEntirely(t *testing.T) {
 	probed := config.InferenceModelBinding{
-		Model: "anthropic/claude-opus-5", Backend: "anthropic",
-		Upstream: "anthropic/claude-opus-5", Available: true, Verified: true, VerifiedBy: "probe",
+		Model: "anthropic/claude-opus-5-5", Backend: "anthropic",
+		Upstream: "anthropic/claude-opus-5-5", Available: true, Verified: true, VerifiedBy: "probe",
 	}
 	cfg := cfgWith(nil, nativeBackends, probed, unverified(probed))
 	got := Bindings(cfg)
@@ -157,7 +157,7 @@ func TestBindings_DropsUncallableEntirely(t *testing.T) {
 // have its candidate list filtered by the answer it is about to compute.
 func TestTopologyAllowed_IgnoresTheRoster(t *testing.T) {
 	b := config.InferenceModelBinding{Model: "ollama/qwen3.5:9b", Backend: "ollama", Available: true}
-	cfg := cfgWith([]string{"anthropic/claude-opus-5"}, ollamaBackends, b)
+	cfg := cfgWith([]string{"anthropic/claude-opus-5-5"}, ollamaBackends, b)
 	if Allowed(cfg, b) {
 		t.Error("Allowed must honor the roster")
 	}

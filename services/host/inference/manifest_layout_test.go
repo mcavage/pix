@@ -31,7 +31,7 @@ func TestSynthesizeInferenceKitMixinLayout(t *testing.T) {
 			"gateway": {Driver: "openai-compatible", Auth: "none", BaseURL: "http://127.0.0.1:9000/v1"},
 		},
 		Models: []config.InferenceModelBinding{
-			{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true},
+			{Model: "openai/gpt-6-sol", Backend: "gateway", Upstream: "reasoner", Available: true},
 		},
 	}}
 
