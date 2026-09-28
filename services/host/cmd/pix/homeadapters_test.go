@@ -285,6 +285,27 @@ printf '%s\n' "$@" > "$d/argv"
 	}
 }
 
+func TestSbxMemoryRegistrarStopsWhenListingFails(t *testing.T) {
+	dir := installSbxRegistrarFixture(t, `
+if [ "$1 $2" = "mcp ls" ]; then
+  echo 'docker login service unavailable' >&2
+  exit 1
+fi
+printf '%s\n' "$@" > "$d/unexpected"
+exit 1
+`)
+	state, err := (sbxMemoryRegistrar{}).EnsureMemoryRemote("pix-memory-0123456789abcdef", "http://127.0.0.1:18080/mcp?token=secret")
+	if state != provision.MCPRegistrationNone || err == nil {
+		t.Fatalf("EnsureMemoryRemote = (%v, %v), want listing failure", state, err)
+	}
+	if !strings.Contains(err.Error(), "list sbx MCP registrations") || !strings.Contains(err.Error(), "docker login service unavailable") {
+		t.Fatalf("error does not identify the failing prerequisite: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "unexpected")); !os.IsNotExist(statErr) {
+		t.Fatalf("listing failure must not add or remove a registration; stat error = %v", statErr)
+	}
+}
+
 // TestAddMemoryRemoteUsesHyphenatedSkipAuthFlag pins the exact `sbx mcp add`
 // auth-skip spelling. sbx once rejected the earlier `--skip_auth` (underscored)
 // spelling outright, which silently broke every fresh memory registration on
@@ -484,5 +505,22 @@ exit 1
 	}
 	if !strings.Contains(got, container.RedactedTokenPlaceholder) || !strings.Contains(got, "SSRF guard refused loopback") {
 		t.Fatalf("error = %q, want redacted sbx stderr", got)
+	}
+}
+
+func TestSbxMemoryRegistrarReportsCauseAfterExpectedWarning(t *testing.T) {
+	const token = "0123456789abcdef"
+	installSbxRegistrarFixture(t, `
+if [ "$1 $2" = "mcp ls" ]; then exit 0; fi
+echo 'WARNING: --skip-ssrf-check suppresses the SSRF check for "pix-memory"; "http://127.0.0.1:18080/mcp?token=`+token+`"' >&2
+echo 'error: registration denied by policy for http://127.0.0.1:18080/mcp?token=`+token+` and http://127.0.0.1:18080/mcp?token=`+token+`; credential `+token+`' >&2
+exit 1
+`)
+	_, err := (sbxMemoryRegistrar{}).EnsureMemoryRemote("pix-memory", "http://127.0.0.1:18080/mcp?token="+token)
+	if err == nil {
+		t.Fatal("EnsureMemoryRemote succeeded, want failure")
+	}
+	if got := err.Error(); !strings.Contains(got, "registration denied by policy") || strings.Contains(got, "skip-ssrf-check") || strings.Contains(got, token) {
+		t.Fatalf("error obscures cause or leaks token: %q", got)
 	}
 }

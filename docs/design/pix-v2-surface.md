@@ -322,6 +322,9 @@ optional personal provider and Parallel references, independently of the main
 model. Environments declaring inference backends or setup hooks retain their
 own connection flow. Setup preserves completed choices on rerun, offers only
 missing optional connections, and keeps diagnostic details behind `--verbose`.
+If memory Gateway registration fails after the container is prepared, setup
+still runs the selected environment's trusted connection hooks, then exits
+with the registration error without reporting the host ready.
 
 Environment names are arbitrary. `default` is the initial environment; home and
 work are user conventions, never different product modes.

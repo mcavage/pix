@@ -605,6 +605,11 @@ when the selected environment needs direct 1Password resolution.
    install/auth hook, `envsetup`); and
 9. probes the complete result.
 
+A memory Gateway registration error after container reconciliation does not
+prevent explicit setup from running the selected environment's trusted hooks.
+Setup returns that registration error after the hooks and never reports the
+host ready.
+
 **Setup hooks (`envsetup`, L2).** An environment's `pix.toml` may declare
 `[[setup]]` entries: `id`, `command`, `check_args`, `apply_args`, optional
 `required`/`kind` (`install`|`auth`). They are the only environment-authored

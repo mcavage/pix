@@ -214,22 +214,23 @@ type sbxMemoryRegistrar struct{}
 // this stack-derived name is removed and re-added, which is the only way sbx
 // 0.41 can earn current endpoint readiness without machine-readable listing.
 func (sbxMemoryRegistrar) EnsureMemoryRemote(name, url string) (provision.MCPRegistrationState, error) {
-	lsOut, _, lsErr := runSbxCapturedOut("mcp", "ls")
-	if lsErr == nil {
-		for _, n := range mcp.RegisteredNamesFrom(lsOut) {
-			if n == name {
-				// This host's own scoped name is already registered somewhere.
-				// When inspect/get output actually lets us check the endpoint,
-				// verify it rather than trusting the bare name match: a same
-				// scoped name pointed at a DIFFERENT endpoint is a real drift,
-				// never a silent "present" (round-4 review's own standard,
-				// applied here too — never a success word nothing probed).
-				matches, verified := mcp.VerifyExistingEndpoint(name, url)
-				if verified && matches {
-					return provision.MCPRegistrationPresentVerified, nil
-				}
-				return replaceMemoryRemote(name, url)
+	lsOut, lsStderr, lsErr := runSbxCapturedOut("mcp", "ls")
+	if lsErr != nil {
+		return provision.MCPRegistrationNone, fmt.Errorf("list sbx MCP registrations: %w: %s", lsErr, strings.TrimSpace(lsStderr))
+	}
+	for _, n := range mcp.RegisteredNamesFrom(lsOut) {
+		if n == name {
+			// This host's own scoped name is already registered somewhere.
+			// When inspect/get output actually lets us check the endpoint,
+			// verify it rather than trusting the bare name match: a same
+			// scoped name pointed at a DIFFERENT endpoint is a real drift,
+			// never a silent "present" (round-4 review's own standard,
+			// applied here too — never a success word nothing probed).
+			matches, verified := mcp.VerifyExistingEndpoint(name, url)
+			if verified && matches {
+				return provision.MCPRegistrationPresentVerified, nil
 			}
+			return replaceMemoryRemote(name, url)
 		}
 	}
 	return addMemoryRemote(name, url)
@@ -246,9 +247,33 @@ func replaceMemoryRemote(name, url string) (provision.MCPRegistrationState, erro
 func addMemoryRemote(name, url string) (provision.MCPRegistrationState, error) {
 	// This reserved endpoint is intentionally loopback and token-authenticated,
 	// so skip sbx's SSRF guard and OAuth flow for this add only (hyphenated flags: sbx rejects an underscored spelling).
-	_, stderr, err := runSbxCapturedOut("mcp", "add", name, "--url", url, "--skip-ssrf-check", "--skip-auth")
+	stdout, stderr, err := runSbxCapturedOut("mcp", "add", name, "--url", url, "--skip-ssrf-check", "--skip-auth")
 	if err != nil {
-		return provision.MCPRegistrationNone, fmt.Errorf("%w: %s", err, container.RedactMemoryURLToken(strings.TrimSpace(stderr)))
+		// sbx prints an expected SSRF opt-out warning before the actual error.
+		// Surface the cause first, including stdout when sbx puts it there.
+		var details []string
+		for _, line := range strings.Split(stderr, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "WARNING: --skip-ssrf-check suppresses the SSRF check") {
+				details = append(details, line)
+			}
+		}
+		if len(details) == 0 {
+			details = append(details, strings.TrimSpace(stdout))
+		}
+		diagnostic := strings.TrimSpace(strings.Join(details, "\n"))
+		if diagnostic == "" {
+			diagnostic = "sbx mcp add gave no diagnostic"
+		}
+		redactedURL := container.RedactMemoryURLToken(url)
+		diagnostic = strings.ReplaceAll(diagnostic, url, redactedURL)
+		if _, token, ok := strings.Cut(url, "?token="); ok {
+			token, _, _ = strings.Cut(token, "&")
+			if token != "" {
+				diagnostic = strings.ReplaceAll(diagnostic, token, container.RedactedTokenPlaceholder)
+			}
+		}
+		return provision.MCPRegistrationNone, fmt.Errorf("%w: %s", err, container.RedactMemoryURLToken(diagnostic))
 	}
 	return provision.MCPRegistrationAdded, nil
 }

@@ -10,6 +10,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -205,12 +206,18 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 	}
 	s.ContainerRunner = setupDownloadProgress{Runner: runner, out: d.Out}
 	res, err := machineSetup(home, s, *bundle, confirmContainerReplace(d, c.Verbose))
-	if err != nil {
+	if err != nil && !errors.Is(err, provision.ErrMemoryMCPRegistration) {
 		return err
 	}
-	renderSetupResult(d, home, res, c.Verbose)
-	if !res.Ready() {
+	if err == nil {
+		renderSetupResult(d, home, res, c.Verbose)
+	}
+	if err == nil && !res.Ready() {
 		return cli.SilentError{Code: 1}
+	}
+	memoryRegistrationErr := err
+	if memoryRegistrationErr != nil {
+		fmt.Fprintln(d.Out, "Memory could not connect to the Gateway. Continuing with environment connections…")
 	}
 	if _, _, err := config.SeedOpRefs(); err != nil {
 		return err
@@ -234,6 +241,10 @@ func (c *setupCmd) run(d *cli.Deps, s setupSeams) error {
 	}
 	if err := setupSelectedEnvironment(d, home, name, c.Verbose); err != nil {
 		return err
+	}
+	if memoryRegistrationErr != nil {
+		fmt.Fprintf(d.Out, "\nEnvironment %q connections were checked; memory still needs attention.\n", sys.TerminalSafe(name))
+		return memoryRegistrationErr
 	}
 	fmt.Fprintf(d.Out, "\nEnvironment %q is set up.\n", sys.TerminalSafe(name))
 	offerDefaultEnvironment(d, home, name)
