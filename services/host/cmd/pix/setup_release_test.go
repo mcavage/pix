@@ -58,10 +58,16 @@ type setupFakeProber struct{}
 
 func (setupFakeProber) Probe(string) error { return nil }
 
-type setupFakeMCP struct{ url string }
+type setupFakeMCP struct {
+	url string
+	err error
+}
 
 func (m *setupFakeMCP) EnsureMemoryRemote(name, url string) (provision.MCPRegistrationState, error) {
 	m.url = url
+	if m.err != nil {
+		return provision.MCPRegistrationNone, m.err
+	}
 	return provision.MCPRegistrationAdded, nil
 }
 

@@ -2,15 +2,73 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"pix/host/cli"
+	"pix/host/config"
 	"pix/host/pixhome"
 	nativeenv "pix/host/workflow/env"
+	"pix/host/workflow/provision"
 )
+
+func TestSetupRunsEnvironmentHookAfterMemoryRegistrationFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		explicit bool
+	}{{"explicit environment", true}, {"default environment", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("PIX_HOME", home)
+			p, marker := hookEnvFixture(t, home, "work", hookSidecar+`
+[models]
+main = "ollama/qwen3.5:9b"
+
+[inference.backends.ollama]
+driver = "ollama"
+base_url = "http://host.docker.internal:11434/v1"
+auth = "none"
+
+[[inference.models]]
+id = "ollama/qwen3.5:9b"
+backend = "ollama"
+upstream_id = "qwen3.5:9b"
+`, `#!/bin/sh
+case "$1" in
+  check) [ -f "@MARKER@" ] && exit 0 || exit 1 ;;
+  install) touch "@MARKER@"; exit 0 ;;
+esac
+exit 2
+`)
+			preTrustSetupEnv(t, p, "work")
+			if !tc.explicit {
+				if err := config.SetDefaultEnvironmentAt(home, "work"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dir, _ := fakeInstallDir(t, "2.0.0")
+			var out bytes.Buffer
+			mcp := &setupFakeMCP{err: errors.New("registration denied by policy")}
+			cmd := &setupCmd{}
+			if tc.explicit {
+				cmd.Env = "work"
+			}
+			err := cmd.run(&cli.Deps{Out: &out, Err: &out}, setupSeamsFor(t, dir, &setupFakeDocker{}, mcp))
+			if !errors.Is(err, provision.ErrMemoryMCPRegistration) || !strings.Contains(err.Error(), "registration denied by policy") {
+				t.Fatalf("setup error = %v, want registration failure; output: %s", err, out.String())
+			}
+			if _, statErr := os.Stat(marker); statErr != nil {
+				t.Fatalf("environment hook did not run after memory registration failed: %v; output: %s", statErr, out.String())
+			}
+			if strings.Contains(out.String(), "Environment \"work\" is set up") || !strings.Contains(out.String(), "memory still needs attention") {
+				t.Fatalf("setup claimed full readiness after memory failure: %s", out.String())
+			}
+		})
+	}
+}
 
 // setup_hooks_test.go wires the `[[setup]]` hook feature to its REAL
 // caller: `pix setup --env NAME` (setupSelectedEnvironment). The runner's

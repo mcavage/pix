@@ -1,6 +1,7 @@
 package provision
 
 import (
+	"errors"
 	"fmt"
 
 	"pix/host/container"
@@ -9,6 +10,10 @@ import (
 	"pix/host/stack"
 	"pix/host/sys"
 )
+
+// ErrMemoryMCPRegistration marks a failure after the runtime and memory
+// container were prepared, so explicit setup can still run environment hooks.
+var ErrMemoryMCPRegistration = errors.New("memory MCP registration failed")
 
 // pixhome.go is this unit's `pix setup` v2 path (docs/design/
 // pix-v2-surface.md §3.6, pix-v2-architecture.md §12): idempotently
@@ -305,7 +310,7 @@ func Setup(d Deps) (Result, error) {
 		res.MCPName = memoryName
 		state, err := d.MCP.EnsureMemoryRemote(memoryName, container.MemoryMCPURL(resolvedSpec, token))
 		if err != nil {
-			return res, fmt.Errorf("register %s with the sbx Gateway: %w", memoryName, err)
+			return res, fmt.Errorf("%w: register %s with the sbx Gateway: %w", ErrMemoryMCPRegistration, memoryName, err)
 		}
 		res.MCPRegistered = true
 		res.MCPState = state
