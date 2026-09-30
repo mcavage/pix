@@ -80,6 +80,14 @@ func homeContainerSpec(home pixhome.Paths) container.Spec {
 	}
 }
 
+// runtimeMemoryContainerSpec adds the machine configuration and Ollama wiring
+// that both setup and doctor must include in the container fingerprint.
+func runtimeMemoryContainerSpec(home pixhome.Paths, cfg *config.Config, env hostenv.Env) container.Spec {
+	spec := homeContainerSpec(home)
+	spec.Env, spec.ExtraHosts = memoryContainerEnv(cfg, env)
+	return spec
+}
+
 // memoryContainerEnv builds the pix-memory container's non-secret Env and
 // ExtraHosts — the ONE Ollama integration (inference.DetectOllama) wired to
 // the memory container's own OLLAMA_HOST, so semantic embeddings actually

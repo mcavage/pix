@@ -103,6 +103,25 @@ func TestMemoryContainerEnv_NilSystemIsAGuardedNoOp(t *testing.T) {
 	}
 }
 
+func TestRuntimeMemoryContainerSpecIncludesConfiguredEmbeddingInFingerprint(t *testing.T) {
+	home := pixhome.New(t.TempDir())
+	env := memoryEmbedEnvAt(t, `{"models":[]}`)
+	spec := runtimeMemoryContainerSpec(home, &config.Config{MemoryEmbedModel: "nomic-embed-text"}, env)
+	if spec.Env["MEMORY_EMBED_MODEL"] != "nomic-embed-text" {
+		t.Fatalf("memory embedding model missing from doctor/setup spec: %v", spec.Env)
+	}
+	if !strings.HasPrefix(spec.Env["OLLAMA_HOST"], "http://host.docker.internal:") {
+		t.Fatalf("Ollama host missing from doctor/setup spec: %v", spec.Env)
+	}
+	if !slices.Contains(spec.ExtraHosts, "host.docker.internal:host-gateway") {
+		t.Fatalf("host gateway missing from doctor/setup spec: %v", spec.ExtraHosts)
+	}
+	bare := homeContainerSpec(home)
+	if spec.Fingerprint() == bare.Fingerprint() {
+		t.Fatal("doctor/setup fingerprint must account for runtime environment")
+	}
+}
+
 func TestHomeContainerSpecUsesCanonicalReleaseImageReference(t *testing.T) {
 	home := pixhome.New(t.TempDir())
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
