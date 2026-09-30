@@ -48,14 +48,15 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 	// every v1 check below still passes.
 	homeFailed := false
 	if home, herr := pixhome.Resolve(); herr == nil {
-		spec := homeContainerSpec(home)
 		// config.toml's own DefaultEnvironment, read independently of the
 		// (v1) workspace profile config below — EnvironmentDefaultProbe must
 		// never disagree with what `pix env`/`pix run` themselves resolve.
-		var defaultEnv string
-		if hc, cerr := config.LoadFrom(config.PathAt(home.Home)); cerr == nil {
-			defaultEnv = hc.DefaultEnvironment
+		homeCfg, configErr := config.LoadFrom(config.PathAt(home.Home))
+		defaultEnv := ""
+		if configErr == nil && homeCfg != nil {
+			defaultEnv = homeCfg.DefaultEnvironment
 		}
+		spec := runtimeMemoryContainerSpec(home, homeCfg, defaultShellEnv())
 		// MCPServerName is THIS PIX_HOME's own scoped pix-memory MCP name
 		// (Wave B coexistence) — wired even though MCPLister stays unset
 		// below, so the probe's own name is never wrong the day a lister
@@ -90,7 +91,9 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 		health.RenderDoctorWith(d.Out, doctor.UnreadableConfigSnapshot(err), health.DoctorOpts{Verbose: c.Verbose})
 		return cli.SilentError{Code: health.ExitNotReady}
 	}
-	code := doctor.RunDoctor(context.Background(), cfg, profile, d.Out, doctorOptions(), c.JSON, c.Verbose)
+	workspace, _ := os.Getwd()
+	code := doctor.RunDoctor(context.Background(), cfg, profile, d.Out,
+		doctor.Options{Env: defaultShellEnv(), Workspace: workspace}, c.JSON, c.Verbose)
 	if !c.JSON {
 		// Best-effort: the recreate-log pointer line is diagnostic-only, and a
 		// missing/unreadable state dir must never change doctor's own exit code.
@@ -98,33 +101,8 @@ func (c *doctorCmd) Run(d *cli.Deps) error {
 			_ = doctor.RecreateSummaryLine(d.Out, dir)
 		}
 	}
-	if code != health.ExitOK {
-		return cli.SilentError{Code: code}
-	}
-	if homeFailed {
+	if code != health.ExitOK || homeFailed {
 		return cli.SilentError{Code: health.ExitNotReady}
 	}
 	return nil
-}
-
-// The `status` verb (and the bare-`pix` landing screen it once also served)
-// is not part of the v2 CLI surface (docs/design/pix-v2-surface.md §3;
-// root.go's own doc comment names it among the removed verbs) — its
-// dispatchable wrapper (statusCmd) and workflow/doctor's own short-form
-// renderers for it were all unreachable dead code and are deleted (AC-16).
-// doctor.UnreadableConfigSnapshot is the one piece that survives, above,
-// because `pix doctor` itself renders it.
-
-// doctorOptions fills the seams both surfaces share: the host environment and the
-// workspace the MCP attachment answer is about. An unresolvable workspace stays
-// empty, reported as "attachment unknown" rather than guessed.
-func doctorOptions() doctor.Options {
-	env := defaultShellEnv()
-	// Same credentials registration uses, so a probe tests the command the
-	// gateway will really spawn rather than whatever doctor's own shell holds.
-	o := doctor.Options{Env: env}
-	if ws, err := os.Getwd(); err == nil {
-		o.Workspace = ws
-	}
-	return o
 }

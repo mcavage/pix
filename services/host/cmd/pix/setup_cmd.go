@@ -108,10 +108,9 @@ func discoverVerifiedBundle(s setupSeams) (*release.Bundle, error) {
 // credentials (setupCredentials), environment trust, and `[[setup]]` hooks
 // all stay in the setup COMMAND, above.
 func machineSetup(home pixhome.Paths, s setupSeams, bundle release.Bundle, confirmReplace func(container.Info, container.Spec) bool) (provision.Result, error) {
-	spec := homeContainerSpec(home)
-	spec.Image = provision.MemoryImageRef(bundle.Manifest)
 	cfg, _ := config.Load()
-	spec.Env, spec.ExtraHosts = memoryContainerEnv(cfg, s.Env)
+	spec := runtimeMemoryContainerSpec(home, cfg, s.Env)
+	spec.Image = provision.MemoryImageRef(bundle.Manifest)
 	return provision.Setup(provision.Deps{
 		Home:            home,
 		Prereqs:         s.Prereqs,
