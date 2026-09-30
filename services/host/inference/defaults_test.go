@@ -12,7 +12,7 @@ func TestDefaultModelForProviders_UsesCurrentShippedDefaults(t *testing.T) {
 		want      string
 	}{
 		{[]string{"anthropic"}, "anthropic/claude-opus-5-5"},
-		{[]string{"openai"}, "openai/gpt-6-sol"},
+		{[]string{"openai"}, "openai/gpt-6.1-sol"},
 		{[]string{"google"}, "google/gemini-3.1-pro-preview"},
 		{[]string{"unknown", "anthropic"}, "anthropic/claude-opus-5-5"},
 		{nil, ""},
@@ -33,7 +33,7 @@ func TestShippedOpenAIChoicesUseGPT6(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"openai/gpt-6-astra": true, "openai/gpt-6-sol": true, "openai/gpt-6-luna": true}
+	want := map[string]bool{"openai/gpt-6-astra": true, "openai/gpt-6.1-sol": true, "openai/gpt-6-luna": true}
 	for _, model := range cat.Models {
 		if model.Provider == "openai" && model.Available && !want[model.ID] {
 			t.Errorf("available OpenAI model = %q, want GPT-6 family", model.ID)

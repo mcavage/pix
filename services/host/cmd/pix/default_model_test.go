@@ -34,7 +34,7 @@ func TestResolveRunModel_AllCloudProvidersUsesShippedSessionDefault(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model != "openai/gpt-6-sol" {
+	if model != "openai/gpt-6.1-sol" {
 		t.Fatalf("resolveRunModel with all cloud providers = %q, want shipped session default", model)
 	}
 }

@@ -12,6 +12,12 @@ Pix v2 is a breaking cutover to native Docker Sandbox environments. Existing
 v1 configuration and removed commands are not translated automatically. See
 [getting started](docs/getting-started.md) for the current setup flow.
 
+### Runtime and models
+
+- Pin Pi 0.99.1, add Claude Sonnet 5.5 and GPT-6.1 Sol, and make GPT-6.1 Sol
+  the shipped OpenAI default. Generated gateway models retain Pi's canonical
+  prices and capabilities; Pix keeps its Gateway as the sandbox MCP path.
+
 ### Delivery instructions
 
 - Keep PR/FAQ, PRD and architecture agreement with one product owner, optional
