@@ -20,7 +20,7 @@ func (r *prereqRecorder) Check(name string, args ...string) (string, error) {
 }
 
 func TestCheckPrereqsUsesSupportedSbxVersionGrammar(t *testing.T) {
-	r := &prereqRecorder{sbx: "sbx version: v0.39.0 abc123"}
+	r := &prereqRecorder{sbx: "sbx version: v0.45.0 abc123"}
 	if err := CheckPrereqs(r); err != nil {
 		t.Fatalf("CheckPrereqs: %v", err)
 	}

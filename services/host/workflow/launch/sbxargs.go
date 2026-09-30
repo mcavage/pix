@@ -66,11 +66,14 @@ type RunOpts struct {
 	LauncherVersion string
 }
 
-func gitKitURLRef(ref, version string) string {
+func kitSourceRef(ref, version string) string {
 	if ref == "" {
 		ref = launcher.KitRef(version)
 	}
-	return kitRepo + "#ref=" + ref + "&dir=pi-kit"
+	if launcher.IsReleased(strings.TrimPrefix(ref, "v")) {
+		return "docker.io/mcavage/pix:" + strings.TrimPrefix(ref, "v")
+	}
+	return kitRepo + "#ref=" + ref + "&dir=pi-kit/pix"
 }
 
 func TemplateTag(ref string) string {
@@ -109,7 +112,7 @@ func BuildSbxArgs(cfg *config.Config, o RunOpts, version string) []string {
 		if o.LocalKit != "" {
 			args = append(args, "--kit", o.LocalKit)
 		} else {
-			args = append(args, "--kit", gitKitURLRef(o.KitRef, version))
+			args = append(args, "--kit", kitSourceRef(o.KitRef, version))
 		}
 	}
 	// User --kit flags are the base when present; pack-synthesized kits ALWAYS

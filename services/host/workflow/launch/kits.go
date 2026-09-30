@@ -93,12 +93,11 @@ func SynthesizePersonalContextKit() (string, error) {
 			_ = os.RemoveAll(dir)
 		}
 	}()
-	var spec strings.Builder
-	spec.WriteString("schemaVersion: \"2\"\nkind: mixin\nname: pix-personal-context\nagentInstructions:\n  content: |\n")
-	for _, line := range strings.Split(string(b), "\n") {
-		fmt.Fprintf(&spec, "    %s\n", line)
+	const spec = "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\ncapabilities:\n  - type: com.docker.sandbox/agent-context@1\n    config:\n      contentFile: ./personal-context.md\n"
+	if err := os.WriteFile(filepath.Join(dir, "personal-context.md"), b, 0o600); err != nil {
+		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte(spec.String()), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, filepath.Base(dir)+".yaml"), []byte(spec), 0o600); err != nil {
 		return "", err
 	}
 	complete = true
@@ -153,6 +152,11 @@ func firstOutputLine(out string) string {
 }
 
 func ValidateSbxKit(ref string) (string, error) {
+	// sbx kit validate only accepts materialized v1/v2 kits. V3 source kits
+	// are built and validated by the builder during sbx env create.
+	if b, err := os.ReadFile(filepath.Join(ref, filepath.Base(ref)+".yaml")); err == nil && strings.HasPrefix(string(b), "# syntax=docker/sandbox-kit:3\n") {
+		return "", nil
+	}
 	b, err := exec.Command("sbx", "kit", "validate", ref).CombinedOutput()
 	return string(b), err
 }
@@ -165,7 +169,7 @@ func ValidateSetupKit(version string, repoRoot func() (string, error), validate 
 	if err != nil {
 		return nil // run will use the remote main kit
 	}
-	return ValidateCreateKits([]string{"--kit", filepath.Join(root, "pi-kit")}, validate)
+	return ValidateCreateKits([]string{"--kit", filepath.Join(root, "pi-kit", "pix")}, validate)
 }
 
 func CleanupGeneratedKitDirs(paths []string) error {

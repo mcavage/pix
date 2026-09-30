@@ -3,8 +3,8 @@ run-name: Publish — ${{ github.event.pull_request.title || github.ref_name }}
 
 # Every push to main auto-publishes a NEW immutable version. CI starts with the
 # version committed in package.json (0.1.0 for the first Pix release), then
-# increments its patch component until it finds a version that is unused by BOTH
-# an unused v<version> git tag AND the image registry (see the `version` job:
+# increments its patch component until it finds a version unused by both
+# a v<version> git tag and the image registry (see the `version` job:
 # the git tag is created late, by `bump`, so a run that pushed the image and
 # then died would otherwise hand the SAME version to the next run, silently
 # overwriting a published tag). It builds multi-arch (amd64 + arm64), pushes
@@ -21,10 +21,8 @@ run-name: Publish — ${{ github.event.pull_request.title || github.ref_name }}
 # not hypothetical for the test half: v0.1.27 published an image, tags, release
 # binaries and a Homebrew tap PR while `test` was red on the very same commit.
 #
-# Why: sbx caches materialized templates PER TAG NAME and won't re-pull a tag it
-# already has. A moving tag (:edge/:latest) therefore goes stale until you evict
-# it by hand. A brand-new version tag every push sidesteps that entirely. The
-# committed spec.yaml always points at the latest successfully published image.
+# Every push uses a new immutable version for the base, memory, and v3 workload.
+# Released launchers select the versioned workload OCI tag.
 #
 # Multi-arch native runners (no QEMU) — the image is chromium-heavy. Each arch is
 # pushed by digest, then merged into one multi-arch tag.
@@ -55,6 +53,7 @@ env:
   # see docs/design/pix-v2-architecture.md §3. Both are tagged at the same
   # Pix VERSION.
   AGENT_IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pix-agent
+  KIT_IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pix
   MEMORY_IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pix-memory
 
 jobs:
@@ -92,7 +91,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - id: v
-        name: Select the next patch version unused by BOTH the git tags and the registry
+        name: Select the next patch version unused by the git tags and artifact registry
         run: |
           set -euo pipefail
           base="$(node -p "require('./package.json').version")"
@@ -119,19 +118,18 @@ jobs:
             if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
               echo "git tag v${version} exists - trying the next patch"
             else
-              # pix-agent AND pix-memory are independent images (both tagged at
-              # this SAME version) — a version is only selected when BOTH tags
-              # are free, so a partial prior failure can never straddle two
-              # different versions across the two images.
+              # All three artifacts share one version. Refuse one already
+              # published by a prior run that failed before tagging.
               agent_verdict="$(bash scripts/release/tag-availability.sh "$AGENT_IMAGE" "$version")"
               memory_verdict="$(bash scripts/release/tag-availability.sh "$MEMORY_IMAGE" "$version")"
-              if [ "$agent_verdict" = "taken" ] || [ "$memory_verdict" = "taken" ]; then
-                echo "::warning::${AGENT_IMAGE}:${version} or ${MEMORY_IMAGE}:${version} already exists in the registry with no v${version} git tag:"
+              kit_verdict="$(bash scripts/release/tag-availability.sh "$KIT_IMAGE" "$version")"
+              if [ "$agent_verdict" = "taken" ] || [ "$memory_verdict" = "taken" ] || [ "$kit_verdict" = "taken" ]; then
+                echo "::warning::a Pix artifact at version ${version} already exists in the registry with no v${version} git tag:"
                 echo "::warning::a previous run published it and then failed before tagging. Selecting the next patch instead of overwriting it."
-              elif [ "$agent_verdict" = "free" ] && [ "$memory_verdict" = "free" ]; then
+              elif [ "$agent_verdict" = "free" ] && [ "$memory_verdict" = "free" ] && [ "$kit_verdict" = "free" ]; then
                 break
               else
-                echo "::error::tag-availability.sh returned an unrecognized verdict (agent=$agent_verdict memory=$memory_verdict) for version ${version}"
+                echo "::error::tag-availability.sh returned an unrecognized verdict (agent=$agent_verdict memory=$memory_verdict kit=$kit_verdict) for version ${version}"
                 exit 1
               fi
             fi
@@ -169,7 +167,8 @@ jobs:
           V="${{ needs.version.outputs.version }}"
           sed -i -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $V/" Makefile
           sed -i -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$V\"/" package.json
-          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pix-agent:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
+          sed -i -E "s#^version:.*#version: \"$V\"#" pi-kit/pix/pix.yaml
+          sed -i -E "s#^ARG PIX_AGENT_IMAGE=.*#ARG PIX_AGENT_IMAGE=$AGENT_IMAGE:$V#" pi-kit/pix/pix.dockerfile
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
@@ -212,11 +211,34 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # pix-memory (services/memory/Dockerfile) is a small static Go binary on a
-  # minimal DHI runtime — no chromium, no Node, no curated pi packages — so a
-  # single multi-platform buildx build (QEMU for the cross-arch leg) is fast
-  # enough that it does not need the split-build-then-imagetools-merge dance
-  # the chromium-heavy pix-agent image uses above.
+  # The v3 workload layers the versioned pix-agent base after merge has pushed it.
+  build-kit:
+    name: build + push Pix v3 kit
+    needs: [version, merge, legal-gate, test-gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push the v3 workload
+        run: |
+          set -euo pipefail
+          V="${{ needs.version.outputs.version }}"
+          verdict="$(bash scripts/release/tag-availability.sh "$KIT_IMAGE" "$V")"
+          if [ "$verdict" != "free" ]; then
+            echo "::error::$KIT_IMAGE:$V is already published (verdict: $verdict)"
+            exit 1
+          fi
+          sed -i -E "s#^version:.*#version: \"$V\"#" pi-kit/pix/pix.yaml
+          sed -i -E "s#^ARG PIX_AGENT_IMAGE=.*#ARG PIX_AGENT_IMAGE=$AGENT_IMAGE:$V#" pi-kit/pix/pix.dockerfile
+          docker buildx build pi-kit/pix -f pi-kit/pix/pix.yaml \
+            --platform linux/amd64,linux/arm64 \
+            -t "$KIT_IMAGE:$V" -t "$KIT_IMAGE:latest" --push
+
   build-memory:
     name: build + push pix-memory (multi-arch)
     needs: [version, legal-gate, test-gate]
@@ -468,7 +490,7 @@ jobs:
 
   bump:
     name: commit version bump to main
-    needs: [version, merge, build-memory, provenance, release-manifest]
+    needs: [version, merge, build-kit, build-memory, provenance, release-manifest]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -483,11 +505,12 @@ jobs:
           V="${{ needs.version.outputs.version }}"
           sed -i -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $V/" Makefile
           sed -i -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$V\"/" package.json
-          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pix-agent:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
+          sed -i -E "s#^version:.*#version: \"$V\"#" pi-kit/pix/pix.yaml
+          sed -i -E "s#^ARG PIX_AGENT_IMAGE=.*#ARG PIX_AGENT_IMAGE=$AGENT_IMAGE:$V#" pi-kit/pix/pix.dockerfile
           if git diff --quiet; then echo "no version change — nothing to commit"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Makefile package.json pi-kit/spec.yaml
+          git add Makefile package.json pi-kit/pix/pix.yaml pi-kit/pix/pix.dockerfile
           git commit -m "chore: publish $V [skip ci]"
           # A plain `git push` here races any merge that lands while this run was
           # building. `concurrency: group: publish` serializes publish RUNS but
@@ -508,7 +531,7 @@ jobs:
             if git push; then pushed=yes; break; fi
             echo "push rejected (main moved under this run); rebasing and retrying ($attempt/3)"
             if ! git pull --rebase origin main; then
-              echo "::error::version bump could not rebase onto main: conflict in Makefile, package.json or pi-kit/spec.yaml"
+              echo "::error::version bump could not rebase onto main: conflict in Makefile, package.json or pi-kit/pix"
               exit 1
             fi
           done

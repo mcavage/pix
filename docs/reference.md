@@ -272,6 +272,12 @@ effective agent must be pix; local executable and kit sources must be pinned
 or content-fingerprinted; host commands, writable mount expansion, and
 credential destinations require host trust approval.
 
+Pix's workload kit uses Docker Sandbox Kit v3. Published launchers select the
+versioned OCI workload; a development checkout uses `pi-kit/pix`, or the kit
+built by `make load` under `out/kit/pix`. Docker Sandboxes 0.45.0 or later is
+required. `make load` builds with Docker Buildx and no longer imports a Docker
+archive into the sbx template store.
+
 `pix.toml` may declare the main model and agent-to-model mappings, a custom
 Pi inference backend, environment-local Pi content paths, a memory scope, and
 credential/health/host-capability annotations for an MCP server declared in
@@ -375,7 +381,7 @@ run` remains the setup opt-out; non-interactive bare `pix` stays read-only. It:
 2. initializes `PIX_HOME` and `git init -b main`, without staging or
    overwriting anything already there;
 3. installs the runtime archive and records the release manifest;
-4. verifies the `pix-agent` image and strict kit;
+4. verifies the `pix-agent` image and release metadata;
 5. creates a default environment only when none exists, and selects it as
    the machine default in the same atomic step;
 6. seeds a refs-only `secrets.env`, preserving an existing file, and guides the

@@ -1,6 +1,6 @@
 // TDD coverage for scripts/release/derive-build-version.sh: the LOCAL build
 // version pix's launcher stamps so a release stack (clean X.Y.Z, committed in
-// package.json / Makefile VERSION / pi-kit/spec.yaml) and a dev stack (this
+// package.json / Makefile VERSION / pi-kit/pix/pix.yaml) and a dev stack (this
 // derived NEXT-PATCH prerelease) coexist without either resolving to, or
 // being mistaken for, the other's identity (see AGENTS.md "Build, load, run"
 // and services/host/launcher/released.go's IsReleased).

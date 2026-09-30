@@ -193,7 +193,11 @@ func SynthesizeInferenceKit(cfg *config.Config, roster RosterInput) (string, err
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte(spec), 0o600); err != nil {
+	stem := filepath.Base(dir)
+	if err := os.WriteFile(filepath.Join(dir, stem+".yaml"), []byte(spec), 0o600); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, stem+".dockerfile"), []byte("FROM scratch\nCOPY --chown=1000:1000 files/home/.pi/agent/inference.json /home/agent/.pi/agent/inference.json\n"), 0o600); err != nil {
 		return "", err
 	}
 	complete = true
@@ -311,7 +315,7 @@ func manifestModels(cfg *config.Config, cat *Catalog) []runtimeModel {
 // duplicate identity is exactly the shape the upstream kit schema rejects).
 // Within that one entry, each distinct (domain, header, format) the identity
 // is actually used with becomes its own `inject[]` rule — same shape the
-// hand-authored anthropic block in pi-kit/spec.yaml already uses for three
+// hand-authored anthropic block in pi-kit/pix/pix.yaml uses for three
 // domains sharing one header/format. So two backends with the same
 // service+name but a different header, format, or domain must never silently
 // drop one of them: both survive as separate inject rules under the shared
@@ -380,15 +384,17 @@ func InferenceKitSpec(cfg *config.Config) (string, error) {
 		return credOrder[i].name < credOrder[j].name
 	})
 	var b strings.Builder
-	b.WriteString("schemaVersion: \"2\"\nkind: mixin\nname: pix-inference\n")
+	b.WriteString("# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n")
+	if len(hosts) > 0 || len(credOrder) > 0 {
+		b.WriteString("capabilities:\n")
+	}
 	if len(hosts) > 0 {
-		b.WriteString("permissions:\n  network:\n    allow:\n")
+		b.WriteString("  - type: com.docker.sandbox/network-policy@1\n    config:\n      runtime:\n        allow:\n")
 		for _, host := range hosts {
-			fmt.Fprintf(&b, "      - %s\n", strconv.Quote(host))
+			fmt.Fprintf(&b, "          - %s\n", strconv.Quote(host))
 		}
 	}
 	if len(credOrder) > 0 {
-		b.WriteString("credentials:\n")
 		for _, id := range credOrder {
 			rules := make([]injectRule, 0, len(credRules[id]))
 			for r := range credRules[id] {
@@ -403,9 +409,9 @@ func InferenceKitSpec(cfg *config.Config) (string, error) {
 				}
 				return rules[i].format < rules[j].format
 			})
-			fmt.Fprintf(&b, "  - service: %s\n    apiKey:\n      name: %s\n      proxyManaged: true\n      inject:\n", strconv.Quote(id.service), strconv.Quote(id.name))
+			fmt.Fprintf(&b, "  - type: com.docker.sandbox/credential@1\n    optional: true\n    config:\n      service: %s\n      phase: runtime\n      apiKey:\n        name: %s\n        proxyManaged: true\n        inject:\n", strconv.Quote(id.service), strconv.Quote(id.name))
 			for _, r := range rules {
-				fmt.Fprintf(&b, "        - domain: %s\n          header: %s\n          format: %s\n", strconv.Quote(r.domain), strconv.Quote(r.header), strconv.Quote(r.format))
+				fmt.Fprintf(&b, "          - domain: %s\n            header: %s\n            format: %s\n", strconv.Quote(r.domain), strconv.Quote(r.header), strconv.Quote(r.format))
 			}
 		}
 	}

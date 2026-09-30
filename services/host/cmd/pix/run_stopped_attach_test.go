@@ -54,7 +54,7 @@ n=$((n + 1))
 echo "$n" > "$dir/seq"
 for a in "$@"; do printf '%s\000' "$a"; done > "$dir/argv.$n"
 case "$1" in
-  --version|version) echo 'sbx version 0.41.0' ;;
+  --version|version) echo 'sbx version 0.46.0' ;;
   ls)
     if [ "$2" = "--json" ]; then
       echo '[{"name":"` + name + `","state":"` + state + `","instance_id":"inst-1"}]'

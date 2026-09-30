@@ -17,7 +17,7 @@
 #   *_test.go            tests assert the resolver's OUTPUT, which is exactly
 #                        the literal this guard protects
 #
-# Non-Go surfaces (pi-kit/spec.yaml, extensions/ollama-bridge.ts) are out of
+# Non-Go surfaces (pi-kit/pix/pix.yaml, extensions/ollama-bridge.ts) are out of
 # scope: they are kit config and the other side of the sandbox boundary.
 #
 # Usage: check-endpoint-literals.sh [--self-test]

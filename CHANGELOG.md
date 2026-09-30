@@ -1,12 +1,18 @@
 # Changelog
 
 All notable changes to Pix are recorded here. CI publishes versioned images
-from `main` and stamps the tag into `pi-kit/spec.yaml`; this file is the
+from `main` and stamps the tag into `pi-kit/pix/pix.yaml`; this file is the
 human-readable summary of what changed and whether an upgrade is breaking.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
+
+### Sandbox Kit v3
+
+- Build the Pix workload with Docker Buildx and compose generated inference and
+  personal-context mixins using Sandbox Kit v3. `make load` builds the local
+  kit directly, without the legacy sbx template import.
 
 Pix v2 is a breaking cutover to native Docker Sandbox environments. Existing
 v1 configuration and removed commands are not translated automatically. See

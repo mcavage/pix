@@ -214,7 +214,7 @@ func ResolveRepoRoot() (string, error) {
 		if isRepoRoot(r) {
 			return r, nil
 		}
-		return "", fmt.Errorf("$PIX_DEV_ROOT=%q is not a pix checkout (no pi-kit/spec.yaml)", r)
+		return "", fmt.Errorf("$PIX_DEV_ROOT=%q is not a pix checkout (no pi-kit/pix/pix.yaml)", r)
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		for dir := cwd; ; {
@@ -240,7 +240,7 @@ func ResolveRepoRoot() (string, error) {
 }
 
 func isRepoRoot(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "pi-kit", "spec.yaml"))
+	_, err := os.Stat(filepath.Join(dir, "pi-kit", "pix", "pix.yaml"))
 	return err == nil
 }
 

@@ -39,12 +39,12 @@ const (
 	SbxUpgradeFix = "brew upgrade docker/tap/sbx"
 )
 
-// SbxMinVersion is the lowest sbx release native environments require (PRD
-// docs/design/environments.md section 4, section 5.6; AC-20). It is a
+// SbxMinVersion is the lowest sbx release with the v3 kit builder Pix uses.
+// It is a
 // package const, read by SbxVersionGate and SbxVersionGateMessage, so a
 // future bump changes exactly one line.
 
-const SbxMinVersion = "0.39.0"
+const SbxMinVersion = "0.45.0"
 
 // sbxVersionNumber matches the dotted numeric run at the heart of a real sbx
 // version string: an optional "v" prefix (the observed `sbx version: v0.39.0

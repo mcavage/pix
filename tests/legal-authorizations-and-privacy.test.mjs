@@ -131,7 +131,7 @@ test("publish.yml exports the published manifest digest and records provenance a
 	assert.match(publishWorkflow, /needs: \[version, merge\]/);
 	// The version bump (and therefore the release) waits on provenance (and, in
 	// the two-image graph, on the pix-memory build and the release-manifest step).
-	assert.match(publishWorkflow, /needs: \[version, merge, build-memory, provenance, release-manifest\]/);
+	assert.match(publishWorkflow, /needs: \[version, merge, build-kit, build-memory, provenance, release-manifest\]/);
 });
 
 test("publish.yml generates the SBOM against the published image digest, not a rebuild", () => {
@@ -186,7 +186,7 @@ test("PRIVACY.md states the data flows and does not overclaim compliance", () =>
 
 test("PRIVACY.md enumerates the DEFAULT network destinations, not just 'what you configured'", () => {
 	const privacy = read("docs/legal/PRIVACY.md");
-	const kit = read("pi-kit/spec.yaml");
+	const kit = read("pi-kit/pix/pix.yaml");
 	// The zero-config web_search backend and its fallbacks: the user's QUERY
 	// text leaves the machine to a third party with no configuration at all.
 	assert.match(privacy, /web_search/);

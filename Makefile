@@ -3,7 +3,7 @@
 # `:latest` on every run even when the image is already loaded, so `make load`
 # would be ignored. A pinned tag gets IfNotPresent semantics — use the loaded
 # local build if present, else pull once. Keep in sync with `version` in
-# package.json and the `image:` refs in pi-kit/spec.yaml.
+# package.json and the versioned base in pi-kit/pix/pix.dockerfile.
 #
 # pix-agent (the sandbox image, images/agent/Dockerfile) and pix-memory (the
 # memory MCP service, services/memory/Dockerfile) are INDEPENDENT images with
@@ -66,7 +66,7 @@ LOCAL_MEMORY_IMAGE ?= docker.io/$(DOCKER_USER)/pix-memory:$(LAUNCHER_VERSION)
 # never has one worktree's `make load` delete another worktree's freshly
 # loaded template out from under a running sandbox.
 WORKTREE_HASH ?= $(shell printf '%s' "$$(cd $(CURDIR) && pwd -P)" | { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | cut -c1-12)
-KIT         ?= ./pi-kit
+KIT         ?= ./pi-kit/pix
 # Dev mode (Mode B): `make run` launches from the repo, so load skills LIVE from the
 # host tree instead of the copies baked into the image — edit a SKILL.md, /reload in
 # pi, and it's live, no rebuild. `--no-skills` turns off baked discovery; `--skill
@@ -95,7 +95,7 @@ OLLAMA_BRIDGE_MODEL ?= qwen3:4b
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build build-agent build-memory load publish publish-agent publish-memory validate inspect run run-published run-no-mcp secrets install clean launcher require-launcher gate runtime-archive release-manifest bundle
+.PHONY: help build build-agent build-memory load publish publish-agent publish-kit publish-memory validate inspect run run-published run-no-mcp secrets install clean launcher require-launcher gate runtime-archive release-manifest bundle
 
 # Bare `make` builds the launcher binary (the one thing require-launcher
 # demands as a prerequisite for `make run`), so a dev iterating on the
@@ -128,34 +128,18 @@ build-agent: ## Build the pix-agent sandbox image from images/agent/Dockerfile (
 build-memory: ## Build the pix-memory MCP service image from services/memory/Dockerfile (DHI Go builder + minimal DHI runtime), tagged at $(LAUNCHER_VERSION) with a MATCHING VERSION build arg
 	docker build -f $(MEMORY_DOCKERFILE) --build-arg VERSION=$(LAUNCHER_VERSION) -t $(LOCAL_MEMORY_IMAGE) services/memory
 
-# CRITICAL: sbx caches a materialized image PER TAG. With a fixed tag (:0.0.1),
-# `sbx run` keeps booting the first-cached copy and silently ignores every
-# reload — verified by creating sandboxes and finding stale extensions. So we
-# tag each build uniquely, load that, and `make run` pins --template to it.
-# Old templates from THIS WORKTREE (local-$(WORKTREE_HASH)-*) are pruned so
-# the store doesn't grow. The prune is worktree-scoped on purpose: a bare
-# /^local-/ match (and a $(VERSION) match) deleted templates belonging to
-# OTHER checkouts on a multi-worktree machine, including ones a live sandbox
-# in another window was created from. A worktree only ever removes its own.
-# (These comments live ABOVE the recipe so make doesn't echo them to the terminal.)
-# Only pix-agent is loaded into sbx. Build the complete bundle first so a fresh
-# home can resolve both release-pinned images after make load.
-load: bundle ## Build a matching launcher/runtime/image bundle + load the pix-agent image into sbx under a UNIQUE, WORKTREE-SCOPED tag, so `make run` uses this exact build
+load: bundle ## Build the matching bundle and a v3 source kit with Docker Buildx; sbx builds it on create
 	@set -e; TS="local-$(WORKTREE_HASH)-$$(date +%s)"; T="docker.io/$(DOCKER_USER)/pix-agent:$$TS"; \
 	docker tag $(LOCAL_AGENT_IMAGE) "$$T"; \
-	docker save "$$T" -o out/pix.tar; \
-	for id in $$(sbx template ls 2>/dev/null | awk '$$1=="docker.io/$(DOCKER_USER)/pix-agent" && $$2 ~ /^local-$(WORKTREE_HASH)-/{print $$3}'); do sbx template rm "$$id" >/dev/null 2>&1 || true; done; \
-	sbx template load out/pix.tar; \
-	rm -f out/pix.tar; docker rmi "$$T" >/dev/null 2>&1 || true; \
+	mkdir -p out/kit/pix; cp pi-kit/pix/pix-context.md out/kit/pix/; \
+	sed 's#^version:.*#version: "$(LAUNCHER_VERSION)"#' pi-kit/pix/pix.yaml > out/kit/pix/pix.yaml; \
+	sed "s#^ARG PIX_AGENT_IMAGE=.*#ARG PIX_AGENT_IMAGE=$$T#" pi-kit/pix/pix.dockerfile > out/kit/pix/pix.dockerfile; \
+	docker buildx build out/kit/pix -f out/kit/pix/pix.yaml -t "docker.io/$(DOCKER_USER)/pix:$$TS" --load; \
 	echo "$$TS" > out/.local-image-tag; \
-	REF="docker.io/$(DOCKER_USER)/pix-agent:$$TS"; \
-	echo "Loaded image:  $$REF"; \
-	echo ""; \
-	echo "Run this exact build (recreates the sandbox so the new image takes effect):"; \
-	echo "  pix run --dev                                  # from this checkout"; \
-	echo "  make run                                       # dev flow from this checkout (live skills + MCP)"
+	echo "Built v3 kit: docker.io/$(DOCKER_USER)/pix:$$TS"; \
+	echo "Run with: make run"
 
-publish: publish-agent publish-memory ## Push BOTH pix-agent and pix-memory to the registry
+publish: publish-kit publish-memory ## Push the v3 Pix kit, its base image, and pix-memory
 
 # Publish builds the CLEAN, published identity directly — it deliberately
 # does NOT depend on build-agent/build-memory, which tag the LOCAL
@@ -170,7 +154,14 @@ publish-agent: ## Push the pix-agent image to the registry as :$(VERSION) and :l
 	@echo "Published $(AGENT_IMAGE) and $(AGENT_LATEST)."
 	@echo "  Discoverability tag: $(AGENT_LATEST) (for manual docker pull / Hub browsing)."
 	@echo "  Kit pins :$(VERSION), so consumers + local runs resolve the version (no re-pull)."
-	@echo "  Consumers: sbx run pix --kit \"git+https://github.com/$(DOCKER_USER)/pix.git#dir=pi-kit\""
+	@echo "  Consumers: sbx run pix --kit docker.io/$(DOCKER_USER)/pix:$(VERSION)"
+
+publish-kit: publish-agent ## Build and push the v3 OCI workload with Docker Buildx
+	@mkdir -p out/publish-kit/pix
+	@cp pi-kit/pix/pix-context.md out/publish-kit/pix/
+	@sed 's#^version:.*#version: "$(VERSION)"#' pi-kit/pix/pix.yaml > out/publish-kit/pix/pix.yaml
+	@sed 's#^ARG PIX_AGENT_IMAGE=.*#ARG PIX_AGENT_IMAGE=$(AGENT_IMAGE)#' pi-kit/pix/pix.dockerfile > out/publish-kit/pix/pix.dockerfile
+	docker buildx build out/publish-kit/pix -f out/publish-kit/pix/pix.yaml -t docker.io/$(DOCKER_USER)/pix:$(VERSION) -t docker.io/$(DOCKER_USER)/pix:latest --push
 
 publish-memory: ## Push the pix-memory image to the registry as :$(VERSION) and :latest (run `docker login` first)
 	docker build -f $(MEMORY_DOCKERFILE) --build-arg VERSION=$(VERSION) -t $(MEMORY_IMAGE) services/memory
@@ -218,17 +209,16 @@ run: require-launcher ## Launch this checkout with its stack-scoped sandbox name
 	LABEL="$${N:-the launcher-derived stack-scoped name}"; \
 	[ -n "$$TAG" ] && echo "(sandbox $$LABEL, local build :$$TAG)" || echo "(sandbox $$LABEL, kit-pinned image)"; \
 	mkdir -p .pix && echo "$(OLLAMA_BRIDGE_MODEL)" > .pix/ollama-bridge.model; \
-	exec "$(PIX_BIN)" run --dev $${N:+--name "$$N"} $${TAG:+--template docker.io/$(DOCKER_USER)/pix-agent:$$TAG} .
+	exec "$(PIX_BIN)" run --dev $${N:+--name "$$N"} .
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
 # consumer path, no local repo needed. Every push to main auto-publishes a NEW
 # version (CI stamps 0.0.<run_number>, see .github/workflows/publish.yml) and
-# commits the bump into pi-kit/spec.yaml on main. Since the kit reads spec.yaml
-# from main, this always pins a version sbx has NEVER cached → a fresh pull with
-# no --template override and no `sbx template rm` dance. Wait for CI green first.
-run-published: ## Run the latest PUBLISHED image via the git kit (always fresh — every push is a new version tag; no eviction needed). `make run` = local build.
+# commits the bump into pi-kit/pix on main. The published v3 OCI workload
+# carries that version, so a fresh release uses a fresh kit image.
+run-published: ## Run the versioned OCI workload; `make run` uses the local Buildx kit.
 	-sbx rm -f pix-published >/dev/null 2>&1
-	@sbx run pix --name pix-published --kit "git+https://github.com/$(DOCKER_USER)/pix.git#dir=pi-kit"
+	@sbx run pix --name pix-published --kit docker.io/$(DOCKER_USER)/pix:$(VERSION)
 
 run-no-mcp: ## Launch with NO MCP servers attached (debugging MCP setup failures)
 	@sbx run pix --kit $(KIT) .

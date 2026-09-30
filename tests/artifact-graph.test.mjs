@@ -16,7 +16,8 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dockerfile = fs.readFileSync(path.join(repoRoot, "images/agent/Dockerfile"), "utf8");
 const makefile = fs.readFileSync(path.join(repoRoot, "Makefile"), "utf8");
-const kitSpec = fs.readFileSync(path.join(repoRoot, "pi-kit/spec.yaml"), "utf8");
+const kitSpec = fs.readFileSync(path.join(repoRoot, "pi-kit/pix/pix.yaml"), "utf8");
+const kitDockerfile = fs.readFileSync(path.join(repoRoot, "pi-kit/pix/pix.dockerfile"), "utf8");
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 
 test("images/agent/Dockerfile is the canonical pix-agent build; there is no duplicate root Dockerfile", () => {
@@ -96,12 +97,15 @@ test("the ONE pix binary actually builds standalone from services/host/cmd/pix (
 	assert.ok(fs.existsSync(path.join(out, "pix")));
 });
 
-test("pi-kit/spec.yaml points at the pix-agent artifact, consistently with the Makefile", () => {
-	assert.match(kitSpec, /image:\s*"docker\.io\/mcavage\/pix-agent:[^"]+"/);
-	assert.doesNotMatch(kitSpec, /image:\s*"docker\.io\/mcavage\/pix:[^"]+"/);
-	const kitVersion = kitSpec.match(/image:\s*"docker\.io\/mcavage\/pix-agent:([^"]+)"/)[1];
+test("v3 workload pins the pix-agent base and matches the Makefile version", () => {
+	assert.match(kitSpec, /schemaVersion: ['"]?3['"]?/);
+	assert.match(kitSpec, /kind: workload/);
+	const kitVersion = kitSpec.match(/^version: ['"]?([^'"\s]+)/m)[1];
+	const baseVersion = kitDockerfile.match(/^ARG PIX_AGENT_IMAGE=docker\.io\/mcavage\/pix-agent:(\S+)/m)[1];
 	const makeVersion = makefile.match(/^VERSION\s*\?=\s*(\S+)/m)[1];
-	assert.equal(kitVersion, makeVersion, "pi-kit/spec.yaml's pinned image tag must match the Makefile VERSION");
+	assert.equal(kitVersion, makeVersion);
+	assert.equal(baseVersion, makeVersion);
+	assert.equal(fs.existsSync(path.join(repoRoot, "pi-kit/spec.yaml")), false);
 });
 
 test("CI publish.yml builds pix-agent from images/agent/Dockerfile and pix-memory from services/memory/Dockerfile", () => {
@@ -112,6 +116,11 @@ test("CI publish.yml builds pix-agent from images/agent/Dockerfile and pix-memor
 	assert.match(workflow, /MEMORY_IMAGE:\s*docker\.io\/.*pix-memory/);
 	assert.match(workflow, /release-manifest:/);
 	assert.match(workflow, /emit-manifest\.mjs/);
+	const kitJob = workflow.slice(workflow.indexOf("\n  build-kit:"), workflow.indexOf("\n  build-memory:"));
+	assert.match(kitJob, /needs: \[version, merge, legal-gate, test-gate\]/);
+	assert.ok(kitJob.indexOf("tag-availability.sh") < kitJob.indexOf("docker buildx build"));
+	assert.match(kitJob, /--platform linux\/amd64,linux\/arm64/);
+	assert.match(kitJob, /-t "\$KIT_IMAGE:\$V"[\s\S]*--push/);
 });
 
 test("release-manifest binds ONE version to both image digests, the runtime digest, and the kit revision", async () => {
