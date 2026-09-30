@@ -110,7 +110,7 @@ test("gateway registration preserves canonical prices, cache tiers and thinking 
 	const cost = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5,
 		tiers: [{ inputTokensAbove: 272000, input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5 }] };
 	const thinkingLevelMap = { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
-	builtinModels.set("openai/gpt-6-sol", { cost, thinkingLevelMap, input: ["text", "image"] });
+	builtinModels.set("openai/gpt-6.1-sol", { cost, thinkingLevelMap, input: ["text", "image"], compat: { supportsStrictMode: true } });
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pix-pricing-"));
 	const previous = process.env.PI_TEST_AGENT_DIR;
 	try {
@@ -118,21 +118,22 @@ test("gateway registration preserves canonical prices, cache tiers and thinking 
 		fs.writeFileSync(path.join(dir, "inference.json"), JSON.stringify({
 			version: 1,
 			backends: { work: { driver: "openai-compatible", protocol: "openai-responses", base_url: "https://gateway.example/v1", auth: "sbx-session" } },
-			models: [{ id: "work/gpt-6-sol", catalog_model: "openai/gpt-6-sol", backend: "work", context_window: 1050000, max_tokens: 128000 }],
+			models: [{ id: "work/gpt-6.1-sol", catalog_model: "openai/gpt-6.1-sol", backend: "work", context_window: 1050000, max_tokens: 128000 }],
 		}));
 		const registered = [];
 		const { default: inference } = await import("../extensions/inference.ts");
 		inference({ registerProvider: (name, config) => registered.push({ name, config }) });
 		assert.equal(registered.length, 1);
 		const model = registered[0].config.models[0];
-		assert.equal(model.id, "gpt-6-sol");
+		assert.equal(model.id, "gpt-6.1-sol");
 		assert.deepEqual(model.cost, cost);
 		assert.deepEqual(model.thinkingLevelMap, thinkingLevelMap);
 		assert.deepEqual(model.input, ["text", "image"]);
+		assert.deepEqual(model.compat, { supportsStrictMode: true, sessionAffinityFormat: "openai-nosession" });
 	} finally {
 		if (previous === undefined) delete process.env.PI_TEST_AGENT_DIR;
 		else process.env.PI_TEST_AGENT_DIR = previous;
-		builtinModels.delete("openai/gpt-6-sol");
+		builtinModels.delete("openai/gpt-6.1-sol");
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });

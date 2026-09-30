@@ -217,7 +217,7 @@ func defaultSidecar() string {
 schema = 1
 
 [models]
-# main = "anthropic/claude-sonnet-5"  # a model NAME (provider/id); empty
+# main = "anthropic/claude-sonnet-5-5"  # a model NAME (provider/id); empty
 # means the shipped default for whichever provider this home configures
 # (never Pi's own native default). Run 'pix env show' to see the model
 # that will answer and the rule that chose it.

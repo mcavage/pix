@@ -2,6 +2,7 @@
   "defaultProjectTrust": "always",
   "enableInstallTelemetry": false,
   "quietStartup": true,
+  "extensions": ["-builtin:mcp", "-builtin:codemode", "-builtin:tool-search", "-builtin:llama.cpp"],
   "theme": "dracula",
   "hideThinkingBlock": true,
   "tuiMode": "fullscreen",

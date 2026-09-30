@@ -172,6 +172,7 @@ export default function (pi: any): void {
 				apiKey,
 				models: models.map((m) => {
 					const builtin = builtinForModel(m);
+					const pixCompat = compatForModel(backend, m);
 					return {
 						id: m.id.startsWith(`${name}/`) ? m.id.slice(name.length + 1) : m.id,
 						name: m.name || m.catalog_model,
@@ -181,7 +182,7 @@ export default function (pi: any): void {
 						thinkingLevelMap: builtin?.thinkingLevelMap,
 						contextWindow: m.context_window,
 						maxTokens: m.max_tokens,
-						compat: compatForModel(backend, m),
+						compat: builtin?.compat || pixCompat ? { ...builtin?.compat, ...pixCompat } : undefined,
 					};
 				}),
 			});

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Pi 0.87.1: paint the complete TUI with the palette, including editor and
+// Pi 0.99.1: paint the complete TUI with the palette, including editor and
 // blank cells. Use SGR per frame, never OSC terminal-global color mutations.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -9,8 +9,10 @@ import { fileURLToPath } from "node:url";
 export function patchThemeSurface(root) {
  const targets = [
   [join(root, "dist/modes/interactive/theme/theme.js"), [
-   ['        const backgrounds = {\n            ...bgColors,', '        const backgrounds = {\n            appBg: "",\n            ...bgColors,'],
-   ['    const bgColors = {};', '    const bgColors = { appBg: resolveVarRefs(themeJson.export?.pageBg ?? "", themeJson.vars ?? {}) };'],
+   ['        const backgrounds = { ...bgColors, searchMatchBg: bgColors.searchMatchBg ?? bgColors.selectedBg };',
+    '        const backgrounds = { appBg: options.appBg ?? "", ...bgColors, searchMatchBg: bgColors.searchMatchBg ?? bgColors.selectedBg };'],
+   ['        appearance: themeJson.appearance,',
+    '        appearance: themeJson.appearance,\n        appBg: resolveVarRefs(themeJson.export?.pageBg ?? "", themeJson.vars ?? {}),'],
   ]],
   [join(root, "dist/modes/interactive/interactive-mode.js"), [
    ['        this.ui.start();', '        // Pix theme surface: resolve the live theme on every frame.\n        this.ui.pixThemeSurface = () => ({ fg: theme.getFgAnsi("text"), bg: theme.getBgAnsi("appBg") });\n        this.ui.start();'],
