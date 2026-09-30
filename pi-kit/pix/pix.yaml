@@ -3,7 +3,7 @@ schemaVersion: '3'
 kind: workload
 displayName: Pix
 description: Multi-model pi coding agent on a Docker Hardened (DHI) Debian base
-version: 0.1.100
+version: "0.1.101"
 sourceUrl: https://github.com/mcavage/pix
 licenses:
 - MIT
