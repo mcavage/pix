@@ -2,7 +2,7 @@
 // separate pix-host binary in v2). A consumer installs it without cloning
 // the repo; it resolves PIX_HOME (default ~/.pix, no XDG split) and shells
 // out to `sbx run` against the pinned pix-agent image and kit
-// (pi-kit/spec.yaml), stamped to this build's version.
+// (pi-kit/pix/pix.yaml), stamped to this build's version.
 //
 // The verb tree is root.go's rootCmd — the one parser, the one dispatcher, and (via
 // `pix help --all`) the one listing. main owns only what comes BEFORE a parse: what

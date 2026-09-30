@@ -162,7 +162,7 @@ func TestRunEffectiveInputPreservesKitImagePin(t *testing.T) {
 	t.Setenv("PIX_HOME", t.TempDir())
 	for _, tc := range []struct{ name, template, local, want string }{
 		{"released kit", "", "", ""},
-		{"local build", "", "local-abc", launch.DockerImageRepo + ":local-abc"},
+		{"local build", "", "local-abc", ""},
 		{"explicit override", "example/agent:pinned", "local-abc", "example/agent:pinned"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -182,7 +182,7 @@ func TestRunEffectiveInputPreservesKitImagePin(t *testing.T) {
 			if tc.want == "" && strings.Contains(string(data), "template:") {
 				t.Fatalf("release launch overrides the selected kit image: %s", data)
 			}
-			if !strings.Contains(string(data), "ref=v0.1.79") {
+			if !strings.Contains(string(data), "docker.io/mcavage/pix:0.1.79") {
 				t.Fatalf("missing versioned kit: %s", data)
 			}
 		})

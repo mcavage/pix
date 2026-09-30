@@ -477,13 +477,21 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 			root, rerr := launch.ResolveRepoRoot()
 			if rerr == nil {
 				o.DevRoot = root
-				o.LocalKit = filepath.Join(root, "pi-kit")
 				o.LocalImageTag = launch.ReadLocalImageTag(root)
+				o.LocalKit = filepath.Join(root, "out", "kit", "pix")
+				if _, statErr := os.Stat(o.LocalKit); statErr != nil || o.LocalImageTag == "" {
+					o.LocalKit = filepath.Join(root, "pi-kit", "pix")
+					o.LocalImageTag = ""
+				}
 			}
 		} else if !released && !kitOverride {
 			if root, rerr := launch.ResolveRepoRoot(); rerr == nil {
-				o.LocalKit = filepath.Join(root, "pi-kit")
 				o.LocalImageTag = launch.ReadLocalImageTag(root)
+				o.LocalKit = filepath.Join(root, "out", "kit", "pix")
+				if _, statErr := os.Stat(o.LocalKit); statErr != nil || o.LocalImageTag == "" {
+					o.LocalKit = filepath.Join(root, "pi-kit", "pix")
+					o.LocalImageTag = ""
+				}
 				note := ""
 				if o.LocalImageTag != "" {
 					note = " (local image :" + o.LocalImageTag + ")"
@@ -538,10 +546,6 @@ func runLaunchAttempt(d *cli.Deps, o launch.RunOpts, retry launch.RunOpts) (err 
 		case o.Template != "":
 			if tag := launch.TemplateTag(o.Template); strings.HasPrefix(tag, "local-") && !launch.LocalImageLoaded(defaultShellEnv(), tag) {
 				return unloadedLocalImage(d, "--template "+o.Template)
-			}
-		case o.LocalImageTag != "" && o.LocalKit != "" && len(o.Kits) == 0:
-			if !launch.LocalImageLoaded(defaultShellEnv(), o.LocalImageTag) {
-				return unloadedLocalImage(d, "local image "+launch.DockerImageRepo+":"+o.LocalImageTag)
 			}
 		}
 

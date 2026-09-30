@@ -32,7 +32,8 @@
       "_env_setup_no_personal_interview_note": "`pix setup --env NAME` now returns from setupCredentials right after the refs file is established, so a work environment with its own authenticated backends is never asked for a public-vendor 1Password key and is never told it has \"no model provider key configured\" \u2014 a correctness fix to what setup asks a human, with the reasoning kept next to the guard. Rebaselined to the exact current values (prod_loc +8).",
       "_session_resume_fix_note": "Bare pix -- passthrough routes to run with the implicit-launch TTY guard; exact four-line growth.",
       "_memory_registration_error_note": "Pix setup now stops on an unreadable sbx MCP listing instead of guessing absence and attempting an add. Failed adds discard the expected SSRF warning, show the underlying sbx diagnostic, and redact repeated memory URLs or token text. Explicit setup continues environment connection hooks after memory registration alone fails, then returns that failure without claiming readiness. Exact command production growth: 36 lines.",
-      "prod_loc": 6178,
+      "prod_loc": 6179,
+      "_kit_v3_note": "One additional launcher line couples the local Buildx kit source to make load's marker; without both, launch uses the checked-in v3 kit. Exact measured budget, no slack.",
       "_theme_note": "Global theme persistence adds four command-layer lines: read the personal theme pointer, and force the pinned host safety palette for --dev. Exact measured growth; no new command, package edge, export, or global.",
       "_setup_download_progress_note": "Restore optional provider/Parallel reference onboarding, retain environment-owned auth, expose the full shipped model picker, and announce image pulls. Real setup caller tests cover skips, reruns, credential handling and progress. Exact measured production LOC; no slack.",
       "test_loc": 10844,
@@ -194,7 +195,7 @@
       "_dedupe_note": "De-duplication pass, rebaselined by hand to the EXACT current values, no slack; total launcher production code shrinks in this change. inference: +2 exports (OllamaTagsTimeout/OllamaTagsBodyCap, the /api/tags timeout and body-cap seams workflow/models' white-box tests shrink and assert against now that its private ollamaListing copy of ListOllamaModels -- same request, same cap, same tag-grammar boundary, same error strings -- is a one-line delegate). prod_loc grows only by the doc comments those seams and the cap-plus-one read carried over from the deleted copy; workflow/models loses ~90 lines.",
       "_env_credential_mode_note": "KeylessInference(cfg) replaced the argument-less ConfiguredKeylessInference(): the question \"does this run need a personal provider key?\" is per-RUN, not per-host, because `pix run` answers it from the effective config (machine config merged with the selected environment's own [inference.*]). Net exports unchanged (one added, one deleted). Rebaselined to the exact current value.",
       "_inference_setup_note": "Explicit Inference Setup item 1: CatalogSourceInfo/RuntimeCatalogPath/DescribeCatalogSource \u2014 which catalog LoadCatalog reads, and where the release-materialized runtime/<version>/models.json snapshot lives \u2014 for `pix env show`'s inspection surface. +3 exports (the struct and its two functions), no new edges.",
-      "prod_loc": 1676,
+      "prod_loc": 1682,
       "test_loc": 1664,
       "exports": 60,
       "exports_used_externally": 22,
@@ -211,7 +212,8 @@
       "_provider_default_note": "One explicit available cloud default per provider plus DefaultModelForProviders. This is a literal fallback only after CLI/environment selection and only for a provider this PIX_HOME configures; it replaces Pi's retired native default without restoring scoring or cross-provider routing.",
       "_ollama_integration_note": "New detect.go: the ONE Ollama integration (DetectOllama/OllamaStatus/OllamaMode/ListOllamaModels/ContainerOllamaHost) every caller (doctor, setup, the memory-container wiring) shares \u2014 CLI presence, endpoint mode (local vs remote, detected from the resolved endpoint's own host, never asked for), and the model listing. Deliberately does not reuse workflow/models' per-model local/cloud classification, which answers a different, unwired question. Real capability addition, not accumulation. Rebaselined to the exact current values.",
       "_onboarding_note": "Selected-model credential decision fixes real Ollama setup-to-run failure. Exact measured budget; total launcher production code shrinks in this change.",
-      "_uat_note": "Real private Gateway UAT exposed missing authored-name resolution. One explicit binding resolver now serves session and roster; no model selection/scoring is added."
+      "_uat_note": "Real private Gateway UAT exposed missing authored-name resolution. One explicit binding resolver now serves session and roster; no model selection/scoring is added.",
+      "_kit_v3_note": "The v3 generated inference mixin writes a descriptor and companion Dockerfile and maps dynamic network and credential policy to capabilities."
     },
     "pix/host/launcher": {
       "prod_loc": 31,
@@ -445,7 +447,7 @@
     },
     "pix/host/workflow/launch": {
       "_prod_loc_note": "Review round 1 blocker #2 fix: FindPositivelyIdentified (the running-or-stopped identity check DecideEnvAttach's reattach gate now uses) and DecideEnvAttach's relaxed running-or-stopped gate. Real new logic (a stopped sandbox used to be refused outright by this gate), not accumulation. Round-7 adds EffectiveInferenceConfig: the production merge of a selected environment's pix.toml [inference.*] over machine config into an ephemeral, never-persisted snapshot for SynthesizeInferenceKit/CallableRuntimeModels/roster validation. Coexistence review fix (INFO): RemoveScopedPixSandbox, now the ONLY exported forced-removal seam, validates a RECORDED sandbox name against this stack's id before any argv is composed; the unscoped form is unexported, so no package outside launch can reach it.",
-      "prod_loc": 5053,
+      "prod_loc": 5060,
       "test_loc": 7443,
       "exports": 185,
       "exports_used_externally": 63,
@@ -465,7 +467,8 @@
       "_uat_note": "The selected Ollama model is written to the existing bridge hint, fixing the UAT-observed false unknown-model warning. No additional state or process is introduced.",
       "_host_tools_note": "Exact measured capability growth: Gateway-owned Pix environment tools and explicit --dev host jobs, with fixed launch authority, live instance/holder checks, bounded execution and output, cancellation, and scoped reset. Tests drive the compiled CLI through MCP and reject privilege escalation and stale instances. No second registry or resident supervisor.",
       "_workspace_identity_note": "Exact +5 production lines: canonical workspace composition and reuse in host-tool session fingerprints; guard authority remains instance- and holder-bound.",
-      "_absent_lifetime_note": "Before create, retire a stale instance record only under lifecycle exclusion, zero reference locks, and a fresh positive absence probe. Preserve held lock inodes and clear the old keep marker. Real RunSession tests cover create, attach, cleanup, retained new keep, and refusal on held/present/unknown state. Exact measured growth."
+      "_absent_lifetime_note": "Before create, retire a stale instance record only under lifecycle exclusion, zero reference locks, and a fresh positive absence probe. Preserve held lock inodes and clear the old keep marker. Real RunSession tests cover create, attach, cleanup, retained new keep, and refusal on held/present/unknown state. Exact measured growth.",
+      "_kit_v3_note": "The v3 personal-context mixin stages a content file, the launcher resolves published OCI workload tags, and setup skips v2-only source validation."
     },
     "pix/host/workflow/models": {
       "prod_loc": 772,

@@ -276,10 +276,11 @@ test("MCP status patch fails when adapter status rendering drifts", (t) => {
 test("baked and gateway MCP configs show only connection problems", () => {
 	const config = JSON.parse(fs.readFileSync(path.join(repoRoot, "mcp.json"), "utf8"));
 	assert.equal(config.settings?.mcpFooterStatus, "problems");
-	const kit = fs.readFileSync(path.join(repoRoot, "pi-kit/spec.yaml"), "utf8");
+	const kit = fs.readFileSync(path.join(repoRoot, "pi-kit/pix/pix.yaml"), "utf8");
+	const recipe = fs.readFileSync(path.join(repoRoot, "pi-kit/pix/pix.dockerfile"), "utf8");
 	assert.match(kit, /\{"settings":\{"mcpFooterStatus":"problems"\}/);
 	assert.match(
-		kit,
+		recipe,
 		/"--session-dir",\s*"\.pi-sessions"/,
 		"the printed workspace must own pi's relative session directory",
 	);

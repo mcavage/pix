@@ -173,7 +173,7 @@ func TestEnvironmentAuthoredLlmmanOpenAICompatibleInference_WorksAndCarriesEgres
 	if got := manifest["roster"].(map[string]any)["main"]; got != "llmman/local-coder" {
 		t.Fatalf("roster main = %v, want the same runtime model as the session", got)
 	}
-	spec, err := os.ReadFile(filepath.Join(kitDir, "spec.yaml"))
+	spec, err := os.ReadFile(filepath.Join(kitDir, filepath.Base(kitDir)+".yaml"))
 	if err != nil {
 		t.Fatalf("read spec.yaml: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestEnvironmentAuthoredLlmmanOpenAICompatibleInference_WorksAndCarriesEgres
 	if !strings.Contains(specStr, "llmman.internal.example") {
 		t.Errorf("spec.yaml does not name the configured egress host:\n%s", specStr)
 	}
-	if !strings.Contains(specStr, "credentials:") || !strings.Contains(specStr, "LLMMAN_TOKEN") {
+	if !strings.Contains(specStr, "com.docker.sandbox/credential@1") || !strings.Contains(specStr, "LLMMAN_TOKEN") {
 		t.Errorf("spec.yaml does not carry the configured sbx-session credential injection:\n%s", specStr)
 	}
 }

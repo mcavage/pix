@@ -59,7 +59,7 @@ func TestExternalPackage_RuntimeManifestAndSynthesizeInferenceKit(t *testing.T) 
 		t.Fatalf("SynthesizeInferenceKit() error = %v", err)
 	}
 	defer os.RemoveAll(dir)
-	if _, err := os.Stat(filepath.Join(dir, "spec.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, filepath.Base(dir)+".yaml")); err != nil {
 		t.Fatalf("synthesized kit missing spec.yaml: %v", err)
 	}
 }

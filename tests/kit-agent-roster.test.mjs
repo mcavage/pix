@@ -5,7 +5,7 @@
 // still pin its own exact `model:`.
 //
 // Replaces tests/kit-subagent-roster-intents.test.mjs (deleted, obsolete: it
-// asserted pi-kit/spec.yaml's roster prose named an `intent` per preset,
+// asserted pi-kit/pix/pix.yaml's roster prose named an `intent` per preset,
 // which is no longer true once shipped agents carry none).
 import assert from "node:assert/strict";
 import * as fs from "node:fs";

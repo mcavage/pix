@@ -42,7 +42,7 @@ environment repository, not this public repository.
 | `services/host/pixhome/`, `stack/`, `session/`, `sandbox/` | Storage paths, scoped identities, and lifetime records |
 | `services/memory/` | Independent Go MCP service, SQLite store, and Dockerfile |
 | `images/agent/Dockerfile`, `scripts/patches/` | Pinned Pi/toolchain image and reviewed upstream patches |
-| `pi-kit/spec.yaml` | Native sbx kit, network policy, credentials, entrypoint |
+| `pi-kit/pix/` | v3 sbx workload, network policy, credentials, entrypoint |
 | `extensions/`, `lib/`, `types/` | Pi extensions, shared helpers, ambient types |
 | `agents/`, `skills/`, `settings.json`, `keybindings.json`, `themes/` | Shipped agent experience |
 
@@ -111,7 +111,7 @@ change, check links, examples, and existing documentation tests; do not invent
 implementation-mirroring tests or rebuild images without a reason.
 
 On a host with Docker and sbx, `make load` builds the matching launcher, runtime,
-images, and manifest, then loads the agent image into sbx's separate image store.
+images, and manifest, then builds the v3 source kit with Docker Buildx.
 `make run` starts the development session with live skills. An image baked before
 an edit does not contain that edit, and a running sandbox keeps its creation
 image. Recreate an idle sandbox to test a new image. Kit changes also need a new
@@ -122,7 +122,7 @@ OAuth UAT passed without host access. If syncing an extension into the live Pi
 agent directory for a reload, report that separately from verifying a rebuilt
 image. Local identities are `X.Y.(Z+1)-beta.g<sha7>[.dirty.<12hex>]`; every artifact
 in a bundle must use the same identity. Release CI uses clean semver. `make load`
-uses a worktree-scoped tag and may prune only that worktree's old templates.
+uses a worktree-scoped image tag; sbx builds the source kit on create.
 
 ## Host UAT
 

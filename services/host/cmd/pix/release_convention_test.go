@@ -2,7 +2,7 @@ package main
 
 // release_convention_test.go pins the release convention: CI starts from the
 // committed semver, selects the next patch whose v<version> tag is unused,
-// stamps Makefile/package.json/pi-kit/spec.yaml, and commits the published
+// stamps Makefile/package.json/pi-kit/pix/pix.yaml, and commits the published
 // version back. The three files must remain mutually consistent so a consumer's
 // pinned image and kit tag always identify the same release.
 
@@ -64,9 +64,10 @@ func TestPublishWorkflowStampsVersions(t *testing.T) {
 		t.Error("publish.yml must not reset Pix releases to 0.0.<run_number>")
 	}
 	for _, stamp := range []string{
-		"Makefile",         // sed on VERSION ?=
-		"package.json",     // sed on "version":
-		"pi-kit/spec.yaml", // sed on image: docker.io/.../pix-agent:<v>
+		"Makefile",     // sed on VERSION ?=
+		"package.json", // sed on "version":
+		"pi-kit/pix/pix.yaml",
+		"pi-kit/pix/pix.dockerfile",
 	} {
 		if !strings.Contains(wf, stamp) {
 			t.Errorf("publish.yml must stamp %s with the computed version", stamp)
@@ -91,11 +92,15 @@ func TestVersionFilesAgreeAtBase(t *testing.T) {
 	if pj == nil {
 		t.Fatal("package.json: no version field")
 	}
-	spec := regexp.MustCompile(`image:\s*"docker\.io/[^"]*/pix-agent:([^"]+)"`).FindStringSubmatch(mustReadRepoFile(t, root, "pi-kit", "spec.yaml"))
+	spec := regexp.MustCompile(`(?m)^version:\s*["']?([^"'\s]+)`).FindStringSubmatch(mustReadRepoFile(t, root, "pi-kit", "pix", "pix.yaml"))
 	if spec == nil {
-		t.Fatal("pi-kit/spec.yaml: no pinned pix image tag")
+		t.Fatal("pi-kit/pix/pix.yaml: no pinned version")
 	}
-	if mk[1] != pj[1] || pj[1] != spec[1] {
+	base := regexp.MustCompile(`(?m)^ARG PIX_AGENT_IMAGE=docker\.io/[^\s]*/pix-agent:([^\s]+)`).FindStringSubmatch(mustReadRepoFile(t, root, "pi-kit", "pix", "pix.dockerfile"))
+	if base == nil {
+		t.Fatal("pix.dockerfile: no pinned pix-agent base image")
+	}
+	if mk[1] != pj[1] || pj[1] != spec[1] || spec[1] != base[1] {
 		t.Errorf("version files disagree: Makefile=%s package.json=%s spec.yaml=%s — versions are CI-stamped together and must never be hand-bumped apart",
 			mk[1], pj[1], spec[1])
 	}

@@ -53,21 +53,8 @@ function projectContext(root) {
 	const agents = readIf(path.join(root, "AGENTS.md"));
 	if (agents !== null) parts.push({ name: "AGENTS.md", bytes: bytes(agents) });
 
-	const spec = readIf(path.join(root, "pi-kit/spec.yaml"));
-	if (spec !== null) {
-		const marker = "  content: |\n";
-		const i = spec.indexOf(marker);
-		if (i !== -1) {
-			// Count the instructions sbx injects, not the four YAML indentation
-			// bytes on every source line.
-			const content = spec
-				.slice(i + marker.length)
-				.split("\n")
-				.map((line) => (line.startsWith("    ") ? line.slice(4) : line))
-				.join("\n");
-			parts.push({ name: "pi-kit/spec.yaml agentInstructions", bytes: bytes(content) });
-		}
-	}
+	const context = readIf(path.join(root, "pi-kit/pix/pix-context.md"));
+	if (context !== null) parts.push({ name: "pi-kit/pix/pix-context.md", bytes: bytes(context) });
 	return parts;
 }
 

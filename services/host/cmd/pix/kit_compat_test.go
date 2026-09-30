@@ -56,7 +56,7 @@ func TestValidateSetupKitChecksUnreleasedCheckout(t *testing.T) {
 		got = ref
 		return "", nil
 	})
-	if err != nil || got != "/src/pix/pi-kit" {
+	if err != nil || got != "/src/pix/pi-kit/pix" {
 		t.Fatalf("launch.ValidateSetupKit = ref %q, err %v", got, err)
 	}
 }

@@ -26,8 +26,8 @@ func TestPersonalContextUsesXDGDataAndGeneratesAgentLayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(filepath.Join(kit, "spec.yaml"))
-	if err != nil || !strings.Contains(string(b), "agentInstructions:\n  content: |\n    Prefer concise answers.") {
+	b, err := os.ReadFile(filepath.Join(kit, filepath.Base(kit)+".yaml"))
+	if err != nil || !strings.Contains(string(b), "contentFile: ./personal-context.md") {
 		t.Fatalf("spec = %q, err=%v", b, err)
 	}
 }

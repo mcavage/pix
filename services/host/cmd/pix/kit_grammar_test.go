@@ -7,23 +7,24 @@ import (
 	"testing"
 )
 
-// TestBaseKitUsesStrictV2Grammar guards the July 2026 spelling cutover. All
-// names below still describe the same canonical artifact, so ordinary YAML
-// parsing cannot catch accidentally restoring the retired lenient-v2 keys.
-func TestBaseKitUsesStrictV2Grammar(t *testing.T) {
+// TestBaseKitUsesV3Grammar guards the workload descriptor and its OCI recipe.
+func TestBaseKitUsesV3Grammar(t *testing.T) {
 	root := repoRootForVersionLockstep(t)
-	b, err := os.ReadFile(filepath.Join(root, "pi-kit", "spec.yaml"))
+	b, err := os.ReadFile(filepath.Join(root, "pi-kit", "pix", "pix.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"permissions:", "setup:", "agentInstructions:", "  entrypoint:"} {
-		if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(want)).Match(b) {
-			t.Errorf("strict-v2 base kit is missing %q", want)
+	for _, want := range []string{"# syntax=docker/sandbox-kit:3", "schemaVersion: '3'", "kind: workload", "- type: com.docker.sandbox/sbx@1", "- type: com.docker.sandbox/network-policy@1", "- type: com.docker.sandbox/credential@1", "- type: com.docker.sandbox/lifecycle@1", "- type: com.docker.sandbox/agent-context@1"} {
+		if !regexp.MustCompile(regexp.QuoteMeta(want)).Match(b) {
+			t.Errorf("v3 workload is missing %q", want)
 		}
 	}
-	for _, retired := range []string{"caps:", "commands:", "agentContext:", "  aiFilename:", "    run:"} {
+	for _, retired := range []string{"permissions:", "setup:", "agentInstructions:", "sandbox:"} {
 		if regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(retired)).Match(b) {
-			t.Errorf("base kit restored retired lenient-v2 key %q", retired)
+			t.Errorf("v3 workload restored v2 key %q", retired)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "pi-kit", "pix", "pix.dockerfile")); err != nil {
+		t.Fatal(err)
 	}
 }

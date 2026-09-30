@@ -24,7 +24,7 @@
 //
 // HOST UAT STILL NEEDED (see docs/design/pix-v2-architecture.md §9.3): this
 // file is written and tested against the *observed* sandbox seam (the literal
-// mcp.json shape pi-kit/spec.yaml's setup step writes, and node:http reaching
+// mcp.json shape pi-kit/pix/pix.yaml's setup step writes, and node:http reaching
 // mcp-gateway.docker.internal the same way the existing host.docker.internal
 // calls do, bypassing pi's global proxy dispatcher). No sandbox in this
 // worktree can prove that a SECOND client connection to the injected Gateway
@@ -56,7 +56,7 @@ export function resolvePiMcpConfigPath(): string {
 	return join(resolvePiAgentDir(), "mcp.json");
 }
 
-// Literal name pi-kit/spec.yaml's setup step writes into mcp.json's
+// Literal name pi-kit/pix/pix.yaml's setup step writes into mcp.json's
 // mcpServers map ("Register the sbx MCP gateway with pi (pi-mcp-adapter)").
 export const GATEWAY_SERVER_NAME = "mcp-gateway";
 
@@ -142,7 +142,7 @@ interface RawResponse {
 // installs a global undici proxy dispatcher in the sandbox, and the Gateway
 // endpoint (mcp-gateway.docker.internal) is sbx's LOCAL data-plane, not an
 // allowlisted egress host (it is deliberately absent from
-// permissions.network.allow in pi-kit/spec.yaml) — so it must be reached
+// permissions.network.allow in pi-kit/pix/pix.yaml) — so it must be reached
 // directly, the same way host.docker.internal traffic is. See the HOST UAT
 // note at the top of this file: this is the one fact a live sandbox must
 // still confirm.

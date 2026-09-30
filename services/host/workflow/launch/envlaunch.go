@@ -940,7 +940,7 @@ func EnvExtraKits(cfg *config.Config, o RunOpts, version string) []string {
 		if o.LocalKit != "" {
 			kits = append(kits, o.LocalKit)
 		} else {
-			kits = append(kits, gitKitURLRef(o.KitRef, version))
+			kits = append(kits, kitSourceRef(o.KitRef, version))
 		}
 	}
 	kits = append(kits, o.Kits...)

@@ -47,16 +47,15 @@ test("the release bundle binds ONE identity: binary, runtime archive, manifest a
 	assert.match(makefile, /docker image inspect \$\(LOCAL_MEMORY_IMAGE\)/, "the manifest must read the LOCAL memory digest");
 });
 
-test("make load scopes its unique tag AND its prune to this worktree", () => {
+test("make load scopes its unique tag to this worktree without pruning sbx templates", () => {
 	const load = dryRun("load");
 	const hash = execFileSync("bash", ["-c", `printf '%s' "$(cd ${repoRoot} && pwd -P)" | { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | cut -c1-12`], {
 		encoding: "utf8",
 	}).trim();
 	assert.match(hash, /^[0-9a-f]{12}$/, "the worktree hash must be 12 hex characters");
 	assert.ok(load.includes(`TS="local-${hash}-`), `the loaded tag must carry this worktree's hash: ${load.split("\n")[1]}`);
-	assert.ok(load.includes(`$2 ~ /^local-${hash}-/`), "the prune must match ONLY this worktree's tags");
-	assert.ok(!/\$2=="[0-9]/.test(load), "the prune must not also match a published VERSION tag");
-	assert.ok(!/\$2 ~ \/\^local-\/\{/.test(load), "an unscoped /^local-/ prune deletes other worktrees' templates");
+	assert.ok(!load.includes("sbx template"), "v3 source kits must not import or prune sbx templates");
+	assert.ok(load.includes("docker buildx build"), "load must build the v3 kit with Buildx");
 });
 
 test("make run pins no fixed sandbox name and passes --name only when one was asked for", () => {
@@ -74,10 +73,10 @@ test("make run WITH an explicit NAME still passes it through safely", () => {
 });
 
 
-test("make load refreshes the matching release bundle before loading its image", () => {
+test("make load refreshes the matching release bundle before building its kit", () => {
 	const commands = dryRun("load");
 	const manifest = commands.indexOf("node scripts/release/emit-manifest.mjs");
 	assert.ok(manifest >= 0, "load must regenerate the release manifest");
 	assert.ok(commands.indexOf("go build") < manifest, "load must build the matching launcher");
-	assert.ok(commands.indexOf("sbx template load") > manifest, "load must use the completed bundle");
+	assert.ok(commands.indexOf("docker buildx build") > manifest, "load must use the completed bundle");
 });

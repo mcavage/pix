@@ -45,7 +45,7 @@ Pix v2 requires:
 
 - Git on the host for task checkout creation and safety checks;
 - Docker Desktop or a Docker Engine configuration supported by `sbx`;
-- Docker Sandboxes 0.39.0 or later, with native environment support;
+- Docker Sandboxes 0.45.0 or later, with native environment and Kit v3 support;
 - 1Password CLI when an environment uses direct keys or host credentials; and
 - llmman or Ollama when local models, memory embeddings, or automatic memory
   capture need local inference.
@@ -53,10 +53,10 @@ Pix v2 requires:
 Cloud-only sessions do not require llmman or Ollama. Environments that use only
 sbx-managed provider sessions do not require 1Password.
 
-Native sbx environments are experimental in sbx 0.39. Pix v2 requires a
-numeric version core of 0.39.0 or later. A tagged build is accepted only when
+Native sbx environments are experimental. Pix requires a
+numeric version core of 0.45.0 or later for Kit v3. A tagged build is accepted only when
 its numeric core is strictly newer than that floor, so development builds such
-as 0.41.0-rc1 can test newer sbx behavior while 0.39.0-rc1 remains refused. It
+as 0.46.0-rc1 can test newer sbx behavior while 0.45.0-rc1 remains refused. It
 has no legacy launch fallback. A new stable sbx release enters the supported
 range only after host acceptance tests pass.
 

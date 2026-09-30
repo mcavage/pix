@@ -46,7 +46,7 @@ func TestGateSbxVersion_TooOldFailsClosedWithExactCopy(t *testing.T) {
 	if !errors.As(err, &se) || se.Code == 0 {
 		t.Fatalf("want a non-zero SilentError, got %v (%T)", err, err)
 	}
-	want := "pix: native environments require sbx 0.39.0 or later.\n" +
+	want := "pix: native environments require sbx 0.45.0 or later.\n" +
 		"     found: 0.38.2\n" +
 		"     upgrade it: brew upgrade docker/tap/sbx\n"
 	if got := errBuf.String(); got != want {
@@ -75,7 +75,7 @@ func TestGateSbxVersion_UnparsableFailsClosed(t *testing.T) {
 }
 
 func TestGateSbxVersion_AcceptedVersionsProceedSilently(t *testing.T) {
-	for _, v := range []string{"0.39.0", "0.40.1"} {
+	for _, v := range []string{"0.45.0", "0.46.1"} {
 		t.Run(v, func(t *testing.T) {
 			bin := writeSbxFixture(t, "#!/bin/sh\necho 'sbx version "+v+"'\n")
 			var errBuf bytes.Buffer

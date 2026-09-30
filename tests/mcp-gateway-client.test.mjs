@@ -139,7 +139,7 @@ test("resolvePiAgentDir falls back to ~/.pi/agent when $PI_CODING_AGENT_DIR is u
 	}
 });
 
-test("loadGatewayServerConfig reads the exact mcp-gateway url/headers pi-kit/spec.yaml writes", async () => {
+test("loadGatewayServerConfig reads the exact mcp-gateway url/headers pi-kit/pix/pix.yaml writes", async () => {
 	await withAgentDir(async (agentDir, load) => {
 		writeGatewayConfig(agentDir, "http://mcp-gateway.docker.internal/mcp");
 		const mod = await load();

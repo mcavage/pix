@@ -97,7 +97,7 @@ export async function listen(server) {
 	return `http://127.0.0.1:${port}`;
 }
 
-/** Writes <agentDir>/mcp.json with the exact mcp-gateway shape pi-kit/spec.yaml's setup step writes. */
+/** Writes <agentDir>/mcp.json with the exact mcp-gateway shape pi-kit/pix/pix.yaml's setup step writes. */
 export function writeGatewayConfig(agentDir, url) {
 	mkdirSync(agentDir, { recursive: true });
 	writeFileSync(

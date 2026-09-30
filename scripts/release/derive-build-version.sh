@@ -2,7 +2,7 @@
 # Derives the version identity a LOCAL (dev) build stamps into the launcher,
 # so a local build can never be mistaken for — or resolve to the same
 # identity as — the clean X.Y.Z that ships from release CI and lives
-# committed in package.json / Makefile VERSION / pi-kit/spec.yaml (see
+# committed in package.json / Makefile VERSION / pi-kit/pix/pix.yaml (see
 # services/host/cmd/pix/versionlockstep_test.go). Both a release stack and a
 # dev stack now COEXIST on the same machine: the release stack pins the
 # clean version, the dev stack pins this derived one, and nothing collides.

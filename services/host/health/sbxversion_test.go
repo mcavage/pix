@@ -23,10 +23,10 @@ import (
 // itself.
 
 // TestSbxProbe_VersionRequirementTable is the required version table.
-// Beyond the original 0.38.2/0.39.0/0.40.1/empty/garbage cases, it pins the
+// Beyond the original 0.44.2/0.45.0/0.46.1/empty/garbage cases, it pins the
 // honest parser this file's package doc describes (see parseSbxVersion in
 // probes.go): partial and extra-component versions are deliberate reads
-// ("0.39", "0.39.0.1"), a "v" prefix and the real observed colon-labeled
+// ("0.45", "0.45.0.1"), a "v" prefix and the real observed colon-labeled
 // banner both parse, a prerelease at the minimum fails closed while a tagged
 // build whose numeric core is newer than the minimum is accepted for development,
 // chatty non-version text anchored elsewhere in the output
@@ -34,7 +34,7 @@ import (
 // genuinely AMBIGUOUS output (two disagreeing version answers) fails closed
 // exactly like no version at all — the low finding this table now proves
 // fixed: a bare "first dotted numeric substring" scan used to read "built
-// with go 1.21.5, sbx version 0.38.2" as "1.21.5" and fail OPEN on a
+// with go 1.21.5, sbx version 0.44.2" as "1.21.5" and fail OPEN on a
 // too-old sbx.
 func TestSbxProbe_VersionRequirementTable(t *testing.T) {
 	cases := []struct {
@@ -44,23 +44,23 @@ func TestSbxProbe_VersionRequirementTable(t *testing.T) {
 		blocked bool
 		found   string
 	}{
-		{"too old", "#!/bin/sh\necho 'sbx version 0.38.2'\n", StatusAbsent, true, "0.38.2"},
-		{"exactly the minimum", "#!/bin/sh\necho 'sbx version 0.39.0'\n", StatusReady, false, "0.39.0"},
-		{"newer patch", "#!/bin/sh\necho 'sbx version 0.40.1'\n", StatusReady, false, "0.40.1"},
+		{"too old", "#!/bin/sh\necho 'sbx version 0.44.2'\n", StatusAbsent, true, "0.44.2"},
+		{"exactly the minimum", "#!/bin/sh\necho 'sbx version 0.45.0'\n", StatusReady, false, "0.45.0"},
+		{"newer patch", "#!/bin/sh\necho 'sbx version 0.46.1'\n", StatusReady, false, "0.46.1"},
 		{"empty output", "#!/bin/sh\ntrue\n", StatusUnknown, true, "unknown (sbx --version was not understood)"},
 		{"garbage output", "#!/bin/sh\necho 'not a version at all'\n", StatusUnknown, true, "unknown (sbx --version was not understood)"},
-		{"older patch, two-digit", "#!/bin/sh\necho 'sbx version 0.38.10'\n", StatusAbsent, true, "0.38.10"},
-		{"partial version reads as its own .0", "#!/bin/sh\necho 'sbx version 0.39'\n", StatusReady, false, "0.39"},
+		{"older patch, two-digit", "#!/bin/sh\necho 'sbx version 0.44.10'\n", StatusAbsent, true, "0.44.10"},
+		{"partial version reads as its own .0", "#!/bin/sh\necho 'sbx version 0.45'\n", StatusReady, false, "0.45"},
 		{"major bump", "#!/bin/sh\necho 'sbx version 1.0.0'\n", StatusReady, false, "1.0.0"},
-		{"v-prefixed, colon-labeled real banner", "#!/bin/sh\necho 'sbx version: v0.39.0 def8cb0523a77e757bdd6ef52b459fe374f3783e'\n", StatusReady, false, "0.39.0"},
-		{"extra trailing component is deliberately at-least, not rejected", "#!/bin/sh\necho 'sbx version 0.39.0.1'\n", StatusReady, false, "0.39.0.1"},
+		{"v-prefixed, colon-labeled real banner", "#!/bin/sh\necho 'sbx version: v0.45.0 def8cb0523a77e757bdd6ef52b459fe374f3783e'\n", StatusReady, false, "0.45.0"},
+		{"extra trailing component is deliberately at-least, not rejected", "#!/bin/sh\necho 'sbx version 0.45.0.1'\n", StatusReady, false, "0.45.0.1"},
 		{"newer major prerelease is accepted", "#!/bin/sh\necho 'sbx version 1.0.0-rc1'\n", StatusReady, false, "1.0.0-rc1"},
-		{"prerelease at the minimum fails closed", "#!/bin/sh\necho 'sbx version 0.39.0rc1'\n", StatusAbsent, true, "0.39.0rc1"},
-		{"newer minor prerelease is accepted", "#!/bin/sh\necho 'sbx version 0.40.0-rc'\n", StatusReady, false, "0.40.0-rc"},
-		{"installed 0.41 release candidate is accepted", "#!/bin/sh\necho 'sbx version 0.41.0-rc1'\n", StatusReady, false, "0.41.0-rc1"},
-		{"chatty Go banner never wins over the real sbx version", "#!/bin/sh\necho 'built with go 1.21.5, sbx version 0.38.2'\n", StatusAbsent, true, "0.38.2"},
+		{"prerelease at the minimum fails closed", "#!/bin/sh\necho 'sbx version 0.45.0rc1'\n", StatusAbsent, true, "0.45.0rc1"},
+		{"newer minor prerelease is accepted", "#!/bin/sh\necho 'sbx version 0.46.0-rc'\n", StatusReady, false, "0.46.0-rc"},
+		{"installed 0.41 release candidate is accepted", "#!/bin/sh\necho 'sbx version 0.47.0-rc1'\n", StatusReady, false, "0.47.0-rc1"},
+		{"chatty Go banner never wins over the real sbx version", "#!/bin/sh\necho 'built with go 1.21.5, sbx version 0.44.2'\n", StatusAbsent, true, "0.44.2"},
 		{"multiple disagreeing version numbers is ambiguous, not a guess",
-			"#!/bin/sh\necho 'sbx version 0.38.2 (client)'\necho 'sbx version 0.40.1 (server)'\n",
+			"#!/bin/sh\necho 'sbx version 0.44.2 (client)'\necho 'sbx version 0.46.1 (server)'\n",
 			StatusUnknown, true, "unknown (sbx --version was not understood)"},
 	}
 	for _, tc := range cases {
@@ -80,12 +80,12 @@ func TestSbxProbe_VersionRequirementTable(t *testing.T) {
 }
 
 func TestValidateSbxVersionOutput_TaggedVersionPolicy(t *testing.T) {
-	for _, accepted := range []string{"sbx version 0.40.0-rc1", "sbx version 0.41.0-rc1", "sbx version 1.0.0-beta"} {
+	for _, accepted := range []string{"sbx version 0.46.0-rc1", "sbx version 0.47.0-rc1", "sbx version 1.0.0-beta"} {
 		if err := ValidateSbxVersionOutput(accepted); err != nil {
 			t.Errorf("ValidateSbxVersionOutput(%q) = %v, want accepted", accepted, err)
 		}
 	}
-	for _, refused := range []string{"sbx version 0.38.9-rc1", "sbx version 0.39.0-rc1"} {
+	for _, refused := range []string{"sbx version 0.44.9-rc1", "sbx version 0.45.0-rc1"} {
 		if err := ValidateSbxVersionOutput(refused); err == nil {
 			t.Errorf("ValidateSbxVersionOutput(%q) = nil, want refusal", refused)
 		}
@@ -123,10 +123,10 @@ func TestSbxVersionGate_MissingOrDeniedNeverBlocks(t *testing.T) {
 // `pix doctor` cannot drift onto slightly different wording for the same
 // requirement.
 func TestSbxVersionGateMessage_ExactCopy(t *testing.T) {
-	want := "pix: native environments require sbx 0.39.0 or later.\n" +
-		"     found: 0.38.2\n" +
+	want := "pix: native environments require sbx 0.45.0 or later.\n" +
+		"     found: 0.44.2\n" +
 		"     upgrade it: brew upgrade docker/tap/sbx\n"
-	if got := SbxVersionGateMessage("0.38.2"); got != want {
+	if got := SbxVersionGateMessage("0.44.2"); got != want {
 		t.Errorf("message =\n%q\nwant\n%q", got, want)
 	}
 }
@@ -146,7 +146,7 @@ func TestSbxVersionGateMessage_Unparsable(t *testing.T) {
 // TestSbxMinVersion_IsTheDocumentedFloor guards against the constant silently
 // drifting from the one PRD names.
 func TestSbxMinVersion_IsTheDocumentedFloor(t *testing.T) {
-	if SbxMinVersion != "0.39.0" {
-		t.Errorf("SbxMinVersion = %q, want %q", SbxMinVersion, "0.39.0")
+	if SbxMinVersion != "0.45.0" {
+		t.Errorf("SbxMinVersion = %q, want %q", SbxMinVersion, "0.45.0")
 	}
 }

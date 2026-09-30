@@ -12,7 +12,8 @@ const PRIMARY_SURFACES = [
 	"AGENTS.md",
 	"docs/getting-started.md",
 	"docs/reference.md",
-	"pi-kit/spec.yaml",
+	"pi-kit/pix/pix.yaml",
+	"pi-kit/pix/pix-context.md",
 	"install.sh",
 ];
 

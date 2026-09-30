@@ -27,7 +27,7 @@ enumerated below rather than left to the phrase "only what you configured".
 | Whatever an environment's `[[setup]]` hook itself contacts (a package registry, an identity provider's device-login endpoint) | Wherever that hook's own command goes — pix neither chooses nor proxies it | Host install/authentication you explicitly requested with `pix setup --env NAME`, after approving the environment (verbose trust details include argv and executable hashes) | Governed by whatever the hook talks to; hooks may retain account credentials and caches on your host |
 | Loopback traffic to services on your own machine: the stack-scoped `pix-memory-<stack-id>` container (a loopback port `pix setup` allocates per PIX_HOME, 18080 by default) and `ollama` (:11434) | Your own machine, over `host.docker.internal`/`localhost` | Recall, local inference | Local only; see below |
 
-The shipped sandbox allowlist is in `pi-kit/spec.yaml`; environments can
+The shipped sandbox allowlist is in `pi-kit/pix/pix.yaml`; environments can
 add destinations in their effective native sbx document. Host setup hooks,
 image builds and host MCP processes have their own network access and do not
 run behind the sandbox allowlist. Memory reaches the sandbox only through

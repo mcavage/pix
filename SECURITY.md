@@ -16,7 +16,7 @@ What the sandbox protects:
 - **Your provider credentials.** Anthropic, OpenAI, and Google keys are injected
   by the host proxy at the network layer. The VM never holds them; it only sees
   model responses. GitHub uses the same proxy injection.
-- **The network.** Egress is limited to the allowlist in `pi-kit/spec.yaml`. Environments may extend that policy through native kits; such changes
+- **The network.** Egress is limited to the allowlist in `pi-kit/pix/pix.yaml`. Environments may extend that policy through native kits; such changes
   participate in environment approval.
 - **Host data tools.** Google Workspace, Slack, and environment-declared connectors
   (containerized MCP servers or host daemons) run host-side, reached through the

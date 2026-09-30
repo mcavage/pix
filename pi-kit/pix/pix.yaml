@@ -1,0 +1,124 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: '3'
+kind: workload
+displayName: Pix
+description: Multi-model pi coding agent on a Docker Hardened (DHI) Debian base
+version: 0.1.100
+sourceUrl: https://github.com/mcavage/pix
+licenses:
+- MIT
+capabilities:
+- type: com.docker.sandbox/sbx@1
+- type: com.docker.sandbox/network-policy@1
+  config:
+    runtime:
+      allow:
+      - api.anthropic.com
+      - console.anthropic.com
+      - claude.ai
+      - api.openai.com
+      - api.github.com
+      - uploads.github.com
+      - registry.npmjs.org
+      - nodejs.org
+      - github.com
+      - codeload.github.com
+      - objects.githubusercontent.com
+      - raw.githubusercontent.com
+      - pi.dev
+      - api.exa.ai
+      - mcp.exa.ai
+      - generativelanguage.googleapis.com
+      - api.perplexity.ai
+      - api.parallel.ai
+      - host.docker.internal:11434
+      - localhost:11434
+- type: com.docker.sandbox/credential@1
+  optional: true
+  config:
+    service: anthropic
+    phase: runtime
+    apiKey:
+      name: ANTHROPIC_API_KEY
+      proxyManaged: true
+      inject:
+      - domain: api.anthropic.com
+        header: x-api-key
+        format: '%s'
+      - domain: console.anthropic.com
+        header: x-api-key
+        format: '%s'
+      - domain: claude.ai
+        header: x-api-key
+        format: '%s'
+- type: com.docker.sandbox/credential@1
+  optional: true
+  config:
+    service: openai
+    phase: runtime
+    apiKey:
+      name: OPENAI_API_KEY
+      proxyManaged: true
+      inject:
+      - domain: api.openai.com
+        header: Authorization
+        format: Bearer %s
+- type: com.docker.sandbox/credential@1
+  optional: true
+  config:
+    service: google
+    phase: runtime
+    apiKey:
+      name: GEMINI_API_KEY
+      proxyManaged: true
+      inject:
+      - domain: generativelanguage.googleapis.com
+        header: x-goog-api-key
+        format: '%s'
+- type: com.docker.sandbox/credential@1
+  optional: true
+  config:
+    service: parallel
+    phase: runtime
+    apiKey:
+      name: PARALLEL_API_KEY
+      proxyManaged: true
+      inject:
+      - domain: api.parallel.ai
+        header: x-api-key
+        format: '%s'
+- type: com.docker.sandbox/credential@1
+  optional: true
+  config:
+    service: github
+    phase: runtime
+    apiKey:
+      name: GH_TOKEN
+      proxyManaged: true
+      inject:
+      - domain: api.github.com
+        header: Authorization
+        format: Bearer %s
+      - domain: uploads.github.com
+        header: Authorization
+        format: Bearer %s
+- type: com.docker.sandbox/lifecycle@1
+  config:
+    install:
+    - command: mkdir -p /usr/local/share/ca-certificates && printf "%s" "$PROXY_CA_CERT_B64" | base64 -d > /usr/local/share/ca-certificates/proxy-ca.crt
+        && update-ca-certificates
+      user: '0'
+      env:
+      - PROXY_CA_CERT_B64
+      description: Trust the sandbox proxy's TLS-intercepting CA
+    - command: '[ -n "$MCP_GATEWAY_URL" ] || exit 0; mkdir -p "$HOME/.pi/agent"; printf ''{"settings":{"mcpFooterStatus":"problems"},"mcpServers":{"mcp-gateway":{"url":"%s","headers":{"Authorization":"Bearer
+        %s"}}}}\n'' "$MCP_GATEWAY_URL" "$MCP_SENTINEL_TOKEN_NAME" > "$HOME/.pi/agent/mcp.json"'
+      user: agent
+      env:
+      - MCP_GATEWAY_URL
+      - MCP_SENTINEL_TOKEN_NAME
+      description: Register the sbx MCP gateway with pi (pi-mcp-adapter)
+- type: com.docker.sandbox/agent-context@1
+  config:
+    filename: AGENTS.md
+    contentFile: ./pix-context.md
