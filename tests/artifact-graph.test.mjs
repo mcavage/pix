@@ -29,8 +29,8 @@ test("images/agent/Dockerfile is the canonical pix-agent build; there is no dupl
 	);
 });
 
-test("PI_PACKAGE is pinned to the accepted 0.99.1 release", () => {
-	assert.match(dockerfile, /ARG PI_PACKAGE=@earendil-works\/pi-coding-agent@0\.99\.1/);
+test("PI_PACKAGE is pinned to the accepted 0.99.2 release", () => {
+	assert.match(dockerfile, /ARG PI_PACKAGE=@earendil-works\/pi-coding-agent@0\.99\.2/);
 });
 
 test("services/memory/Dockerfile is the independent pix-memory build (no shared Dockerfile with pix-agent)", () => {
