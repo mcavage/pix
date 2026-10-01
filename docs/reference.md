@@ -743,7 +743,7 @@ as their canonical models. These are USD list-price estimates, not invoices or
 routing criteria; gateway contracts and subscription charges may differ.
 Ollama has no per-token charge in this accounting.
 
-Pi 0.99.1 includes [Claude Opus 5.5 pricing](https://platform.claude.com/docs/en/models/overview)
+Pi 0.99.2 includes [Claude Opus 5.5 pricing](https://platform.claude.com/docs/en/models/overview)
 ($4 input / $20 output per million tokens),
 [Claude Sonnet 5.5 pricing](https://platform.claude.com/docs/en/models/sonnet-5-5/overview)
 ($2 input / $10 output),
