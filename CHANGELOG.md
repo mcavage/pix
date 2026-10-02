@@ -20,7 +20,7 @@ v1 configuration and removed commands are not translated automatically. See
 
 ### Runtime and models
 
-- Pin Pi 0.99.1, add Claude Sonnet 5.5 and GPT-6.1 Sol, and make GPT-6.1 Sol
+- Pin Pi 1.0.0, add Claude Sonnet 5.5 and GPT-6.1 Sol, and make GPT-6.1 Sol
   the shipped OpenAI default. Generated gateway models retain Pi's canonical
   prices and capabilities; Pix keeps its Gateway as the sandbox MCP path.
 
