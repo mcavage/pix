@@ -11,9 +11,11 @@ import (
 
 // NewOptions is the input to New.
 type NewOptions struct {
-	StateRoot string    // caller-resolved task-state root (e.g. $XDG_STATE_HOME/pix/tasks)
+	StateRoot string    // caller-resolved PIX_HOME task-state root
 	Mainroot  string    // caller-resolved git-common-dir (see ResolveMainroot)
+	StackID   string    // caller-resolved PIX_HOME stack identity
 	Name      string    // task name (sanitized internally)
+	Env       string    // resolved Pix environment selected at creation
 	Ref       string    // start point; "" means HEAD
 	Mechanism Mechanism // "" means Clone (the default)
 }
@@ -36,13 +38,17 @@ func New(o NewOptions) (Meta, error) {
 	sane := SanitizeName(o.Name)
 	repokey := RepoKey(o.Mainroot)
 	label := RepoLabel(o.Mainroot)
+	sandboxName, err := ScopedSandboxName(o.StackID, label, repokey, o.Name)
+	if err != nil {
+		return Meta{}, err
+	}
 	repoDir := RepoDir(o.Mainroot)
 	co, metaPath := Paths(o.StateRoot, repoDir, sane)
 
 	owned, err := ReserveCheckout(co)
 	if err != nil {
 		if errors.Is(err, fs.ErrExist) {
-			return Meta{}, fmt.Errorf("task %q already exists; `pix task run %s` to reattach", o.Name, o.Name)
+			return Meta{}, fmt.Errorf("task %q already exists; run `pix run --task %s` to reattach", o.Name, o.Name)
 		}
 		return Meta{}, fmt.Errorf("reserve checkout: %w", err)
 	}
@@ -72,8 +78,9 @@ func New(o NewOptions) (Meta, error) {
 
 	meta := Meta{
 		Name:      o.Name,
+		Env:       o.Env,
 		Mechanism: o.Mechanism,
-		Sandbox:   SandboxName(label, repokey, o.Name),
+		Sandbox:   sandboxName,
 		Mainroot:  o.Mainroot,
 		Branch:    branch,
 		Base:      strings.TrimSpace(refOrHead(o.Ref)),

@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"os"
 	"pix/host/cli"
+	"pix/host/inference"
 	"pix/host/pixhome"
 	"pix/host/stack"
 	"pix/host/workflow/launch"
 	"pix/host/workflow/task"
+	"pix/host/workspace"
 	"strings"
 )
 
@@ -62,6 +64,8 @@ func taskRepo() (mainroot, stateRoot string, err error) {
 	return mainroot, home.StateTasks, nil
 }
 
+func taskStackID() (string, error) { return stack.Current() }
+
 func taskProbe() func(string) task.SandboxDisposition {
 	env := defaultShellEnv()
 	return func(name string) task.SandboxDisposition {
@@ -82,6 +86,7 @@ func taskProbe() func(string) task.SandboxDisposition {
 type taskNewCmd struct {
 	Name        string   `arg:"" help:"Task name."`
 	From        string   `help:"Branch or ref to create the task from."`
+	Env         string   `help:"Use this environment for the task." placeholder:"NAME"`
 	Worktree    bool     `help:"Use a linked worktree instead of a clone."`
 	Clone       bool     `help:"Use a local clone (default)."`
 	Passthrough []string `arg:"" optional:"" passthrough:"" help:"Args after -- forwarded to the launched pi session."`
@@ -127,42 +132,79 @@ func taskNew(d *cli.Deps, c *taskNewCmd) error {
 	if err != nil {
 		return err
 	}
+	stackID, err := taskStackID()
+	if err != nil {
+		return err
+	}
+	selection, _, err := resolveRunEnvironment(c.Env)
+	if err != nil {
+		return err
+	}
+	// A task must have a model before reserving a checkout. The ordinary run
+	// path repeats its trust, key and model checks at launch.
+	cfg, _, err := workspace.LoadResolvedConfig()
+	if err != nil {
+		return err
+	}
+	cfg, err = launch.EffectiveInferenceConfig(cfg, selection.Sidecar)
+	if err != nil {
+		return err
+	}
+	selectedModel, _ := launch.SelectSessionModel("", selection.Sidecar)
+	keyless := inference.KeylessModel(cfg, selectedModel) || (selectedModel == "" && inference.KeylessInference(cfg))
+	if !keyless && launch.RefusesLaunch(launch.ProbeModelKeys(defaultShellEnv())) {
+		return fmt.Errorf("task not created: no model provider is configured for this PIX_HOME; run `pix setup` or choose a configured environment with `pix task new NAME --env NAME`")
+	}
+	model, _, err := resolveRunModel("", selection.Sidecar, defaultShellEnv())
+	if err != nil {
+		return fmt.Errorf("task not created: %w", err)
+	}
+	if !inference.AllowsModel(cfg, inference.RuntimeModelID(cfg, model)) {
+		return fmt.Errorf("task not created: model %q is not available through the configured inference backends", model)
+	}
 	if task.HasSubmodules(mainroot) {
 		fmt.Fprintln(d.Err, "note: submodules are not auto-initialized. "+
 			"Run `git submodule update --init` in the sandbox and add submodule remotes to the network allowlist.")
 	}
 	m, err := task.New(task.NewOptions{
-		StateRoot: stateRoot, Mainroot: mainroot,
-		Name: c.Name, Ref: c.From, Mechanism: taskNewMechanism(c.Worktree),
+		StateRoot: stateRoot, Mainroot: mainroot, StackID: stackID,
+		Name: c.Name, Env: selection.Name, Ref: c.From, Mechanism: taskNewMechanism(c.Worktree),
 	})
 	if err != nil {
 		return err
 	}
-	co, err := task.Path(stateRoot, mainroot, c.Name)
+	co, err := task.Path(stateRoot, mainroot, c.Name, stackID)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(d.Err, "pix: task %q ready at %s (branch %s, sandbox %s)\n", c.Name, co, m.Branch, m.Sandbox)
 	runArgv := []string{co, "--name", m.Sandbox}
+	if m.Env != "" {
+		runArgv = append(runArgv, "--env", m.Env)
+	}
 	if len(passthrough) > 0 {
 		runArgv = append(append(runArgv, "--"), passthrough...)
 	}
 	return dispatchRun(d, runArgv)
 }
 
-// resolveTaskTarget resolves an existing task NAME to the two facts a launch
-// needs: its checkout directory and its sandbox name. Shared with `pix run
+// resolveTaskTarget resolves an existing task NAME to the checkout, sandbox,
+// and environment selected at creation. Shared with `pix run
 // --task`, which fills them straight into RunOpts.
-func resolveTaskTarget(name string) (dir, sandboxName string, err error) {
+func resolveTaskTarget(name string) (dir, sandboxName, envName string, err error) {
 	mainroot, stateRoot, err := taskRepo()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	co, m, err := task.Resolve(stateRoot, mainroot, name)
+	stackID, err := taskStackID()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return co, m.Sandbox, nil
+	co, m, err := task.Resolve(stateRoot, mainroot, name, stackID)
+	if err != nil {
+		return "", "", "", err
+	}
+	return co, m.Sandbox, m.Env, nil
 }
 
 type taskListRow struct {
@@ -191,7 +233,11 @@ func taskLs(d *cli.Deps, jsonOut bool) error {
 	if err != nil {
 		return err
 	}
-	names, err := task.SandboxNames(stateRoot, mainroot)
+	stackID, err := taskStackID()
+	if err != nil {
+		return err
+	}
+	names, err := task.SandboxNames(stateRoot, mainroot, stackID)
 	if err != nil {
 		return err
 	}
@@ -200,13 +246,13 @@ func taskLs(d *cli.Deps, jsonOut bool) error {
 	for _, n := range names {
 		dispositions[n] = probe(n)
 	}
-	entries, err := task.List(stateRoot, mainroot, dispositions)
+	entries, err := task.List(stateRoot, mainroot, stackID, dispositions)
 	if err != nil {
 		return err
 	}
 	var rows []taskListRow
 	for _, e := range entries {
-		co, _ := task.Path(stateRoot, mainroot, e.Meta.Name)
+		co, _ := task.Path(stateRoot, mainroot, e.Meta.Name, stackID)
 		if e.Unreadable != "" {
 			rows = append(rows, taskListRow{Name: e.Meta.Name, Unreadable: e.Unreadable, WouldRefuse: true})
 			continue
@@ -252,7 +298,11 @@ func taskPath(d *cli.Deps, name string) error {
 	if err != nil {
 		return err
 	}
-	co, err := task.Path(stateRoot, mainroot, name)
+	stackID, err := taskStackID()
+	if err != nil {
+		return err
+	}
+	co, err := task.Path(stateRoot, mainroot, name, stackID)
 	if err != nil {
 		return err
 	}
@@ -272,7 +322,11 @@ func taskRm(d *cli.Deps, name string, force bool) error {
 	if err != nil {
 		return err
 	}
-	co, m, err := task.Resolve(stateRoot, mainroot, name)
+	stackID, err := taskStackID()
+	if err != nil {
+		return err
+	}
+	co, m, err := task.Resolve(stateRoot, mainroot, name, stackID)
 	if err != nil {
 		return err
 	}
@@ -303,15 +357,8 @@ func taskRm(d *cli.Deps, name string, force bool) error {
 		return err
 	}
 	if disposition != task.SandboxAbsent {
-		// m.Sandbox is a RECORDED name: whichever PIX_HOME created this task
-		// wrote it. On a host where two stacks coexist that may be another
-		// stack's sandbox, and the forced seam alone would happily remove it
-		// (it can only check "is it pix-*"). Validate against THIS stack
-		// first, so `pix task rm` can never reach outside its own namespace.
-		stackID, serr := stack.Current()
-		if serr != nil {
-			return fmt.Errorf("could not resolve this pix stack's identity; leaving %s and the checkout intact: %w", m.Sandbox, serr)
-		}
+		// Metadata hardening re-derives m.Sandbox for this stack, and the
+		// removal seam verifies the namespace again before touching sbx.
 		if err := launch.RemoveScopedPixSandbox(defaultShellEnv(), stackID, m.Sandbox); err != nil {
 			return fmt.Errorf("could not remove sandbox %s; leaving the checkout intact: %w", m.Sandbox, err)
 		}

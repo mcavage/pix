@@ -30,7 +30,7 @@ type Entry struct {
 // cleanly (Meta.Sandbox populated, ready for a caller to probe); unreadable
 // holds a stub Entry for every task whose meta.json couldn't be trusted or
 // parsed at all.
-func readMetas(stateRoot, mainroot string) (metas []Meta, unreadable []Entry, err error) {
+func readMetas(stateRoot, mainroot, stackID string) (metas []Meta, unreadable []Entry, err error) {
 	repoDir := RepoDir(mainroot)
 	repokey := RepoKey(mainroot)
 	metaDir := filepath.Join(stateRoot, repoDir, "meta")
@@ -52,7 +52,7 @@ func readMetas(stateRoot, mainroot string) (metas []Meta, unreadable []Entry, er
 			unreadable = append(unreadable, Entry{Meta: Meta{Name: name}, Unreadable: fmt.Sprintf("unreadable metadata: %v", rerr)})
 			continue
 		}
-		m, herr := HardenMeta(m, mainroot, repokey, name)
+		m, herr := HardenMeta(m, mainroot, repokey, name, stackID)
 		if herr != nil {
 			unreadable = append(unreadable, Entry{Meta: m, Unreadable: herr.Error()})
 			continue
@@ -68,8 +68,8 @@ func readMetas(stateRoot, mainroot string) (metas []Meta, unreadable []Entry, er
 // entries). It probes nothing itself: a caller uses it to learn which
 // sandbox names to probe, THEN builds the plain SandboxDisposition map List
 // takes, rather than handing List a callback to invoke on its own schedule.
-func SandboxNames(stateRoot, mainroot string) ([]string, error) {
-	metas, _, err := readMetas(stateRoot, mainroot)
+func SandboxNames(stateRoot, mainroot, stackID string) ([]string, error) {
+	metas, _, err := readMetas(stateRoot, mainroot, stackID)
 	if err != nil {
 		return nil, err
 	}
@@ -88,8 +88,8 @@ func SandboxNames(stateRoot, mainroot string) ([]string, error) {
 // SandboxUnknown, which — by RemoveGuard's fail-safe rule — always predicts
 // WouldRefuse=true; callers that want an accurate prediction must populate
 // every name SandboxNames reported.
-func List(stateRoot, mainroot string, dispositions map[string]SandboxDisposition) ([]Entry, error) {
-	metas, out, err := readMetas(stateRoot, mainroot)
+func List(stateRoot, mainroot, stackID string, dispositions map[string]SandboxDisposition) ([]Entry, error) {
+	metas, out, err := readMetas(stateRoot, mainroot, stackID)
 	if err != nil {
 		return nil, err
 	}
