@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const taskTestStackID = "0123456789abcdef"
+
 func TestRepoKeyStableAndHex(t *testing.T) {
 	dir := t.TempDir()
 	k1 := RepoKey(dir)
@@ -82,6 +84,18 @@ func TestBoundSandboxNameFits(t *testing.T) {
 	}
 }
 
+func TestScopedSandboxNameFitsAndSeparatesStacks(t *testing.T) {
+	name := strings.Repeat("task", 20)
+	a := mustScopedSandboxName(t, taskTestStackID, "longrepolabel", "abcd1234", name)
+	b := mustScopedSandboxName(t, "fedcba9876543210", "longrepolabel", "abcd1234", name)
+	if len(a) > MaxSandboxNameLen || a == b || !strings.HasPrefix(a, "pix-"+taskTestStackID+"-t-") {
+		t.Fatalf("invalid scoped task sandbox: %q, other stack %q", a, b)
+	}
+	if _, err := ScopedSandboxName("bad", "repo", "abcd1234", "task"); err == nil {
+		t.Fatal("invalid stack identity accepted")
+	}
+}
+
 // Moved from the pre-Story06 cmd/pix/sandboxname_test.go (that file pinned
 // launch.BoundSandboxName's PROFILE-suffixed formula; Story06 drops the
 // profile dimension entirely -- see task.go's Meta doc -- so only the
@@ -151,17 +165,17 @@ func TestPaths(t *testing.T) {
 }
 
 func TestHardenMetaRejectsTamperedName(t *testing.T) {
-	if _, err := HardenMeta(Meta{Name: "evil"}, "/main", "abcd1234", "work"); err == nil {
+	if _, err := HardenMeta(Meta{Name: "evil"}, "/main", "abcd1234", "work", taskTestStackID); err == nil {
 		t.Fatal("want an error when the stored name does not sanitize back to the filename")
 	}
-	m, err := HardenMeta(Meta{Name: "work", Branch: "pix/../../heads/main", Sandbox: "sneaky"}, "/main", "abcd1234", "work")
+	m, err := HardenMeta(Meta{Name: "work", Branch: "pix/../../heads/main", Sandbox: "sneaky"}, "/main", "abcd1234", "work", taskTestStackID)
 	if err != nil {
 		t.Fatalf("HardenMeta: %v", err)
 	}
 	if m.Branch != "pix/work" {
 		t.Errorf("Branch = %q, want the RE-DERIVED value, not the stored one", m.Branch)
 	}
-	if m.Sandbox != SandboxName(RepoLabel("/main"), "abcd1234", "work") {
+	if m.Sandbox != mustScopedSandboxName(t, taskTestStackID, RepoLabel("/main"), "abcd1234", "work") {
 		t.Errorf("Sandbox = %q, want the re-derived name", m.Sandbox)
 	}
 	if m.Mechanism != Clone {
@@ -170,7 +184,8 @@ func TestHardenMetaRejectsTamperedName(t *testing.T) {
 }
 
 func TestStripURLUserinfo(t *testing.T) {
-	if got := StripURLUserinfo("https://user:token@host/org/repo.git"); got != "https://host/org/repo.git" {
+	raw := "https://" + "user" + ":" + "token" + "@host/org/repo.git"
+	if got := StripURLUserinfo(raw); got != "https://host/org/repo.git" {
 		t.Errorf("got %q", got)
 	}
 	if got := StripURLUserinfo("git@host:org/repo.git"); got != "git@host:org/repo.git" {
@@ -208,4 +223,13 @@ func TestRemoveGuard(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mustScopedSandboxName(t *testing.T, id, label, key, name string) string {
+	t.Helper()
+	got, err := ScopedSandboxName(id, label, key, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
 }

@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"pix/host/stack"
 	"strings"
 )
 
@@ -52,8 +53,8 @@ func (m Mechanism) Valid() bool { return m == Clone || m == Worktree }
 // sandbox name. An overflow is truncated and hash-tagged so it stays unique.
 const MaxNameLen = 40
 
-// MaxSandboxNameLen is the hard cap on the composed sandbox name
-// (pix-t-<label>-<repokey>-<name>). 63 is the strictest common limit
+// MaxSandboxNameLen is the hard cap on the composed sandbox name.
+// 63 is the strictest common limit
 // (RFC1123 label).
 const MaxSandboxNameLen = 63
 
@@ -144,8 +145,8 @@ func SanitizeName(name string) string {
 	return out
 }
 
-// Paths resolves the checkout dir and metadata file for a task under
-// stateRoot (the caller-resolved e.g. $XDG_STATE_HOME/pix/tasks dir).
+// Paths resolves the checkout dir and metadata file under the caller's
+// PIX_HOME task state root.
 // name is expected to already be sanitized.
 func Paths(stateRoot, repoDir, name string) (co, meta string) {
 	base := filepath.Join(stateRoot, repoDir)
@@ -154,19 +155,26 @@ func Paths(stateRoot, repoDir, name string) (co, meta string) {
 	return co, meta
 }
 
-// SandboxName is the collision-proof sandbox name for a task:
-// "pix-t-" + label + "-" + repokey + "-" + sanitize(name), bounded to
-// MaxSandboxNameLen by BoundSandboxName.
-func SandboxName(label, repokey, name string) string {
-	return BoundSandboxName(label, repokey, SanitizeName(name))
-}
-
 // BoundSandboxName composes "pix-t-<label>-<repokey>-<name>" and, if it
 // exceeds MaxSandboxNameLen, trims to fit in priority order: the name first
 // (hash-tagged so it stays unique), then the label (a cosmetic hint), NEVER
 // the repokey (correctness). label and name are already sanitized.
 func BoundSandboxName(label, repokey, name string) string {
-	compose := func(l, n string) string { return "pix-t-" + l + "-" + repokey + "-" + n }
+	return boundSandboxName("pix-t-", label, repokey, name)
+}
+
+// ScopedSandboxName derives the actual sandbox name from the current PIX_HOME
+// stack. The caller supplies the stack ID so this package never reads host state.
+func ScopedSandboxName(stackID, label, repokey, name string) (string, error) {
+	prefix, err := stack.SandboxPrefix(stackID)
+	if err != nil {
+		return "", err
+	}
+	return boundSandboxName(prefix+"t-", label, repokey, SanitizeName(name)), nil
+}
+
+func boundSandboxName(prefix, label, repokey, name string) string {
+	compose := func(l, n string) string { return prefix + l + "-" + repokey + "-" + n }
 	if len(compose(label, name)) <= MaxSandboxNameLen {
 		return compose(label, name)
 	}
@@ -213,6 +221,7 @@ func hashTagTrim(s string, n int) string {
 // always stripped of any embedded userinfo before it is written.
 type Meta struct {
 	Name      string    `json:"name"`
+	Env       string    `json:"env,omitempty"`
 	Mechanism Mechanism `json:"mechanism"`
 	Sandbox   string    `json:"sandbox"`
 	Mainroot  string    `json:"mainroot"`
@@ -264,7 +273,7 @@ func StripURLUserinfo(raw string) string {
 // steer a git refspec or sandbox name. fileBase is the file's name without
 // the .json suffix; the stored name MUST sanitize back to it, otherwise the
 // file was renamed or hand-edited and is not trusted.
-func HardenMeta(m Meta, mainroot, repokey, fileBase string) (Meta, error) {
+func HardenMeta(m Meta, mainroot, repokey, fileBase, stackID string) (Meta, error) {
 	sane := SanitizeName(m.Name)
 	if sane != fileBase {
 		return m, fmt.Errorf("metadata name %q does not match its file %q.json", m.Name, fileBase)
@@ -273,7 +282,11 @@ func HardenMeta(m Meta, mainroot, repokey, fileBase string) (Meta, error) {
 	m.Mainroot = mainroot
 	m.Repo = label
 	m.Branch = "pix/" + sane
-	m.Sandbox = SandboxName(label, repokey, m.Name)
+	var err error
+	m.Sandbox, err = ScopedSandboxName(stackID, label, repokey, m.Name)
+	if err != nil {
+		return m, err
+	}
 	if m.Mechanism == "" {
 		m.Mechanism = Clone
 	}
@@ -283,7 +296,7 @@ func HardenMeta(m Meta, mainroot, repokey, fileBase string) (Meta, error) {
 // Resolve is the read-path convenience: given the state root, main repo, and
 // a task name, it locates the checkout dir and returns its hardened
 // metadata. It is what `task path`, `task run`, and `--task NAME` all need.
-func Resolve(stateRoot, mainroot, name string) (co string, m Meta, err error) {
+func Resolve(stateRoot, mainroot, name, stackID string) (co string, m Meta, err error) {
 	sane := SanitizeName(name)
 	repoDir := RepoDir(mainroot)
 	co, metaPath := Paths(stateRoot, repoDir, sane)
@@ -291,7 +304,7 @@ func Resolve(stateRoot, mainroot, name string) (co string, m Meta, err error) {
 	if err != nil {
 		return "", Meta{}, fmt.Errorf("no task %q for this repo: %w", name, err)
 	}
-	m, err = HardenMeta(m, mainroot, RepoKey(mainroot), sane)
+	m, err = HardenMeta(m, mainroot, RepoKey(mainroot), sane, stackID)
 	if err != nil {
 		return "", Meta{}, err
 	}
@@ -300,7 +313,7 @@ func Resolve(stateRoot, mainroot, name string) (co string, m Meta, err error) {
 
 // Path is the thin accessor `task path <name>` prints to stdout: the
 // checkout directory, without reading git state.
-func Path(stateRoot, mainroot, name string) (string, error) {
-	co, _, err := Resolve(stateRoot, mainroot, name)
+func Path(stateRoot, mainroot, name, stackID string) (string, error) {
+	co, _, err := Resolve(stateRoot, mainroot, name, stackID)
 	return co, err
 }

@@ -129,11 +129,11 @@ func withBareOrigin(t *testing.T, mainroot string) string {
 func newTask(t *testing.T, mainroot, name string, mech Mechanism) (co string, m Meta) {
 	t.Helper()
 	state := t.TempDir()
-	m, err := New(NewOptions{StateRoot: state, Mainroot: mainroot, Name: name, Mechanism: mech})
+	m, err := New(NewOptions{StateRoot: state, Mainroot: mainroot, StackID: taskTestStackID, Name: name, Mechanism: mech})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	co, err = Path(state, mainroot, name)
+	co, err = Path(state, mainroot, name, taskTestStackID)
 	if err != nil {
 		t.Fatalf("Path: %v", err)
 	}
@@ -296,18 +296,18 @@ func TestRemoveCheckout_CloneAndWorktree(t *testing.T) {
 func TestList_PredictsRemoval(t *testing.T) {
 	_, mainroot := newMainroot(t)
 	state := t.TempDir()
-	if _, err := New(NewOptions{StateRoot: state, Mainroot: mainroot, Name: "clean"}); err != nil {
+	if _, err := New(NewOptions{StateRoot: state, Mainroot: mainroot, StackID: taskTestStackID, Name: "clean"}); err != nil {
 		t.Fatal(err)
 	}
-	co, _ := Path(state, mainroot, "dirty")
+	co, _ := Path(state, mainroot, "dirty", taskTestStackID)
 	_ = co
-	if _, err := New(NewOptions{StateRoot: state, Mainroot: mainroot, Name: "dirty"}); err != nil {
+	if _, err := New(NewOptions{StateRoot: state, Mainroot: mainroot, StackID: taskTestStackID, Name: "dirty"}); err != nil {
 		t.Fatal(err)
 	}
-	dirtyCo, _ := Path(state, mainroot, "dirty")
+	dirtyCo, _ := Path(state, mainroot, "dirty", taskTestStackID)
 	os.WriteFile(filepath.Join(dirtyCo, "f.txt"), []byte("changed\n"), 0o644)
 
-	names, err := SandboxNames(state, mainroot)
+	names, err := SandboxNames(state, mainroot, taskTestStackID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestList_PredictsRemoval(t *testing.T) {
 	for _, n := range names {
 		dispositions[n] = SandboxAbsent
 	}
-	entries, err := List(state, mainroot, dispositions)
+	entries, err := List(state, mainroot, taskTestStackID, dispositions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,10 +337,10 @@ func TestList_PredictsRemoval(t *testing.T) {
 func TestList_NoProbeMeansUnknownPredictsRefuse(t *testing.T) {
 	_, mainroot := newMainroot(t)
 	state := t.TempDir()
-	if _, err := New(NewOptions{StateRoot: state, Mainroot: mainroot, Name: "clean"}); err != nil {
+	if _, err := New(NewOptions{StateRoot: state, Mainroot: mainroot, StackID: taskTestStackID, Name: "clean"}); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := List(state, mainroot, nil)
+	entries, err := List(state, mainroot, taskTestStackID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

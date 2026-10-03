@@ -32,7 +32,7 @@
       "_env_setup_no_personal_interview_note": "`pix setup --env NAME` now returns from setupCredentials right after the refs file is established, so a work environment with its own authenticated backends is never asked for a public-vendor 1Password key and is never told it has \"no model provider key configured\" \u2014 a correctness fix to what setup asks a human, with the reasoning kept next to the guard. Rebaselined to the exact current values (prod_loc +8).",
       "_session_resume_fix_note": "Bare pix -- passthrough routes to run with the implicit-launch TTY guard; exact four-line growth.",
       "_memory_registration_error_note": "Pix setup now stops on an unreadable sbx MCP listing instead of guessing absence and attempting an add. Failed adds discard the expected SSRF warning, show the underlying sbx diagnostic, and redact repeated memory URLs or token text. Explicit setup continues environment connection hooks after memory registration alone fails, then returns that failure without claiming readiness. Exact command production growth: 36 lines.",
-      "prod_loc": 6179,
+      "prod_loc": 6217,
       "_kit_v3_note": "One additional launcher line couples the local Buildx kit source to make load's marker; without both, launch uses the checked-in v3 kit. Exact measured budget, no slack.",
       "_theme_note": "Global theme persistence adds four command-layer lines: read the personal theme pointer, and force the pinned host safety palette for --dev. Exact measured growth; no new command, package edge, export, or global.",
       "_setup_download_progress_note": "Restore optional provider/Parallel reference onboarding, retain environment-owned auth, expose the full shipped model picker, and announce image pulls. Real setup caller tests cover skips, reruns, credential handling and progress. Exact measured production LOC; no slack.",
@@ -64,7 +64,8 @@
       "_credential_isolation_note": "Exact measured growth for per-integration reference filtering at Gateway process start and the environment gateway label during setup. Tests execute the compiled Gateway argv with a broken unrelated provider reference, exercise reference rotation and stdin, and verify keyless model setup. No additional registry, daemon, credential store, or budget slack.",
       "_host_tools_note": "Exact measured capability growth: Gateway-owned Pix environment tools and explicit --dev host jobs, with fixed launch authority, live instance/holder checks, bounded execution and output, cancellation, and scoped reset. Tests drive the compiled CLI through MCP and reject privilege escalation and stale instances. No second registry or resident supervisor.",
       "_github_setup_note": "Offer the already-supported GitHub credential during optional setup. Exact measured growth; tests cover quoted references, missing-only reruns, skips, private storage, and the existing sandbox-scoped GitHub credential path.",
-      "_env_upgrade_note": "Adds clean tracking checkout validation and fast-forward upgrade through existing setup. Exact measured production growth: 71 lines; no new dependency or package."
+      "_env_upgrade_note": "Adds clean tracking checkout validation and fast-forward upgrade through existing setup. Exact measured production growth: 71 lines; no new dependency or package.",
+      "_task_model_env_note": "Task creation resolves its environment and model before reserving a checkout, records that environment for later runs, and derives the sandbox name from the current PIX_HOME stack. It now distinguishes a missing default environment from a selected environment needing model setup. Exact measured growth; real CLI tests cover both refusals and keyless environment reuse."
     },
     "pix/host/config": {
       "_prod_loc_note": "Sparse PIX_HOME config serialization adds an explicit disk shape so applied defaults and inert empty tables never appear as authored choices; the memory port moved to .state/memory/port. QA F5: config.Path/StateDir/DataDir/configDir now delegate to pixhome.Dir() (PIX_HOME) instead of re-deriving PIX_CONFIG/XDG_*/~/.config fallbacks inline \u2014 net prod_loc SHRANK (fewer resolution branches) but config now imports pixhome (edges 0 -> 1), closing the last executable-state escape. Coexistence docs sync: OpRefsMentalModel/OpRefsTemplate reworded to drop stale pack/host-global-gateway prose and explain the ref feeds a per-sandbox scoped credential OR a declared MCP server's own host command, +3 prod_loc, no behavior change.",
@@ -522,7 +523,7 @@
       "_host_tools_note": "Exact measured capability growth: Gateway-owned Pix environment tools and explicit --dev host jobs, with fixed launch authority, live instance/holder checks, bounded execution and output, cancellation, and scoped reset. Tests drive the compiled CLI through MCP and reject privilege escalation and stale instances. No second registry or resident supervisor."
     },
     "pix/host/workflow/task": {
-      "prod_loc": 833,
+      "prod_loc": 853,
       "test_loc": 604,
       "exports": 42,
       "exports_used_externally": 12,
@@ -530,11 +531,12 @@
       "streams": 0,
       "globals": 10,
       "init": 0,
-      "edges": 0,
+      "edges": 1,
       "parser_families": {
         "core": 5,
         "test": 2
-      }
+      },
+      "_stack_scoped_task_note": "Task sandbox names are now bounded and stack-scoped at creation and on metadata read, preventing rejected task launches and cross-home collisions. The one new dependency is the foundation stack naming package. Exact measured growth."
     },
     "pix/host/workspace": {
       "prod_loc": 346,

@@ -550,8 +550,11 @@ pix task path NAME
 pix task rm NAME [--force]
 ```
 
-`task new` resolves the source commit, clones, creates `pix/<name>`, writes
-metadata, and returns without implicitly changing the caller's shell.
+`task new` checks the selected environment's model setup before creating a
+checkout. It then resolves the source commit, clones, creates `pix/<name>`,
+records the environment, and launches the task sandbox. If the model is not
+configured, the command leaves no checkout or branch behind. Use `--env NAME`
+to select an environment for the task; later `pix run --task NAME` reuses it.
 `task path NAME` prints only the absolute checkout path, so a shell can `cd`
 without parsing human output:
 

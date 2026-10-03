@@ -63,6 +63,9 @@ v1 configuration and removed commands are not translated automatically. See
 
 ### Environments and onboarding
 
+- `pix task new --env NAME` checks the chosen environment's model before
+  creating a checkout, records that environment for later task runs, and uses
+  a sandbox name scoped to the current Pix home.
 - One host command, `pix`, launches the pinned agent image through native sbx
   environments. The pack system, `pix-host`, plugins, resident supervisor,
   custom memory RPC and scored model router are removed.

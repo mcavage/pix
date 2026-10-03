@@ -114,11 +114,14 @@ func (c *runCmd) opts() (launch.RunOpts, error) {
 	// and this fills the ordinary DIR + --name shape, so no sandbox-lifecycle code is
 	// duplicated here. An explicit --name still wins.
 	if c.Task != "" {
-		dir, sandboxName, err := resolveTaskTarget(c.Task)
+		dir, sandboxName, envName, err := resolveTaskTarget(c.Task)
 		if err != nil {
 			return o, err
 		}
 		o.Workspace = dir
+		if o.Env == "" {
+			o.Env = envName
+		}
 		if o.Name == "" {
 			o.Name = sandboxName
 		}
