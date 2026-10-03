@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"pix/host/cli"
+	"pix/host/config"
 	"pix/host/workflow/task"
 )
 
@@ -49,7 +50,7 @@ func TestTaskNewMissingModelDoesNotCreateCheckout(t *testing.T) {
 	if code := dispatch([]string{"task", "new", "needs-model"}, d); code == 0 {
 		t.Fatalf("task new unexpectedly succeeded: %s%s", out.String(), errb.String())
 	}
-	if !strings.Contains(errb.String(), "task not created: no model provider") || strings.Contains(errb.String(), "ready at") {
+	if !strings.Contains(errb.String(), "no default environment is selected") || !strings.Contains(errb.String(), "pix env default NAME") || strings.Contains(errb.String(), "ready at") {
 		t.Fatalf("missing-model result was not a pre-create refusal: %s", errb.String())
 	}
 	mainroot, state, err := taskRepo()
@@ -65,6 +66,21 @@ func TestTaskNewMissingModelDoesNotCreateCheckout(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(state, task.RepoDir(mainroot), "co", "needs-model")); !os.IsNotExist(err) {
 		t.Fatalf("task checkout was reserved before the provider preflight: %v", err)
+	}
+}
+
+func TestTaskNewSelectedEnvironmentWithoutModelKeyNamesSetup(t *testing.T) {
+	taskTestRepo(t)
+	home := keylessEnvHome(t, "work", "")
+	if err := config.SetDefaultEnvironmentAt(home, "work"); err != nil {
+		t.Fatal(err)
+	}
+	d, out, errb := taskTestDeps(t, home)
+	if code := dispatch([]string{"task", "new", "needs-setup"}, d); code == 0 {
+		t.Fatalf("task new unexpectedly succeeded: %s%s", out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), `environment "work" has no configured model provider key`) || !strings.Contains(errb.String(), "pix setup --env work") || strings.Contains(errb.String(), "ready at") {
+		t.Fatalf("selected environment's remedy was not specific: %s", errb.String())
 	}
 }
 

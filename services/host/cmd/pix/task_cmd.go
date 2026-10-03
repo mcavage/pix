@@ -153,7 +153,10 @@ func taskNew(d *cli.Deps, c *taskNewCmd) error {
 	selectedModel, _ := launch.SelectSessionModel("", selection.Sidecar)
 	keyless := inference.KeylessModel(cfg, selectedModel) || (selectedModel == "" && inference.KeylessInference(cfg))
 	if !keyless && launch.RefusesLaunch(launch.ProbeModelKeys(defaultShellEnv())) {
-		return fmt.Errorf("task not created: no model provider is configured for this PIX_HOME; run `pix setup` or choose a configured environment with `pix task new NAME --env NAME`")
+		if selection.Name == "" {
+			return fmt.Errorf("task not created: no default environment is selected and no model provider key is configured; select an existing environment with `pix env default NAME`, then set it up with `pix setup --env NAME`")
+		}
+		return fmt.Errorf("task not created: environment %q has no configured model provider key; run `pix setup --env %s`", selection.Name, selection.Name)
 	}
 	model, _, err := resolveRunModel("", selection.Sidecar, defaultShellEnv())
 	if err != nil {
