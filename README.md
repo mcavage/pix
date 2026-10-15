@@ -1,5 +1,10 @@
 # Pix
 
+This branch also contains the [marsh-native Pix Kit prototype](marsh/README.md):
+upstream Pi and public skills/UI on marsh, without the legacy launcher or private
+business connections. The existing Pix experience documented below is unchanged;
+the new Kit is not yet a published replacement release.
+
 An AI workspace for coding, research, and everyday work. Pix runs the
 [Pi agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) in a
 Docker Sandbox with your chosen models, reusable skills, and optional account
