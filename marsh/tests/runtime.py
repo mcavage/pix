@@ -20,6 +20,11 @@ ROOT=Path(__file__).resolve().parents[2]
 BASE='docker.io/mcavage/marsh-pi@sha256:02f99d938eb27cf0b484cb2577373e91ec16061734e76baad6944c5affe5a4f6'
 
 def rpc(image, home, commands):
+    # BuildKit's private cache is not the Docker Engine image store. A cold
+    # engine may need this pull; keep its progress out of Pi's stderr channel.
+    present=subprocess.run(['docker','image','inspect',image],capture_output=True)
+    if present.returncode:
+        subprocess.run(['docker','pull','--platform','linux/arm64',image],check=True)
     args=['docker','run','--rm','-i','--user',f'{os.getuid()}:{os.getgid()}',
           '-w','/home/tester','-v',f'{home}:/home/tester',
           '-e','MARSH_SELECTED_HOME=/home/tester','-e','SBX_CRED_OPENAI_MODE=apikey',
