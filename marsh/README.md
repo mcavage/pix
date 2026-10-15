@@ -201,3 +201,10 @@ and writes a `pix` → immutable registry digest mapping. Install that exact dig
 not the moving preview tag, and set the optional Pix ACP entry's workload identity
 to the same digest. A preview is not a stable legacy Pix release or a promise
 that the user's private services have authenticated successfully.
+
+The existing `publish` workflow also has an explicit `marsh_preview` manual mode.
+It uses the repository's existing Docker Hub release credentials, runs the public
+export/runtime gates on an ARM64 runner, and publishes only a unique `marsh-pix`
+preview tag. All legacy release roots are skipped in that mode: no main-branch
+version bump, legacy image/release, or tap change. Ordinary legacy publication
+remains the default when that input is false.

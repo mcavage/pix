@@ -37,11 +37,16 @@ run-name: Publish — ${{ github.event.pull_request.title || github.ref_name }}
 on:
   push:
     branches: ["main"]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      marsh_preview:
+        description: Publish only the public marsh-native Pix preview (no legacy releases/tap changes)
+        type: boolean
+        default: false
 
 # Serialize runs so version bumps land in order and the commit-back never races.
 concurrency:
-  group: publish
+  group: ${{ inputs.marsh_preview && format('marsh-pix-preview-{0}', github.ref) || 'publish' }}
   cancel-in-progress: false
 
 permissions:
@@ -57,10 +62,62 @@ env:
   MEMORY_IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pix-memory
 
 jobs:
+  marsh-preview:
+    name: verify and publish public marsh-pix preview
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.marsh_preview }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Public export boundary and preservation checks
+        run: python3 -m unittest discover -s marsh/tests -v
+      - name: Real upstream Pi, payload/notice verifier and model-free PTY checks
+        run: python3 marsh/tests/runtime.py
+      - name: Fetch the pinned native publisher (public source, no private overlay)
+        run: |
+          set -eu
+          git clone --filter=blob:none --no-checkout --depth 1 \
+            --branch feat/public-pix-harness-20261015 \
+            https://github.com/mcavage/marsh.git "$RUNNER_TEMP/marsh-publisher"
+          git -C "$RUNNER_TEMP/marsh-publisher" sparse-checkout set scripts crates/marsh-contracts/src
+          git -C "$RUNNER_TEMP/marsh-publisher" checkout --detach 6b02e28cc498ea90b378f625c7a2cf4ed3a99c75
+          python3 -m venv "$RUNNER_TEMP/publisher-venv"
+          "$RUNNER_TEMP/publisher-venv/bin/python" -m pip install \
+            --require-hashes --no-deps --only-binary=:all: \
+            -r "$RUNNER_TEMP/marsh-publisher/scripts/requirements-publish.txt"
+      - name: Log in using the existing release credentials
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish only the verified public preview
+        run: |
+          set -eu
+          tag="preview-${GITHUB_RUN_ID}-g$(git rev-parse --short=8 HEAD)"
+          "$RUNNER_TEMP/publisher-venv/bin/python" marsh/publish.py \
+            --publisher "$RUNNER_TEMP/marsh-publisher/scripts/publish-kits.py" \
+            --python "$RUNNER_TEMP/publisher-venv/bin/python" \
+            --output "$RUNNER_TEMP/marsh-pix-publication" \
+            --tag "$tag" --push
+          cat "$RUNNER_TEMP/marsh-pix-publication/commands.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain public input and publication evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marsh-pix-preview-${{ github.run_id }}
+          path: ${{ runner.temp }}/marsh-pix-publication
+          if-no-files-found: ignore
+          retention-days: 14
   # The pre-publish legal gate, as a job in THIS graph (not a workflow racing
   # this one): full-history secret scan, third-party notices + license-class
   # gate, repo-tree SBOM. `build` and `merge` both wait on it.
   legal-gate:
+    if: ${{ !inputs.marsh_preview }}
     name: pre-publish legal gate
     uses: ./.github/workflows/legal.yml
     # A called workflow inherits NO secrets by default. The SBOM job needs the
@@ -70,10 +127,12 @@ jobs:
     secrets: inherit
 
   test-gate:
+    if: ${{ !inputs.marsh_preview }}
     name: pre-publish test gate
     uses: ./.github/workflows/test.yml
 
   version:
+    if: ${{ !inputs.marsh_preview }}
     name: compute version
     runs-on: ubuntu-latest
     outputs:
@@ -140,6 +199,7 @@ jobs:
           echo "Publishing Pix $version (base: $base)"
 
   patch-smoke:
+    if: ${{ !inputs.marsh_preview }}
     uses: ./.github/workflows/patch-smoke.yml
 
   build:

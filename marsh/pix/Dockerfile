@@ -6,7 +6,8 @@ COPY --chmod=0644 PUBLIC-SOURCES.json /usr/local/share/licenses/pix/inputs.json
 COPY --chmod=0644 verify-public.py /usr/local/share/licenses/pix/verify-public.py
 USER root
 # Recheck the actual derivative, not just the inherited base's old receipt.
-RUN python3 /usr/local/share/licenses/marsh-dhi/verify.py --root / --adapter pi \
+RUN chmod 0755 /usr/local/share/licenses/pix \
+ && python3 /usr/local/share/licenses/marsh-dhi/verify.py --root / --adapter pi \
       --receipt-dir /usr/local/share/licenses/pix/base-check >/dev/null \
  && python3 /usr/local/share/licenses/pix/verify-public.py \
       --receipt /usr/local/share/licenses/pix/public-check.json

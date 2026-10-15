@@ -20,7 +20,8 @@ ROOT=Path(__file__).resolve().parents[2]
 BASE='docker.io/mcavage/marsh-pi@sha256:02f99d938eb27cf0b484cb2577373e91ec16061734e76baad6944c5affe5a4f6'
 
 def rpc(image, home, commands):
-    args=['docker','run','--rm','-i','-v',f'{home}:/home/tester',
+    args=['docker','run','--rm','-i','--user',f'{os.getuid()}:{os.getgid()}',
+          '-w','/home/tester','-v',f'{home}:/home/tester',
           '-e','MARSH_SELECTED_HOME=/home/tester','-e','SBX_CRED_OPENAI_MODE=apikey',
           '-e','SBX_CRED_GOOGLE_MODE=apikey','-e','SBX_CRED_ANTHROPIC_MODE=apikey',image,
           '--offline','--mode','rpc','--no-session']
@@ -59,7 +60,8 @@ def rpc(image, home, commands):
 def terminal_check(image, home):
     master,slave=pty.openpty()
     fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',32,120,0,0))
-    process=subprocess.Popen(['docker','run','--rm','-it','-v',f'{home}:/home/tester',
+    process=subprocess.Popen(['docker','run','--rm','-it','--user',f'{os.getuid()}:{os.getgid()}',
+        '-w','/home/tester','-v',f'{home}:/home/tester',
         '-e','MARSH_SELECTED_HOME=/home/tester','-e','SBX_CRED_ANTHROPIC_MODE=apikey',
         '-e','TERM=xterm-256color','-e','COLORTERM=truecolor',image,'--offline','--no-session'],
         stdin=slave,stdout=slave,stderr=slave,start_new_session=True)
