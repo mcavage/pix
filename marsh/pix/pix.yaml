@@ -1,0 +1,57 @@
+# syntax=docker/sandbox-kit:3@sha256:11bb68806aef6a68d45c10c0c3b3dc86c2f794a296b5a933661d9dadf760b753
+schemaVersion: "3"
+displayName: Pix
+description: Upstream Pi, public skills and display-only UI, orchestrated by marsh
+sourceUrl: https://github.com/mcavage/pix
+licenses: [MIT]
+kind: workload
+provides: ["pi@1.2.0", "pi-acp@0.0.34"]
+dockerfile: ./Dockerfile
+capabilities:
+  - type: com.docker.sandbox/sbx@1
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          - api.anthropic.com:443
+          - api.openai.com:443
+          - generativelanguage.googleapis.com:443
+          - registry.npmjs.org:443
+          - pi.dev:443
+  - type: com.docker.sandbox/credential@1
+    optional: true
+    description: Anthropic native API
+    config:
+      service: anthropic
+      phase: runtime
+      apiKey:
+        name: ANTHROPIC_API_KEY
+        proxyManaged: true
+        inject:
+          - {domain: api.anthropic.com, header: x-api-key, format: "%s"}
+  - type: com.docker.sandbox/credential@1
+    optional: true
+    description: OpenAI native API key (not ChatGPT OAuth)
+    config:
+      service: openai
+      phase: runtime
+      apiKey:
+        name: OPENAI_API_KEY
+        proxyManaged: true
+        inject:
+          - {domain: api.openai.com, header: Authorization, format: "Bearer %s"}
+  - type: com.docker.sandbox/credential@1
+    optional: true
+    description: Google Gemini native API
+    config:
+      service: google
+      phase: runtime
+      apiKey:
+        name: GEMINI_API_KEY
+        proxyManaged: true
+        inject:
+          - {domain: generativelanguage.googleapis.com, header: x-goog-api-key, format: "%s"}
+  - type: com.docker.sandbox/agent-context@1
+    config:
+      filename: AGENTS.md
+      contentFile: ./context.md

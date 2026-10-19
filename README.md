@@ -1,5 +1,9 @@
 # Pix
 
+**New: [Pix on marsh](marsh/README.md)** runs Pix as a marsh Kit
+(`docker.io/mcavage/marsh-pix`). The standalone launcher documented below still
+works and will be retired.
+
 An AI workspace for coding, research, and everyday work. Pix runs the
 [Pi agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) in a
 Docker Sandbox with your chosen models, reusable skills, and optional account
