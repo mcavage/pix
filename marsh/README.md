@@ -18,8 +18,8 @@ marsh
 pix
 ```
 
-This needs a marsh with `marsh kit upgrade` (check `marsh kit --help`); on an
-older one, put the digest in `commands.json` instead (see "Build it yourself").
+This needs marsh 0.1.7 or later (`brew upgrade marsh`). On an older marsh, put
+the digest in `commands.json` instead (see "Build it yourself").
 
 `kit install` resolves `stable` to the image it names now and runs exactly
 that. When a new Pix is published, `marsh kit upgrade pix` moves to it;
