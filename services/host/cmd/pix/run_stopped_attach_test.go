@@ -38,6 +38,11 @@ import (
 // capturing that descriptor, not by reading a file the fixture wrote.
 const execChildStdout = "child-stdout-sentinel"
 
+// stoppedFixtureID is the fixture sandbox's sbx instance id. The fixture's
+// `ls --json` emits sbx v0.48+'s bare-array listing, so these tests drive the
+// real attach gate through that shape.
+const stoppedFixtureID = "6f64c399-afc4-493e-bc53-020cd837a241"
+
 // stoppedSbxFixture installs a fake `sbx` on PATH that reports name as an
 // existing, schema-verified sandbox in state, records every invocation's argv
 // NUL-delimited under <dir>/argv.<n>, and makes `exec` print execChildStdout on
@@ -54,10 +59,10 @@ n=$((n + 1))
 echo "$n" > "$dir/seq"
 for a in "$@"; do printf '%s\000' "$a"; done > "$dir/argv.$n"
 case "$1" in
-  --version|version) echo 'sbx version 0.46.0' ;;
+  --version|version) echo 'sbx version 0.49.1' ;;
   ls)
     if [ "$2" = "--json" ]; then
-      echo '[{"name":"` + name + `","state":"` + state + `","instance_id":"inst-1"}]'
+      echo '[{"name":"` + name + `","id":"` + stoppedFixtureID + `","agent":"pix","status":"` + state + `","created_at":"2026-10-21T19:11:57Z","workspaces":["/workspace"]}]'
     else
       echo 'NAME STATUS'
       echo '` + name + ` x ` + state + `'
@@ -209,7 +214,7 @@ func runAttach(t *testing.T, state string, interactive bool, exitCode int, extra
 		t.Fatal(err)
 	}
 	fixture := stoppedSbxFixture(t, name, state, exitCode)
-	seedCreationRecord(t, name, "inst-1")
+	seedCreationRecord(t, name, stoppedFixtureID)
 
 	var out, errb bytes.Buffer
 	d := &cli.Deps{Out: &out, Err: &errb, Interactive: interactive}
@@ -353,7 +358,7 @@ func TestRunStopped_ExitCodeIsTheChildsAndNamesNoKitFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 		stoppedSbxFixture(t, name, tc.state, tc.code)
-		seedCreationRecord(t, name, "inst-1")
+		seedCreationRecord(t, name, stoppedFixtureID)
 
 		var out, errb bytes.Buffer
 		d := &cli.Deps{Out: &out, Err: &errb}

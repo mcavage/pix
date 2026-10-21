@@ -20,7 +20,8 @@
 //     — there is no bypass of stack scoping through an explicit name.
 //   - list.go        — a JSON parser for an `sbx`-style sandbox listing,
 //     against one of two pinned canonical profiles (legacy bare-array,
-//     v0.38 `{"sandboxes": [...]}`): a tri-state State (Running/Stopped/
+//     v0.38 `{"sandboxes": [...]}` or, from sbx v0.48, a bare array of v0.38
+//     rows): a tri-state State (Running/Stopped/
 //     Unknown — never guessed) per row, and an optional (v0.38: required,
 //     UUID-shaped), immutable InstanceID. See "Schema posture" below for
 //     the two profiles and how a row flags identity it cannot vouch for.
@@ -52,12 +53,14 @@
 //
 // There is no single authoritative schema for what an installed `sbx` emits
 // for a sandbox listing across versions, so list.go recognizes exactly two
-// CANONICAL top-level/row profiles, selected once from the top-level shape
-// (unwrapRows) and applied to every row in a listing:
+// CANONICAL top-level/row profiles, selected once per listing from the
+// top-level shape and, for a bare array, whether its rows carry "agent"
+// (unwrapRows), and applied to every row in a listing:
 //
-//   - legacy: a bare JSON array, rows keyed name/state/instance_id (with a
-//     documented set of ALIAS field names — nameKeys/stateKeys/idKeys — for
-//     sbx versions or callers this package has seen use a different spelling).
+//   - legacy: a bare JSON array without "agent" rows, rows keyed
+//     name/state/instance_id (with a documented set of ALIAS field names —
+//     nameKeys/stateKeys/idKeys — for sbx versions or callers this package
+//     has seen use a different spelling).
 //   - v0.38 (`sbx ls --json` on the pinned version — see
 //     docs/upstream/sbx-0.38-noninteractive-rm.md for the other v0.38
 //     behavior change this repo already accounts for): the OBJECT
@@ -82,6 +85,13 @@
 // These must be RFC3339 strings (fractional seconds accepted) and never
 // serve as identity or liveness evidence. See list_v42_test.go and
 // list_v43_test.go.
+//
+// sbx v0.48 emits those same v0.43 rows as a bare array, without the
+// {"sandboxes": [...]} wrapper (its release notes; observed on v0.49.1). A
+// bare array whose every row carries "agent" (a key only this profile
+// requires) is therefore checked against the v0.38 row profile, with all of
+// its strictness; one with no such row stays on the legacy profile, and a mix
+// fails the parse. See list_v49_test.go.
 //
 // Leniency does not imply trust. Under the legacy profile, a row is
 // IdentityVerified only when every field it supplied used the CANONICAL key
