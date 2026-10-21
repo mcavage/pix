@@ -19,7 +19,7 @@ import uuid
 ROOT=Path(__file__).resolve().parents[2]
 BASE='docker.io/mcavage/marsh-pi@sha256:570459f4ec8c65427628d36bfaa870afefb6d058cbcf2e5f2f5df4697960e95a'
 
-def rpc(image, home, commands):
+def rpc(image, home, commands, mounts=()):
     # BuildKit's private cache is not the Docker Engine image store. A cold
     # engine may need this pull; keep its progress out of Pi's stderr channel.
     present=subprocess.run(['docker','image','inspect',image],capture_output=True)
@@ -28,7 +28,8 @@ def rpc(image, home, commands):
     args=['docker','run','--rm','-i','--user',f'{os.getuid()}:{os.getgid()}',
           '-w','/home/tester','-v',f'{home}:/home/tester',
           '-e','MARSH_SELECTED_HOME=/home/tester','-e','SBX_CRED_OPENAI_MODE=apikey',
-          '-e','SBX_CRED_GOOGLE_MODE=apikey','-e','SBX_CRED_ANTHROPIC_MODE=apikey',image,
+          '-e','SBX_CRED_GOOGLE_MODE=apikey','-e','SBX_CRED_ANTHROPIC_MODE=apikey',
+          *[flag for source,target in mounts for flag in ('-v',f'{source}:{target}:ro')],image,
           '--offline','--mode','rpc','--no-session']
     process=subprocess.Popen(args,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     events=queue.Queue();errors=[]
@@ -133,6 +134,15 @@ def main():
         assert len([c for c in resources if c.get('name','').startswith('skill:')])==37
         assert any(c.get('name')=='pix-status' for c in resources)
         assert any(c.get('name')=='output-style' for c in resources)
+        # A mixin's skills, as marsh and stock SBX deliver them: links in a
+        # read-only /opt/pix/kit-skills to skill folders elsewhere in the image.
+        (temp/'team/hello').mkdir(parents=True);(temp/'kit-skills').mkdir()
+        (temp/'team/hello/SKILL.md').write_text('---\nname: hello\ndescription: Team probe skill.\n---\nSay hello.\n')
+        (temp/'kit-skills/hello').symlink_to('/opt/team-skills/hello')
+        mixed=rpc(image,home,[{'type':'get_commands'}],
+                  mounts=[(temp/'team','/opt/team-skills'),(temp/'kit-skills','/opt/pix/kit-skills')])
+        skills=[c['name'] for c in mixed['0']['commands'] if c.get('name','').startswith('skill:')]
+        assert len(skills)==38 and 'skill:hello' in skills,skills
         settings=home/'.pix-agent/agent/settings.json';snapshot=settings.read_bytes()
         assert (home/'.pi/agent/settings.json').read_text()==original
         assert json.loads(snapshot)['theme']=='kanagawa'
@@ -166,7 +176,7 @@ def main():
             capture_output=True,text=True)
         assert tampered.returncode!=0 and 'differs' in tampered.stderr,tampered.stderr
         print('PASS: actual derivative notice/public-payload checks and tampered-payload negative control.')
-        print('PASS: 37 public skills, UI/output-style loaded by upstream Pi; separate home, explicit default, settings preservation and stock-Pi isolation. Zero model/MCP calls.')
+        print('PASS: 37 public skills plus mixin skills from /opt/pix/kit-skills, UI/output-style loaded by upstream Pi; separate home, explicit default, settings preservation and stock-Pi isolation. Zero model/MCP calls.')
     print('Built test image retained for inspection:',image)
 
 if __name__=='__main__':main()

@@ -51,7 +51,9 @@ capabilities:
         proxyManaged: true
         inject:
           - {domain: generativelanguage.googleapis.com, header: x-goog-api-key, format: "%s"}
-  - type: com.docker.sandbox/agent-context@1
+  # Skills a mixin adds (agent-skill@1), e.g. through a kit set; Pix loads
+  # this folder when it exists. Independent of HOME, so marsh and stock SBX
+  # both deliver here.
+  - type: com.docker.sandbox/agent-skills@1
     config:
-      filename: AGENTS.md
-      contentFile: ./context.md
+      path: /opt/pix/kit-skills
