@@ -1,4 +1,4 @@
-FROM docker.io/mcavage/marsh-pi@sha256:02f99d938eb27cf0b484cb2577373e91ec16061734e76baad6944c5affe5a4f6
+FROM docker.io/mcavage/marsh-pi@sha256:570459f4ec8c65427628d36bfaa870afefb6d058cbcf2e5f2f5df4697960e95a
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/marsh-pix
 COPY package /opt/pix/package
 COPY --chmod=0644 LICENSE /usr/local/share/licenses/pix/LICENSE

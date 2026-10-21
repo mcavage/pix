@@ -82,10 +82,10 @@ jobs:
         run: |
           set -eu
           git clone --filter=blob:none --no-checkout --depth 1 \
-            --branch feat/public-pix-harness-20261015 \
+            --branch v0.1.7 \
             https://github.com/mcavage/marsh.git "$RUNNER_TEMP/marsh-publisher"
           git -C "$RUNNER_TEMP/marsh-publisher" sparse-checkout set scripts crates/marsh-contracts/src
-          git -C "$RUNNER_TEMP/marsh-publisher" checkout --detach 6b02e28cc498ea90b378f625c7a2cf4ed3a99c75
+          git -C "$RUNNER_TEMP/marsh-publisher" checkout --detach dac5897d7f98de2159b3118d4b6be7bd9d80d42a
           python3 -m venv "$RUNNER_TEMP/publisher-venv"
           "$RUNNER_TEMP/publisher-venv/bin/python" -m pip install \
             --require-hashes --no-deps --only-binary=:all: \

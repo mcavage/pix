@@ -17,7 +17,7 @@ import time
 import uuid
 
 ROOT=Path(__file__).resolve().parents[2]
-BASE='docker.io/mcavage/marsh-pi@sha256:02f99d938eb27cf0b484cb2577373e91ec16061734e76baad6944c5affe5a4f6'
+BASE='docker.io/mcavage/marsh-pi@sha256:570459f4ec8c65427628d36bfaa870afefb6d058cbcf2e5f2f5df4697960e95a'
 
 def rpc(image, home, commands):
     # BuildKit's private cache is not the Docker Engine image store. A cold

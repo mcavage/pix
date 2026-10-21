@@ -5,7 +5,7 @@ description: Upstream Pi, public skills and display-only UI, orchestrated by mar
 sourceUrl: https://github.com/mcavage/pix
 licenses: [MIT]
 kind: workload
-provides: ["pi@1.2.0", "pi-acp@0.0.34"]
+provides: ["pi@1.3.0", "pi-acp@0.0.34"]
 dockerfile: ./Dockerfile
 capabilities:
   - type: com.docker.sandbox/sbx@1
