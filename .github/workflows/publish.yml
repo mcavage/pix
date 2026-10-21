@@ -105,6 +105,19 @@ jobs:
             --output "$RUNNER_TEMP/marsh-pix-publication" \
             --tag "$tag" --push
           cat "$RUNNER_TEMP/marsh-pix-publication/commands.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Move the stable tag to this publication
+        # `marsh kit install pix --from docker.io/mcavage/marsh-pix:stable`
+        # resolves this tag once; `marsh kit upgrade pix` follows it.
+        run: |
+          set -eu
+          ref=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pix"])' \
+            "$RUNNER_TEMP/marsh-pix-publication/commands.json")
+          case "$ref" in
+            docker.io/*/marsh-pix@sha256:*) ;;
+            *) echo "unexpected publication reference: $ref" >&2; exit 1 ;;
+          esac
+          docker buildx imagetools create -t "${ref%@*}:stable" "$ref"
+          echo "stable -> $ref" >> "$GITHUB_STEP_SUMMARY"
       - name: Retain public input and publication evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
