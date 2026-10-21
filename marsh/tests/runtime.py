@@ -171,6 +171,9 @@ def main():
         verified=subprocess.run(['docker','run','--rm','--entrypoint','python3',image,
             '/usr/local/share/licenses/pix/verify-public.py'],capture_output=True,text=True)
         assert verified.returncode==0,verified.stderr
+        staged=subprocess.run(['docker','run','--rm','--entrypoint','ls',image,'/usr/share/sandbox/kit'],
+            capture_output=True,text=True,check=True).stdout.split()
+        assert staged==['pix'],staged
         tampered=subprocess.run(['docker','run','--rm','--user','0','--entrypoint','/bin/sh',image,'-c',
             'printf tampered >> /opt/pix/package/instructions.md; python3 /usr/local/share/licenses/pix/verify-public.py'],
             capture_output=True,text=True)

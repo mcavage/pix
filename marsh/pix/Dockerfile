@@ -10,7 +10,10 @@ RUN chmod 0755 /usr/local/share/licenses/pix \
  && python3 /usr/local/share/licenses/marsh-dhi/verify.py --root / --adapter pi \
       --receipt-dir /usr/local/share/licenses/pix/base-check >/dev/null \
  && python3 /usr/local/share/licenses/pix/verify-public.py \
-      --receipt /usr/local/share/licenses/pix/public-check.json
+      --receipt /usr/local/share/licenses/pix/public-check.json \
+ && rm -rf /usr/share/sandbox/kit/pi
+# A kit set reads its components' declarations from /usr/share/sandbox/kit;
+# keep only Pix's own there, not the inherited Pi Kit's, so a set can list Pix.
 # Pi expands this tilde after HOME is selected. An unchanged image default is
 # not implicitly forwarded by marsh when Pix launches a different Kit.
 ENV PI_CODING_AGENT_DIR="~/.pix-agent/agent" PIX_PACKAGE_DIR=/opt/pix/package
