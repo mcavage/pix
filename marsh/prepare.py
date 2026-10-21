@@ -15,7 +15,7 @@ RUNTIME_NOTE = """> **Runtime:** this Kit uses marsh, not the legacy Pix launche
 > invoke old Pix lifecycle commands or assume memory/business MCP is installed.
 
 """
-KIT_FILES = ["pix.yaml", "Dockerfile", "entrypoint.sh", "context.md"]
+KIT_FILES = ["pix.yaml", "Dockerfile", "entrypoint.sh"]
 PACKAGE_FILES = [
     "package.json", "instructions.md", "defaults/settings.json",
     "extensions/ui.mjs", "extensions/output-style.ts", "lib/output-style.ts",

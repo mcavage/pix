@@ -13,13 +13,13 @@ the API keys.
 
 ```sh
 sbx secret set openai
-marsh kit install pix --from docker.io/mcavage/marsh-pix:stable
+marsh kit install pix docker.io/mcavage/marsh-pix:stable
 marsh
 pix
 ```
 
-This needs marsh 0.1.7 or later (`brew upgrade marsh`). On an older marsh, put
-the digest in `commands.json` instead (see "Build it yourself").
+This needs marsh 0.1.8 or later (`brew upgrade marsh`). On marsh 0.1.7, write
+`--from` before the image name.
 
 `kit install` resolves `stable` to the image it names now and runs exactly
 that. When a new Pix is published, `marsh kit upgrade pix` moves to it;
@@ -66,9 +66,30 @@ and `marsh results` show what ran.
 ## Adding your own skills and tools
 
 Your own skills go in `~/.marsh/home/.pix-agent/agent/skills/`. MCP servers for
-Pix go in `~/.marsh/sbxenvs/pix.yaml`. Keep organization-specific material out
-of this repository. For a complete private layer built on this image, see the
-community example in the marsh docs.
+Pix go in `~/.marsh/sbxenvs/pix.yaml`.
+
+To give a team the same skills and instructions, publish them as a mixin and
+combine it with this image in a
+[kit set](https://docs.docker.com/ai/sandboxes/customize/author/kit-sets/).
+Then everyone installs the set instead of this image:
+
+```yaml
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: set
+displayName: Team Pix
+kits:
+  - ref: docker.io/mcavage/marsh-pix
+    digest: sha256:…
+  - ref: registry.example.com/team/pix-skills   # kind: mixin
+    digest: sha256:…
+```
+
+In the mixin, declare each skill folder with `agent-skill@1` and your
+instructions with `agent-context@1`. Pix loads those skills from
+`/opt/pix/kit-skills`, and the instructions are added to its system prompt.
+That needs marsh 0.1.8 or later. Keep organization-specific material out of
+this repository.
 
 ## Tests
 

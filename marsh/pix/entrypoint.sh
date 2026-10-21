@@ -42,6 +42,9 @@ fi
 if [ "${PIX_UI:-on}" != off ]; then
   set -- -e /opt/pix/package/extensions/ui.mjs "$@"
 fi
+if [ -d /opt/pix/kit-skills ]; then
+  set -- --skill /opt/pix/kit-skills "$@"
+fi
 set -- -e /opt/pix/package/extensions/output-style.ts \
   --skill /opt/pix/package/skills \
   --append-system-prompt /opt/pix/package/instructions.md "$@"

@@ -106,7 +106,7 @@ jobs:
             --tag "$tag" --push
           cat "$RUNNER_TEMP/marsh-pix-publication/commands.json" >> "$GITHUB_STEP_SUMMARY"
       - name: Move the stable tag to this publication
-        # `marsh kit install pix --from docker.io/mcavage/marsh-pix:stable`
+        # `marsh kit install pix docker.io/mcavage/marsh-pix:stable`
         # resolves this tag once; `marsh kit upgrade pix` follows it.
         run: |
           set -eu
