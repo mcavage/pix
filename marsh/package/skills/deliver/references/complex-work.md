@@ -1,0 +1,45 @@
+# Escalate a concrete uncertainty
+
+## Conditional specialists
+
+Every invocation gets an explicit question and deliverable, with bounded context
+and owned output. Choose a role because it can resolve a concrete question:
+
+- `security-lead`: actual trust/security triggers require an adversarial boundary
+  assessment and attack/failure checks, not an audit of every shipping change.
+- `qa-lead`: broad acceptance risk across workflows/platforms beyond the focused review; deliver a focused matrix and executed evidence.
+- `product-manager`: uncertain user outcome, scope tradeoffs, or epic decomposition;
+  deliver decisions and acceptance criteria, not a ceremonial PRD or closeout.
+- `architect`: architecture uncertainty, dependency boundaries, or epic decomposition;
+  deliver a constrained design or child contracts and integration checks.
+- DX, designer, copy, legal, finance, or SRE: only when that surface is touched
+  and an unresolved question warrants the role; specify the decision or check.
+
+Independent investigations may run concurrently. Do not schedule extra roles to
+make a small change look rigorous; do not omit a needed role to keep it "bounded".
+
+
+## Parallel units, not manufactured handoffs
+
+When useful, decompose independently testable outcomes with owned callers. Each
+child implements and checks its assigned unit, without its own planning/review crew.
+The main agent retains product judgment, integration and the independent review
+of the combined candidate. Delegation is optional; do not require a worker count.
+A work order includes the agreed product excerpt, exact interfaces/examples,
+owned files, real caller, executable acceptance and return artifact. Workers must
+raise material interface contradictions rather than invent a different product.
+Tests must fail if a required production module is missing, not create a dummy
+module or silently substitute a fallback that hides the integration failure.
+
+Do not shard a bounded one-unit change just to create handoffs. When there really
+are independent units, identify the full dependency DAG, including shared-file
+conflicts. Independent units are PARALLEL BY DEFAULT: a shared working tree is
+never a reason to serialize. Launch the whole ready wave in one
+`marsh split ... | marsh join` (see `marsh-orchestration`); each unit gets a
+private fork of the same snapshot. Serialize only a real dependency edge or
+file-conflict edge. Join returns patches and does not apply them: inspect each,
+then integrate the intended patches yourself, committing only when authorized.
+Preserve unrelated work. Discard fork results only after accepted changes and
+evidence have been preserved.
+Child evidence proves its child candidate, not the merged tree. Verify affected
+integration paths and review new integration seams, not the entire epic process.

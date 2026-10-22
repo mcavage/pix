@@ -21,6 +21,12 @@ PACKAGE_FILES = [
     "extensions/ui.mjs", "extensions/output-style.ts", "lib/output-style.ts",
     "skills/marsh-orchestration/SKILL.md", "skills/delegation-guide/SKILL.md",
     "skills/capability-routing/SKILL.md",
+    "skills/analyze/SKILL.md", "skills/architecture-audit/SKILL.md",
+    "skills/conventions/SKILL.md", "skills/debug/SKILL.md", "skills/enrich/SKILL.md",
+    "skills/gtm-launch/SKILL.md", "skills/gworkspace/SKILL.md",
+    "skills/peer-review/SKILL.md", "skills/weekly-wrap/SKILL.md",
+    "skills/deliver/references/complex-work.md", "skills/deliver/references/repair.md",
+    "skills/deliver/references/review.md", "skills/deliver/references/verification.md",
 ]
 
 def tracked(relative):
