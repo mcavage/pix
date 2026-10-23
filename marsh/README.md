@@ -21,9 +21,11 @@ pix
 This needs marsh 0.1.8 or later (`brew upgrade marsh`). On marsh 0.1.7, write
 `--from` before the image name.
 
-`kit install` resolves `stable` to the image it names now and runs exactly
-that. When a new Pix is published, `marsh kit upgrade pix` moves to it;
-`marsh kit uninstall pix` removes it. The packaged `pi` is unchanged.
+marsh 0.1.11 and later add `pix` on their own and keep it on `stable`: they
+check for a new image at daemon start and once a day, and print
+`pix updated (A → B)` after a switch. `marsh kit uninstall pix` removes it.
+The version is the Pi version plus a hash of Pix's own files
+(`1.3.0-pix.686a67ed`), so a rebuild that changes neither switches silently.
 
 The default model is `openai/gpt-6.1-sol`. To use another provider, pass it
 explicitly, e.g. `pix --provider anthropic --model claude-sonnet-5-5`. The Kit
@@ -33,15 +35,20 @@ API hosts, and no key is in the image.
 For ACP, add a `pix-session` entry next to packaged Pi's in your marsh
 control directory's `agents.json` (`marsh status --json` shows it), with
 `"command": "pix", "arguments": ["--acp"]` and the installed digest (from
-`commands.json`) as `workload_digest`. It follows `marsh kit upgrade pix`.
+`commands.json`) as `workload_digest`. It follows Pix's updates.
 
 ## Build it yourself
 
 ```sh
-python3 marsh/prepare.py ~/.local/share/pix-marsh-kit      # empty destination
+kit=~/.local/share/pix-marsh-kit
+python3 marsh/prepare.py "$kit"                  # empty destination
 docker buildx build --platform linux/arm64 --load -t pix-marsh:local \
-  -f ~/.local/share/pix-marsh-kit/pix.yaml ~/.local/share/pix-marsh-kit
+  $(python3 marsh/kit_inputs.py build-args "$kit") -f "$kit/pix.yaml" "$kit"
 ```
+
+`kit_inputs.py build-args` resolves `docker.io/mcavage/marsh-pi:latest` to its
+current digest, stamps the Kit version into the prepared copy and prints the
+matching `--build-arg` flags. Without them the build uses the tag as it is.
 
 `prepare.py` copies only Git-tracked public files (the selected skills, roles,
 themes and package files). It never reads `~/.pix` or `~/.marsh`. To use a
@@ -98,11 +105,27 @@ python3 -m unittest discover -s marsh/tests -v   # export boundary and preparati
 python3 marsh/tests/runtime.py                   # builds the Kit and runs Pi with fake keys
 ```
 
+`runtime.py` builds on the current `marsh-pi:latest`; set `PIX_MARSH_PI_BASE`
+to a `docker.io/mcavage/marsh-pi@sha256:…` reference to pin it.
+
 ## Publishing
 
-The `publish` workflow's `marsh_preview` mode runs the tests above on ARM64 and
-pushes a uniquely tagged `marsh-pix` image with the repository's Docker Hub
-credentials, without touching the legacy release. Locally,
-`python3 marsh/publish.py --publisher <marsh>/scripts/publish-kits.py --output DIR --tag TAG [--push]`
-does the same and writes the `pix` → digest mapping. The workflow also moves
-`stable` to each new publication, which is what `marsh kit upgrade` follows.
+The `marsh-pix` workflow publishes `docker.io/mcavage/marsh-pix:stable`. It
+runs on pushes to `main` that change the Kit's inputs (`marsh/`, `skills/`,
+`agents/`, `themes/`), every 6 hours, and by hand. marsh's Pi image moves
+without a marsh release, so the schedule is what picks up a new Pi.
+
+Each run resolves `marsh-pi:latest` to a digest and builds from exactly that
+digest, which the image records in its `org.opencontainers.image.base.name`
+label. A push or scheduled run stops there when `stable` already has the same
+Kit version and base digest; a manual run always publishes. Otherwise it runs
+the tests above, publishes an immutable `<version>-r<run>` tag with the
+pinned marsh publisher, checks that image's version, base and
+`org.marsh.kit.contract` (which must be one the newest stable marsh
+supports), and only then moves `stable`. A failure leaves `stable` where it
+was. A manual run with `stable` off publishes only the immutable tag. Pull
+requests run the tests and a cache-only build.
+
+Locally, `python3 marsh/publish.py --publisher <marsh>/scripts/publish-kits.py --output DIR --tag TAG [--push]`
+does the same build and writes the `pix` → digest mapping; it never moves
+`stable`.

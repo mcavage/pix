@@ -17,8 +17,10 @@ package, not a requirement to rebuild those services here.
   MCP connections as part of tests. No authentication/model calls without approval.
 - Test the real upstream-Pi entrypoint, UI/resource loading, stock-Pi separation,
   and config preservation. Discovery is not authenticated-provider proof.
-- Keep source/image pins explicit. The inherited base's legal/verification
-  receipts do not certify a derived image; publication remains a separate gate.
+- Keep source pins explicit. The Pi base follows `marsh-pi:latest`, but every
+  build names one digest (`kit_inputs.py`), recorded in the image. The
+  inherited base's legal/verification receipts do not certify a derived image;
+  publication (`.github/workflows/marsh-pix.yml`) remains a separate gate.
 
 Run `python3 -m unittest discover -s marsh/tests -v` for preparation/privacy
 checks. `python3 marsh/tests/runtime.py` builds and checks an isolated snapshot
