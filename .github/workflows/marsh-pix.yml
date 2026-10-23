@@ -1,0 +1,196 @@
+name: marsh-pix
+run-name: marsh-pix — ${{ github.event_name }}
+
+# Publishes the public marsh Pix Kit, docker.io/mcavage/marsh-pix:stable,
+# which marsh follows for its automatic Kit updates. The Kit builds FROM
+# marsh's packaged Pi image, whose :latest tag moves whenever marsh merges an
+# agent bump, so this runs on a schedule as well as on changes here.
+#
+# Each run resolves marsh-pi:latest to a digest once and builds from exactly
+# that digest. A push or scheduled run publishes only when the Kit version
+# (Pi version + hash of the exported public inputs) or the base digest differs
+# from what :stable was built from (its version annotation and
+# org.opencontainers.image.base.name label). A manual run always publishes.
+# :stable moves only after the tests pass and the pushed image is verified.
+# A pull request runs the same tests and a cache-only publisher build.
+#
+# This workflow never runs the legacy pix release, tap or launcher jobs.
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "marsh/**"
+      - "skills/**"
+      - "agents/**"
+      - "themes/**"
+      - "LICENSE"
+      - ".github/workflows/marsh-pix.yml"
+  pull_request:
+    paths:
+      - "marsh/**"
+      - "skills/**"
+      - "agents/**"
+      - "themes/**"
+      - "LICENSE"
+      - ".github/workflows/marsh-pix.yml"
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      stable:
+        description: Move the stable tag (off publishes only an immutable preview tag)
+        type: boolean
+        default: true
+
+concurrency:
+  group: marsh-pix
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BASE: docker.io/mcavage/marsh-pi:latest
+  IMAGE: docker.io/mcavage/marsh-pix
+
+jobs:
+  publish:
+    name: verify and publish marsh-pix
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Log in to Docker Hub
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Read the Kit contract range of the newest stable marsh
+        run: |
+          set -euo pipefail
+          tag="$(git ls-remote --tags --refs https://github.com/mcavage/marsh.git 'v*' \
+            | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          test -n "$tag"
+          curl -fsSL -o "$RUNNER_TEMP/kit_source.rs" \
+            "https://raw.githubusercontent.com/mcavage/marsh/$tag/crates/marsh-contracts/src/kit_source.rs"
+          echo "Newest stable marsh: $tag" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve the Pi image and compare with the published Kit
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          python3 marsh/prepare.py "$RUNNER_TEMP/plan-kit" >/dev/null
+          python3 marsh/kit_inputs.py plan "$RUNNER_TEMP/plan-kit" \
+            --base "$BASE" --current "$IMAGE:stable" \
+            --supported-source "$RUNNER_TEMP/kit_source.rs" > "$RUNNER_TEMP/plan.json"
+          cat "$RUNNER_TEMP/plan.json"
+          publish="$(jq -r .publish "$RUNNER_TEMP/plan.json")"
+          reason="$(jq -r .reason "$RUNNER_TEMP/plan.json")"
+          build="$publish"
+          case "$EVENT" in
+            workflow_dispatch) build=true; publish=true; reason="manual run ($reason)" ;;
+            pull_request) build=true; publish=false; reason="pull request; would publish: $reason" ;;
+          esac
+          {
+            echo "base=$(jq -r .args.base "$RUNNER_TEMP/plan.json")"
+            echo "version=$(jq -r .version "$RUNNER_TEMP/plan.json")"
+            echo "build=$build"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publish: $publish — $reason" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Public export boundary and preservation checks
+        if: ${{ steps.plan.outputs.build == 'true' }}
+        run: python3 -m unittest discover -s marsh/tests -v
+      - name: Real upstream Pi, payload/notice verifier and model-free PTY checks
+        if: ${{ steps.plan.outputs.build == 'true' }}
+        env:
+          PIX_MARSH_PI_BASE: ${{ steps.plan.outputs.base }}
+        run: python3 marsh/tests/runtime.py
+
+      - name: Fetch the pinned native publisher (public source, no private overlay)
+        if: ${{ steps.plan.outputs.build == 'true' }}
+        run: |
+          set -eu
+          git clone --filter=blob:none --no-checkout --depth 1 \
+            --branch v0.1.7 \
+            https://github.com/mcavage/marsh.git "$RUNNER_TEMP/marsh-publisher"
+          git -C "$RUNNER_TEMP/marsh-publisher" sparse-checkout set scripts crates/marsh-contracts/src
+          git -C "$RUNNER_TEMP/marsh-publisher" checkout --detach dac5897d7f98de2159b3118d4b6be7bd9d80d42a
+          python3 -m venv "$RUNNER_TEMP/publisher-venv"
+          "$RUNNER_TEMP/publisher-venv/bin/python" -m pip install \
+            --require-hashes --no-deps --only-binary=:all: \
+            -r "$RUNNER_TEMP/marsh-publisher/scripts/requirements-publish.txt"
+
+      - name: Cache-only build through the publisher (nothing pushed)
+        if: ${{ steps.plan.outputs.build == 'true' && steps.plan.outputs.publish != 'true' }}
+        env:
+          PI_BASE: ${{ steps.plan.outputs.base }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          "$RUNNER_TEMP/publisher-venv/bin/python" marsh/publish.py \
+            --publisher "$RUNNER_TEMP/marsh-publisher/scripts/publish-kits.py" \
+            --python "$RUNNER_TEMP/publisher-venv/bin/python" \
+            --output "$RUNNER_TEMP/marsh-pix-validation" \
+            --base "$PI_BASE" --expect-version "$VERSION" --tag "$VERSION-check"
+
+      - name: Publish an immutable tag
+        id: publish
+        if: ${{ steps.plan.outputs.publish == 'true' }}
+        env:
+          PI_BASE: ${{ steps.plan.outputs.base }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/publisher-venv/bin/python" marsh/publish.py \
+            --publisher "$RUNNER_TEMP/marsh-publisher/scripts/publish-kits.py" \
+            --python "$RUNNER_TEMP/publisher-venv/bin/python" \
+            --output "$RUNNER_TEMP/marsh-pix-publication" \
+            --base "$PI_BASE" --expect-version "$VERSION" \
+            --tag "$VERSION-r$GITHUB_RUN_ID" --push
+          ref="$(jq -r .pix "$RUNNER_TEMP/marsh-pix-publication/commands.json")"
+          case "$ref" in
+            "$IMAGE"@sha256:*) ;;
+            *) echo "unexpected publication reference: $ref" >&2; exit 1 ;;
+          esac
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Published $VERSION-r$GITHUB_RUN_ID -> $ref" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify the published image
+        if: ${{ steps.plan.outputs.publish == 'true' }}
+        env:
+          REF: ${{ steps.publish.outputs.ref }}
+          PI_BASE: ${{ steps.plan.outputs.base }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          python3 marsh/kit_inputs.py verify "$REF" --version "$VERSION" --base "$PI_BASE" \
+            --supported-source "$RUNNER_TEMP/kit_source.rs"
+
+      - name: Move the stable tag to this publication
+        # `marsh kit install pix docker.io/mcavage/marsh-pix:stable` follows
+        # this tag; marsh checks it daily and at daemon start.
+        if: ${{ steps.plan.outputs.publish == 'true' && (github.event_name != 'workflow_dispatch' || inputs.stable) }}
+        env:
+          REF: ${{ steps.publish.outputs.ref }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "$IMAGE:stable" "$REF"
+          moved="$(docker buildx imagetools inspect "$IMAGE:stable" --format '{{json .Manifest}}' | jq -r .digest)"
+          test "$moved" = "${REF#*@}"
+          echo "stable -> $REF" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain public input and publication evidence
+        if: ${{ always() && steps.plan.outputs.publish == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: marsh-pix-${{ github.run_id }}
+          path: ${{ runner.temp }}/marsh-pix-publication
+          if-no-files-found: ignore
+          retention-days: 14

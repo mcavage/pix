@@ -3,6 +3,7 @@
 import json
 import os
 import fcntl
+import importlib.util
 from pathlib import Path
 import pty
 import queue
@@ -17,7 +18,8 @@ import time
 import uuid
 
 ROOT=Path(__file__).resolve().parents[2]
-BASE='docker.io/mcavage/marsh-pi@sha256:570459f4ec8c65427628d36bfaa870afefb6d058cbcf2e5f2f5df4697960e95a'
+spec=importlib.util.spec_from_file_location('pix_kit_inputs',ROOT/'marsh/kit_inputs.py')
+kit_inputs=importlib.util.module_from_spec(spec);spec.loader.exec_module(kit_inputs)
 
 def rpc(image, home, commands, mounts=()):
     # BuildKit's private cache is not the Docker Engine image store. A cold
@@ -122,8 +124,18 @@ def main():
     with tempfile.TemporaryDirectory(prefix='pix-public-runtime-',dir=os.environ.get('PIX_TEST_TMPDIR')) as temp:
         temp=Path(temp);kit=temp/'kit';home=temp/'home';home.mkdir()
         subprocess.run(['python3',str(ROOT/'marsh/prepare.py'),str(kit)],check=True)
+        # The same base digest CI publishes from (PIX_MARSH_PI_BASE), else the current tag.
+        base=kit_inputs.resolve_base(os.environ.get('PIX_MARSH_PI_BASE') or kit_inputs.BASE_TAG)
+        arguments,version=kit_inputs.stamp(kit,base);BASE=arguments['base']
+        print(f'Building Pix Kit {version} on {BASE}',flush=True)
         subprocess.run(['docker','buildx','build','--platform','linux/arm64','--load',
-                        '--progress=plain','-t',image,'-f',str(kit/'pix.yaml'),str(kit)],check=True)
+                        '--progress=plain','-t',image,
+                        *[f'--build-arg={key}={value}' for key,value in arguments.items()],
+                        '-f',str(kit/'pix.yaml'),str(kit)],check=True)
+        labels=json.loads(subprocess.run(['docker','image','inspect','--format','{{json .Config.Labels}}',image],
+            capture_output=True,text=True,check=True).stdout)
+        assert labels.get(kit_inputs.BASE_LABEL)==BASE,labels.get(kit_inputs.BASE_LABEL)
+        assert labels.get(kit_inputs.CONTRACT_LABEL)==str(base['contract']),labels.get(kit_inputs.CONTRACT_LABEL)
         (home/'.pi/agent').mkdir(parents=True)
         original='{"theme":"light","lastChangelogVersion":"1.2.0"}\n'
         (home/'.pi/agent/settings.json').write_text(original)

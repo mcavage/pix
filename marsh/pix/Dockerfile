@@ -1,4 +1,8 @@
-FROM docker.io/mcavage/marsh-pi@sha256:570459f4ec8c65427628d36bfaa870afefb6d058cbcf2e5f2f5df4697960e95a
+ARG PI_BASE=docker.io/mcavage/marsh-pi:latest
+FROM ${PI_BASE}
+ARG PI_BASE
+# A published build names its base by digest; marsh/kit_inputs.py compares it.
+LABEL org.opencontainers.image.base.name="${PI_BASE}"
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/marsh-pix
 COPY package /opt/pix/package
 COPY --chmod=0644 LICENSE /usr/local/share/licenses/pix/LICENSE
