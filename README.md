@@ -1,38 +1,43 @@
 # Pix
 
-**New: [Pix on marsh](marsh/README.md)** runs Pix as a marsh Kit
-(`docker.io/mcavage/marsh-pix`). The standalone launcher documented below still
-works and will be retired.
+> **Pix now runs in marsh.** The standalone `pix` launcher in this repository
+> is legacy. Install marsh (`brew install mcavage/tap/marsh`), open a marsh
+> shell (`marsh`), and run `pix`. See [Pix on marsh](marsh/README.md) and
+> [marsh](https://github.com/mcavage/marsh).
+>
+> Docker employees: see the Docker Pix guide in
+> [docker/gm-pix-pack](https://github.com/docker/gm-pix-pack).
 
 An AI workspace for coding, research, and everyday work. Pix runs the
 [Pi agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) in a
 Docker Sandbox with your chosen models, reusable skills, and optional account
 connections.
 
-Open a terminal in the folder you want to work on, run `pix`, and describe what
-you need. The agent can read and edit that folder, run tools, and delegate work
-to other models. Your files and saved conversations remain after you exit.
-
 ## Get started
 
-Pix's supported host setup is macOS with [Homebrew](https://brew.sh),
-[Docker Desktop](https://docs.docker.com/get-docker/), and Git. Start Docker
-Desktop, then install and sign into Docker Sandboxes:
-
-```bash
-brew install docker/tap/sbx
-sbx login
-```
+You need macOS with [Homebrew](https://brew.sh) and
+[Docker Desktop](https://docs.docker.com/get-docker/).
 
 <!-- PIX_PRIMARY_PATH_START -->
 ```bash
-brew install mcavage/tap/pix
-pix setup
+brew install mcavage/tap/marsh
+marsh
+pix
 ```
 <!-- PIX_PRIMARY_PATH_END -->
 
-Setup guides you through choosing a model and connecting what it needs. You can
-rerun it if interrupted; completed setup is kept.
+marsh ships `pix` as a built-in Kit and keeps it updated. See
+[Pix on marsh](marsh/README.md) for API keys, models, and your own skills.
+
+## Legacy standalone launcher
+
+This section documents the old standalone `pix` launcher for existing
+installations. It still works, but new installs should use marsh.
+
+The launcher needs Docker Desktop, Git, and Docker Sandboxes
+(`brew install docker/tap/sbx`, then `sbx login`). Run `pix setup` once to
+choose a model and connect what it needs. You can rerun it if interrupted;
+completed setup is kept.
 
 - **API models:** one OpenAI, Anthropic, or Google API key is enough. Store it in
   1Password, install its CLI with `brew install 1password-cli`, and enable the
@@ -45,19 +50,12 @@ rerun it if interrupted; completed setup is kept.
   [add it below](#use-an-environment). It may provide models without personal API
   keys.
 
-Start a session in an existing project or a new folder:
-
-```bash
-mkdir -p ~/pix-work
-cd ~/pix-work
-pix
-```
-
-Try a request such as “Summarize the documents in this folder” or “Review this
-project and suggest the smallest useful improvement.” Inside the session,
+Open a terminal in the folder you want to work on and run `pix`. The agent can
+read and edit that folder, run tools, and delegate work to other models. Your
+files and saved conversations remain after you exit. Inside the session,
 `/getting-started` gives you a tour.
 
-## Use an environment
+### Use an environment
 
 An environment supplies a set of models, skills, and connections. `default` is
 created for you; other names are entirely your choice.
@@ -94,7 +92,7 @@ Environment setup may open your browser to connect accounts. If it needs to run
 tools on your computer, Pix asks for your consent. Changes to that access can
 require approval again.
 
-## Daily use
+### Daily use
 
 | What you want | Command |
 | --- | --- |
@@ -117,7 +115,7 @@ Inside a session, `/btw <question>` asks a quick side question without
 interrupting the main task or adding the exchange to its context. The answer
 appears in a dismissible panel while the main agent keeps working.
 
-## Remember useful context
+### Remember useful context
 
 Inside a session:
 
@@ -132,7 +130,7 @@ embedding model is available, recall can search by meaning as well as keywords;
 otherwise keyword recall still works. Setup can offer to prepare that embedding
 model. See [memory](docs/memory.md) for capture settings, scopes, and backups.
 
-## Push code to GitHub
+### Push code to GitHub
 
 GitHub access is optional. To let the agent push branches and open pull requests,
 store a suitable token in 1Password and give Pix its reference:
@@ -145,7 +143,7 @@ Replace the example with your token's actual reference. The next launch supplies
 it to that sandbox. The sandbox already includes `git` and `gh`; installing or
 logging into `gh` on your host does not configure Pix's sandbox credentials.
 
-## When something needs attention
+### When something needs attention
 
 ```bash
 pix doctor
@@ -156,10 +154,10 @@ Doctor checks readiness and suggests fixes without changing your setup. Rerun
 environment's accounts. Add `--verbose` to setup, run, or doctor for diagnostics.
 If the problem is Docker Sandboxes itself, start with `sbx diagnose`.
 
-Upgrade with `brew upgrade mcavage/tap/pix`. Your next launch updates Pix's own
-runtime and memory service as needed. Connection changes remain part of setup.
+The `mcavage/tap/pix` Homebrew formula is frozen at 0.1.107 and gets no more
+updates. Move to marsh for new versions.
 
-## Your files and accounts
+### Your files and accounts
 
 The agent can change files in mounted folders and use whatever account access
 you authorize. Sandboxing does not undo edits or prevent an authorized tool

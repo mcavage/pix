@@ -254,14 +254,10 @@ test("the launcher's bundle file names match what the release targets actually w
 	assert.match(archiveScript, /export COPYFILE_DISABLE=1/, "macOS builds must suppress synthetic AppleDouble archive members");
 });
 
-test("install.sh and the Homebrew formula install exactly the pix binary, no pix-host", () => {
+test("install.sh installs exactly the pix binary, no pix-host", () => {
 	const installSh = fs.readFileSync(path.join(repoRoot, "install.sh"), "utf8");
-	const formula = fs.readFileSync(path.join(repoRoot, "packaging/homebrew/pix.rb"), "utf8");
 	assert.match(installSh, /BINARIES="pix"/);
 	assert.doesNotMatch(installSh, /pix-host/);
-	assert.match(formula, /libexec\.install "pix"/);
-	assert.match(formula, /bin\.install_symlink libexec\/"pix"/);
-	assert.doesNotMatch(formula, /pix-host/);
 });
 
 // ── DHI base tags are DATED, never floating ───────────────────────────────

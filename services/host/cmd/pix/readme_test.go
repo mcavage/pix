@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -42,21 +41,23 @@ func TestReadmeHasOnePrimaryPath(t *testing.T) {
 	}
 }
 
-func TestReadmePrimaryPathUsesHomebrew(t *testing.T) {
+func TestReadmePrimaryPathUsesMarsh(t *testing.T) {
 	body := primaryReadmePath(t)
-	want := "brew install mcavage/tap/pix\npix setup"
+	want := "brew install mcavage/tap/marsh\nmarsh\npix"
 	if !strings.Contains(body, want) {
-		t.Fatalf("README primary path must be the two-command Homebrew flow:\n%s", want)
+		t.Fatalf("README primary path must be the marsh flow:\n%s", want)
 	}
-	if strings.Contains(body, "curl ") {
-		t.Fatal("README primary path must not mention the deprecated curl installer")
+	for _, retired := range []string{"curl ", "mcavage/tap/pix"} {
+		if strings.Contains(body, retired) {
+			t.Fatalf("README primary path must not mention retired install path %q", retired)
+		}
 	}
 }
 
 func TestReadmeHasNoLegacyInstallerPath(t *testing.T) {
 	s := readRepoFile(t, "README.md")
 	if strings.Contains(s, "install.sh") || strings.Contains(s, "curl -fsSL") {
-		t.Fatal("README must document Homebrew as the only supported install path")
+		t.Fatal("README must not document the deprecated curl installer")
 	}
 }
 
@@ -80,27 +81,5 @@ func TestReadmePackExamplesStayPublic(t *testing.T) {
 	}
 	if !strings.Contains(s, "your-org") {
 		t.Fatal("README shows a --pack example that is not the public your-org placeholder")
-	}
-}
-
-func TestReadmePrimaryPathCommandsExist(t *testing.T) {
-	body := primaryReadmePath(t)
-	known := map[string]bool{
-		"version": true, "setup": true, "doctor": true, "run": true, "help": true,
-	}
-	re := regexp.MustCompile(`(?m)^pix ([a-z][a-z0-9-]*)[^\n]*$`)
-	matches := re.FindAllStringSubmatch(body, -1)
-	if len(matches) == 0 {
-		t.Fatal("README primary path contains no Pix commands")
-	}
-	for _, m := range matches {
-		if !known[m[1]] {
-			t.Errorf("README primary path documents unknown Pix verb %q", m[1])
-		}
-	}
-	for _, required := range []string{"pix setup"} {
-		if !strings.Contains(body, required) {
-			t.Errorf("README primary path missing %q", required)
-		}
 	}
 }

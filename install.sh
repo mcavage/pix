@@ -1,13 +1,15 @@
 #!/bin/sh
-# DEPRECATED compatibility installer for existing non-Homebrew installations.
-# New installations are supported on macOS through Homebrew only:
+# DEPRECATED compatibility installer for the legacy standalone pix launcher.
+# Legacy Pix is retired. Pix now runs in marsh:
 #
-#   brew install mcavage/tap/pix
+#   brew install mcavage/tap/marsh
+#   marsh        # opens a marsh shell; run pix there
 #
-# This script remains for existing non-Homebrew installations. It fetches the
-# release's notice-bearing tarball (the SAME artifact Homebrew installs),
-# verifies its sha256, and drops pix in ~/.local/bin with the
-# licenses and notices alongside them. No repo checkout, no sudo.
+# See https://github.com/mcavage/marsh.
+#
+# This script remains for existing legacy installations. It fetches the
+# release's notice-bearing tarball, verifies its sha256, and drops pix in
+# ~/.local/bin with the licenses and notices alongside them. No repo checkout, no sudo.
 #
 #   curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
 #
@@ -106,8 +108,7 @@ guard_homebrew_prefix() {
 		err "Installing pix's real binaries there would conflict with Homebrew's"
 		err "symlinks during the next 'brew upgrade' or 'brew uninstall'."
 		err ""
-		err "Use Homebrew instead:"
-		err "  brew install mcavage/tap/pix"
+		err "Pix now runs in marsh: brew install mcavage/tap/marsh"
 		err "Or pick a different PIX_PREFIX, for example:"
 		err "  PIX_PREFIX=\$HOME/.local/bin sh install.sh"
 		err ""
@@ -405,7 +406,7 @@ main() {
 	done
 	guard_homebrew_prefix
 	if [ "$action" = "install" ]; then
-		err "deprecated compatibility installer; new installs must use: brew install mcavage/tap/pix"
+		err "legacy Pix is retired; Pix now runs in marsh: brew install mcavage/tap/marsh, then run pix in a marsh shell"
 	fi
 
 	case "$action" in

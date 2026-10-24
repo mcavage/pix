@@ -113,8 +113,8 @@ test("NOTHING is pushed before the legal gate: build and merge both depend on it
 
 test("every publish job that can push, tag, or release is downstream of legal-gate", () => {
 	// Anything that mutates something public: the image tags, the git tag, the
-	// GitHub release, the tap PR. patch-smoke/version only read.
-	for (const job of ["build", "merge", "provenance", "bump", "release-binaries", "bump-tap"]) {
+	// GitHub release. patch-smoke/version only read.
+	for (const job of ["build", "merge", "provenance", "bump", "release-binaries"]) {
 		assert.ok(publishJobs.has(job), `publish.yml lost its ${job} job`);
 		assert.ok(
 			ancestors(publishJobs, job).has("legal-gate"),
@@ -157,7 +157,7 @@ test("NOTHING is pushed before the test gate: build and merge both depend on it"
 });
 
 test("every publish job that can push, tag, or release is downstream of test-gate", () => {
-	for (const job of ["build", "merge", "provenance", "bump", "release-binaries", "bump-tap"]) {
+	for (const job of ["build", "merge", "provenance", "bump", "release-binaries"]) {
 		assert.ok(publishJobs.has(job), `publish.yml lost its ${job} job`);
 		assert.ok(ancestors(publishJobs, job).has("test-gate"), `${job} is not transitively gated by test-gate`);
 	}
