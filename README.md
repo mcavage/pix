@@ -4,9 +4,6 @@
 > is legacy. Install marsh (`brew install mcavage/tap/marsh`), open a marsh
 > shell (`marsh`), and run `pix`. See [Pix on marsh](marsh/README.md) and
 > [marsh](https://github.com/mcavage/marsh).
->
-> Docker employees: see the Docker Pix guide in
-> [docker/gm-pix-pack](https://github.com/docker/gm-pix-pack).
 
 An AI workspace for coding, research, and everyday work. Pix runs the
 [Pi agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) in a
