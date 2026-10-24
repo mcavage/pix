@@ -61,18 +61,11 @@ test("Homebrew archives are additive and contain the pix binary, no pix-host, no
 	assert.doesNotMatch(workflow, /host binary has\s+no such symbol/);
 });
 
-test("the tap bump reads release hashes and opens a gated PR", () => {
-	assert.match(workflow, /bump-tap:/);
-	assert.match(workflow, /needs: \[version, release-binaries\]/);
-	assert.match(workflow, /pix_\$\{V\}_darwin_arm64\.tar\.gz/);
-	assert.match(workflow, /pix_\$\{V\}_darwin_amd64\.tar\.gz/);
-	assert.match(workflow, /secrets\.TAP_PUSH_TOKEN/);
-	assert.match(workflow, /r'\(\^\\s\*version "/);
-	assert.match(workflow, /expected one explicit version/);
-	assert.match(workflow, /git checkout -b "\$branch"/);
-	assert.match(workflow, /gh pr create --repo mcavage\/homebrew-tap/);
-	assert.match(workflow, /gh pr merge "\$pr_url" --repo mcavage\/homebrew-tap --auto --squash/);
-	assert.doesNotMatch(workflow, /sha256sum.*tap\/Formula\/pix\.rb/);
+// Legacy Pix moved into marsh; the tap's pix formula is frozen and deprecated.
+test("no publish job writes to the Homebrew tap", () => {
+	assert.doesNotMatch(workflow, /bump-tap:/);
+	assert.doesNotMatch(workflow, /TAP_PUSH_TOKEN/);
+	assert.doesNotMatch(workflow, /mcavage\/homebrew-tap/);
 });
 
 // Workflow concurrency serializes execution, not the push event's checkout SHA.

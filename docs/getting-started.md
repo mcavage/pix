@@ -1,7 +1,8 @@
 # Your first Pix session
 
-Follow [the installation steps](../README.md#get-started) first. This guide starts
-with Pix installed and Docker Desktop running.
+This guide covers the legacy standalone launcher. Pix now runs in marsh; see
+[Get started](../README.md#get-started) and [Pix on marsh](../marsh/README.md).
+This guide starts with the legacy launcher installed and Docker Desktop running.
 
 ## Set up the environment you want
 
@@ -96,8 +97,8 @@ repository healthcheck when you want a code-quality review.
 current Pix home; it does not delete the mounted project. You usually do not need
 to remove ordinary sandboxes yourself.
 
-Upgrade with `brew upgrade mcavage/tap/pix`. Pix reconciles its own runtime on
-the next launch; rerun environment setup when its connections change.
+The `mcavage/tap/pix` Homebrew formula is frozen and gets no more updates; move
+to marsh for new versions. Rerun environment setup when its connections change.
 
 ## More
 

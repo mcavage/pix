@@ -35,7 +35,8 @@ test("installer checks pix for PATH collisions and shadowing", () => {
 	assert.match(src, /assert_installed_resolution/);
 	assert.match(src, /PIX_FORCE_INSTALL/);
 	assert.match(src, /guard_homebrew_prefix/);
-	assert.match(src, /brew install mcavage\/tap\/pix/);
+	assert.match(src, /brew install mcavage\/tap\/marsh/);
+	assert.doesNotMatch(src, /brew install mcavage\/tap\/pix/);
 	assert.match(src, /Nothing was written\./);
 });
 
@@ -54,10 +55,8 @@ test("installer fetches the notice-bearing tarball, not the loose binaries", () 
 });
 
 test("publish.yml publishes only notice-bearing tarballs + SHA256SUMS, and proves the notices are inside them", () => {
-	const releaseJob = publishWorkflow.slice(
-		publishWorkflow.indexOf("\n  release-binaries:"),
-		publishWorkflow.indexOf("\n  bump-tap:")
-	);
+	// release-binaries is the last job in publish.yml.
+	const releaseJob = publishWorkflow.slice(publishWorkflow.indexOf("\n  release-binaries:"));
 	const files = releaseJob.slice(releaseJob.indexOf("files: |"));
 	assert.match(files, /dist\/pix_\*\.tar\.gz/);
 	assert.match(files, /dist\/SHA256SUMS/);
@@ -230,7 +229,7 @@ test("release job packages the exact uploaded runtime bundle for both Darwin arc
 		for (const name of NOTICES) fs.writeFileSync(path.join(dir, name), name);
 		const bundle = ["release-manifest.json", `pix-runtime-${VERSION}.tar.gz`];
 		for (const name of bundle) fs.writeFileSync(path.join(dir, "release-bundle", name), name);
-		const step = publishWorkflow.match(/- name: Build combined Darwin tarballs for Homebrew[\s\S]*?run: \|\n([\s\S]*?)(?=\n      # Gate)/);
+		const step = publishWorkflow.match(/- name: Build combined Darwin tarballs[\s\S]*?run: \|\n([\s\S]*?)(?=\n      # Gate)/);
 		assert.ok(step, "release packaging entry point missing");
 		const script = step[1].replace(/^          /gm, "");
 		execFileSync("bash", ["-c", script], {cwd: path.join(dir, "dist"), env: {...process.env, GITHUB_WORKSPACE: dir, V: VERSION}});
@@ -242,7 +241,7 @@ test("release job packages the exact uploaded runtime bundle for both Darwin arc
 		}
 		const upload = publishWorkflow.slice(publishWorkflow.indexOf("  release-manifest:"), publishWorkflow.indexOf("\n  bump:"));
 		for (const name of ["out/release-manifest.json", "out/pix-runtime-${{ needs.version.outputs.version }}.tar.gz"]) assert.ok(upload.includes(name));
-		const release = publishWorkflow.slice(publishWorkflow.indexOf("\n  release-binaries:"), publishWorkflow.indexOf("\n  bump-tap:"));
+		const release = publishWorkflow.slice(publishWorkflow.indexOf("\n  release-binaries:"));
 		assert.match(release, /needs: \[version, bump, release-manifest\]/);
 		assert.match(release, /name: release-manifest-\$\{\{ needs.version.outputs.version \}\}\n          path: release-bundle/);
 	} finally { fs.rmSync(dir, {recursive: true, force: true}); }
