@@ -1,8 +1,0 @@
-{
-  "enableInstallTelemetry": false,
-  "lastChangelogVersion": "1.3.0",
-  "defaultProvider": "openai",
-  "defaultModel": "gpt-6.1-sol",
-  "theme": "kanagawa",
-  "terminal": { "trueColor": "auto" }
-}

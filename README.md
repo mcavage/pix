@@ -2,7 +2,7 @@
 
 > **Pix now runs in marsh.** The standalone `pix` launcher in this repository
 > is legacy. Install marsh (`brew install mcavage/tap/marsh`), open a marsh
-> shell (`marsh`), and run `pix`. See [Pix on marsh](marsh/README.md) and
+> shell (`marsh`), and run `pix`. See [Pix on marsh](https://github.com/mcavage/marsh/blob/main/kits/marsh-pix/README.md) and
 > [marsh](https://github.com/mcavage/marsh).
 
 An AI workspace for coding, research, and everyday work. Pix runs the
@@ -24,7 +24,7 @@ pix
 <!-- PIX_PRIMARY_PATH_END -->
 
 marsh ships `pix` as a built-in Kit and keeps it updated. See
-[Pix on marsh](marsh/README.md) for API keys, models, and your own skills.
+[Pix on marsh](https://github.com/mcavage/marsh/blob/main/kits/marsh-pix/README.md) for API keys, models, and your own skills.
 
 ## Legacy standalone launcher
 

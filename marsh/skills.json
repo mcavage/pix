@@ -1,9 +1,0 @@
-[
-  "analyze", "anti-slop", "api-conventions", "architecture-audit", "brainstorm",
-  "build", "capability-routing", "challenge", "code-review", "competitive",
-  "conventions", "debug", "delegation-guide", "deliver", "design-review",
-  "design-system", "docs-standards", "docs-sync", "draft-email", "enrich",
-  "git-conventions", "gtm-launch", "guard", "gworkspace", "microcopy",
-  "one-pager", "peer-review", "plan", "qa", "repo-healthcheck", "ship",
-  "slide-deck", "tdd", "verify", "weekly-wrap", "writing-voice"
-]

@@ -1,7 +1,7 @@
 # Your first Pix session
 
 This guide covers the legacy standalone launcher. Pix now runs in marsh; see
-[Get started](../README.md#get-started) and [Pix on marsh](../marsh/README.md).
+[Get started](../README.md#get-started) and [Pix on marsh](https://github.com/mcavage/marsh/blob/main/kits/marsh-pix/README.md).
 This guide starts with the legacy launcher installed and Docker Desktop running.
 
 ## Set up the environment you want
