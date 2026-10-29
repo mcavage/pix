@@ -66,12 +66,14 @@ RUN apt-get update \
 # shim instead of guessing at a GUI that does not exist in here.
 ENV BROWSER=xdg-open
 
-# Note: Google Workspace access is NOT in this image. It runs host-side as the
-# `gog` MCP server, spawned by the sbx gateway and reached through it. The VM
-# never talks to Google — no CLI, no token service, no Google endpoints in the
-# kit allowlist. See `make mcp-register`. (Slack was the other local stdio MCP
-# server this pattern covered; it was externalized — W2/U02a, see
-# docs/design/slack-setup.md — and no longer ships built into this image.)
+# Note: Google Workspace access is NOT in this image, and never runs in this
+# VM. An environment wires it outside: as a host-side MCP server reached
+# through the sbx gateway (docs/gworkspace.md), or on marsh as the `gog`
+# command of the marsh-tools Kit, which runs in its own VM. Docker Sandboxes
+# applies credentials per VM, so a Google token here would let the agent call
+# Google directly and skip gog's allowlist. No Workspace CLI, token or
+# endpoint is in this image or its allowlist. (Slack, once built in the same
+# way, was externalized — W2/U02a, see docs/design/slack-setup.md.)
 
 # --- npm global prefix (sandbox-template convention) --------------------------
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
