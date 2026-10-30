@@ -83,19 +83,20 @@ var nameKeys = []string{"name", "Name", "container_name", "Sandbox", "sandbox"}
 var stateKeys = []string{"state", "State", "status", "Status"}
 var idKeys = []string{"instance_id", "InstanceID", "instanceId", "id", "ID"}
 
-// v38WrapperKey is the object-wrapper key sbx v0.38 emits for `sbx ls
-// --json`: the CANONICAL top level for the v0.38 row profile is
-// `{"sandboxes": [...]}`, verified to the same degree a bare array is for
-// the legacy profile — NOT an unverified alias, because this is the exact
-// shape captured from a real v0.38 install (see doc.go's "Schema posture").
+// v38WrapperKey is the object-wrapper key sbx v0.38-v0.47 emits for `sbx ls
+// --json` (v0.48+ drops it; see bareArrayProfile): the CANONICAL top level for
+// the v0.38 row profile is `{"sandboxes": [...]}`, verified to the same degree
+// a bare array is for the legacy profile — NOT an unverified alias, because
+// this is the exact shape captured from a real v0.38 install (see doc.go's
+// "Schema posture").
 const v38WrapperKey = "sandboxes"
 
 // legacyAliasWrapperKeys are the documented alias container keys accepted
 // when the top level is an object using the LEGACY row profile rather than
-// v38WrapperKey. A bare array is the legacy profile's canonical primary
-// shape; wrapping it in one of these always marks the overall parse
-// unverified (ParseResult.SchemaVerified), even if every row inside it is
-// otherwise pristine.
+// v38WrapperKey. A bare array with no "agent" rows is the legacy profile's
+// canonical primary shape; wrapping it in one of these always marks the
+// overall parse unverified (ParseResult.SchemaVerified), even if every row
+// inside it is otherwise pristine.
 var legacyAliasWrapperKeys = []string{"items", "boxes"}
 
 // v38RowKeys are the allowed row keys observed in sbx v0.38/v0.39/v0.42/v0.43:
@@ -141,25 +142,27 @@ type Entry struct {
 // ParseResult is ParseList's outcome.
 type ParseResult struct {
 	Entries []Entry
-	// SchemaVerified is true only when the top level was ONE of the two
-	// documented canonical shapes — a bare JSON array (legacy) or
-	// `{"sandboxes": [...]}` (v0.38) — AND every entry is itself
-	// IdentityVerified. Entries are always returned regardless — this flag
-	// is a convenience "trust the whole listing" fold of the per-entry
-	// flags, not a gate on parsing.
+	// SchemaVerified is true only when the top level was ONE of the
+	// documented canonical shapes — a bare JSON array (legacy, or v0.38 when
+	// every row carries "agent") or `{"sandboxes": [...]}` (v0.38) — AND
+	// every entry is itself IdentityVerified. Entries are always returned
+	// regardless — this flag is a convenience "trust the whole listing" fold
+	// of the per-entry flags, not a gate on parsing.
 	SchemaVerified bool
 }
 
 // ParseList parses raw bytes shaped like an `sbx`-style sandbox listing,
-// against one of two documented, mutually exclusive row profiles selected by
-// the top-level shape alone (see unwrapRows): a bare array uses the legacy
-// profile (nameKeys/stateKeys/idKeys, alias-tolerant); `{"sandboxes": [...]}`
-// uses the v0.38 profile (v38RowKeys, alias-free — see parseRowV38). It
+// against one of two documented, mutually exclusive row profiles selected
+// once per listing (see unwrapRows): a bare array without "agent" rows uses
+// the legacy profile (nameKeys/stateKeys/idKeys, alias-tolerant); a bare array
+// whose every row carries "agent" (sbx v0.48+) or `{"sandboxes": [...]}` uses
+// the v0.38 profile (v38RowKeys, alias-free — see parseRowV38). It
 // never panics and never silently drops a row it cannot name: a row missing
-// every documented name-key alias, or (under the v0.38 profile) missing or
-// mistyping id/status/agent, or mistyping optional metadata, fails the WHOLE
-// parse (fail-closed — silently dropping an unparseable row could hide a
-// live sandbox from a caller deciding whether one already exists). A row it
+// every documented name-key alias, a bare array in which only some rows carry
+// "agent", or (under the v0.38 profile) missing or mistyping id/status/agent,
+// or mistyping optional metadata, fails the WHOLE parse (fail-closed —
+// silently dropping an unparseable row could hide a live sandbox from a
+// caller deciding whether one already exists). A row it
 // CAN name but had to lean on a legacy alias for, or that carried an
 // undocumented extra key, or (v0.38) an unrecognized status value, is
 // returned with IdentityVerified=false rather than rejected.
@@ -197,8 +200,9 @@ func ParseList(data []byte) (ParseResult, error) {
 }
 
 // profile identifies which canonical row shape unwrapRows selected, from the
-// TOP LEVEL alone: every row in one listing is checked against exactly one
-// profile, never a per-row mix. profileLegacy also covers the object-wrapped
+// top-level shape (and, for a bare array, whether every row carries "agent"):
+// every row in one listing is checked against exactly one profile, never a
+// per-row mix. profileLegacy also covers the object-wrapped
 // legacyAliasWrapperKeys shapes, unchanged from before v38 existed.
 type profile int
 
@@ -208,15 +212,21 @@ const (
 )
 
 // unwrapRows finds the row array and which profile its rows must be checked
-// against: a bare array is the legacy canonical shape (verified=true,
-// profileLegacy); an object keyed v38WrapperKey is the v0.38 canonical shape
-// (verified=true, profileV38); an object keyed one of legacyAliasWrapperKeys
-// is an accepted alias of the legacy shape (verified=false, profileLegacy).
-// Anything else is a parse error.
+// against: a bare array is the legacy canonical shape or, when every row
+// carries "agent", the v0.38 row profile without its wrapper as sbx v0.48+
+// emits it (verified=true either way; see bareArrayProfile); an object keyed
+// v38WrapperKey is the v0.38 canonical shape (verified=true, profileV38); an
+// object keyed one of legacyAliasWrapperKeys is an accepted alias of the
+// legacy shape (verified=false, profileLegacy). Anything else, including a
+// bare array that mixes rows with and without "agent", is a parse error.
 func unwrapRows(raw any) (rows []any, verified bool, prof profile, err error) {
 	switch v := raw.(type) {
 	case []any:
-		return v, true, profileLegacy, nil
+		prof, err := bareArrayProfile(v)
+		if err != nil {
+			return nil, false, profileLegacy, err
+		}
+		return v, true, prof, nil
 	case map[string]any:
 		if arr, ok := v[v38WrapperKey]; ok {
 			list, ok := arr.([]any)
@@ -241,6 +251,38 @@ func unwrapRows(raw any) (rows []any, verified bool, prof profile, err error) {
 	default:
 		return nil, false, profileLegacy, fmt.Errorf("sandbox: top level is neither a JSON array nor object")
 	}
+}
+
+// bareArrayProfile picks the profile for a bare array from the whole array,
+// never per row. sbx v0.48+ emits the v0.38 rows without the {"sandboxes":
+// [...]} wrapper (observed on v0.49.1), and "agent" is a key only the v0.38
+// profile requires and no legacy alias spells: every row carrying it selects
+// profileV38, where a row that lacks id/status or mistypes a field fails the
+// parse instead of falling back to the lenient legacy rules; no row carrying it
+// (including the empty array) selects profileLegacy. A mix is neither shape
+// and fails the parse with the offending row, rather than quietly judging
+// genuine v0.38 rows by legacy rules and leaving every one unverified.
+func bareArrayProfile(rows []any) (profile, error) {
+	withAgent := 0
+	for _, row := range rows {
+		if m, ok := row.(map[string]any); ok {
+			if _, present := m["agent"]; present {
+				withAgent++
+			}
+		}
+	}
+	if withAgent == 0 {
+		return profileLegacy, nil
+	}
+	if withAgent < len(rows) {
+		for i, row := range rows {
+			m, ok := row.(map[string]any)
+			if _, present := m["agent"]; !ok || !present {
+				return profileLegacy, fmt.Errorf("sandbox: row %d lacks %q while other rows carry it", i, "agent")
+			}
+		}
+	}
+	return profileV38, nil
 }
 
 // firstKey returns the first key from keys present in m, the raw value, and

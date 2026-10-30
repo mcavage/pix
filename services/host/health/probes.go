@@ -39,12 +39,12 @@ const (
 	SbxUpgradeFix = "brew upgrade docker/tap/sbx"
 )
 
-// SbxMinVersion is the lowest sbx release with the v3 kit builder Pix uses.
-// It is a
+// SbxMinVersion is the lowest supported sbx: 0.48 renamed env create's
+// --auto-approve to --force and made `sbx ls --json` a bare array. It is a
 // package const, read by SbxVersionGate and SbxVersionGateMessage, so a
 // future bump changes exactly one line.
 
-const SbxMinVersion = "0.45.0"
+const SbxMinVersion = "0.48.0"
 
 // sbxVersionNumber matches the dotted numeric run at the heart of a real sbx
 // version string: an optional "v" prefix (the observed `sbx version: v0.39.0

@@ -1,5 +1,5 @@
 // run_create_quiet.go — the stdio wiring for the ONE non-interactive child
-// a launch runs: `sbx env create <effective>`.
+// a launch runs: `sbx env create --force <effective>`.
 //
 // sbx 0.41 renders its own plan for the document it is given and asks
 // "Approve this plan?" before creating. For Pix that is a SECOND approval
@@ -9,7 +9,7 @@
 // string, which must never reach a terminal, a diagnostic, or a log (the
 // same rule container.RedactMemoryURLToken exists for).
 //
-// So the create argv carries sbx's explicit --auto-approve flag only after
+// So the create argv carries sbx's explicit --force flag only after
 // Pix's own gate said yes, and the create child's stdout/stderr is captured
 // instead of sent to the user's terminal. On success nothing is printed.
 //
@@ -74,7 +74,7 @@ func (c *createCapture) text() (string, bool) {
 }
 
 // quietCreateSpawn builds the create child with captured output and this
-// process's environment. The argv itself carries --auto-approve. bin is the sbx binary name (the
+// process's environment. The argv itself carries --force. bin is the sbx binary name (the
 // production caller always passes "sbx"; a test points it at a fixture).
 func quietCreateSpawn(bin string, cap *createCapture) func(argv []string) *exec.Cmd {
 	return func(argv []string) *exec.Cmd {

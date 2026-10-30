@@ -8,6 +8,16 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Docker Sandboxes 0.48+ compatibility
+
+- **Breaking:** Pix requires Docker Sandboxes 0.48.0 or later and refuses
+  older releases in `pix run` and `pix doctor`. Upgrade with
+  `brew upgrade docker/tap/sbx`. Pix creates sandboxes with
+  `sbx env create --force`, which replaced `--auto-approve` in sbx 0.48.
+- sbx 0.48 changed `sbx ls --json` from `{"sandboxes": [...]}` to a bare array.
+  Pix reads it, so `pix run` no longer refuses to attach with "is not a
+  schema-verified running or stopped sandbox".
+
 ### Sandbox Kit v3
 
 - Build the Pix workload with Docker Buildx and compose generated inference and

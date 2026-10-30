@@ -274,7 +274,7 @@ credential destinations require host trust approval.
 
 Pix's workload kit uses Docker Sandbox Kit v3. Published launchers select the
 versioned OCI workload; a development checkout uses `pi-kit/pix`, or the kit
-built by `make load` under `out/kit/pix`. Docker Sandboxes 0.45.0 or later is
+built by `make load` under `out/kit/pix`. Docker Sandboxes 0.48.0 or later is
 required. `make load` builds with Docker Buildx and no longer imports a Docker
 archive into the sbx template store.
 
